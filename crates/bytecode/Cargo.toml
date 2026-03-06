@@ -1,0 +1,11 @@
+[package]
+name = "rajac-bytecode"
+version = "0.1.0"
+edition = "2024"
+
+[dev-dependencies]
+expect-test = { workspace = true }
+
+[dependencies]
+rajac-base = {path = "../base"}
+ristretto_classfile = {workspace = true}
