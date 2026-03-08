@@ -1,5 +1,6 @@
 use rajac_ast::{ClassMember, Expr, Stmt};
 use rajac_parser::parse;
+use rajac_bytecode::classfile::generate_classfiles;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 use std::fs;
@@ -61,7 +62,7 @@ impl Compiler {
     }
     
     /// Compile a single Java file
-    fn compile_file(&self, source_file: &Path, _target_dir: &Path) -> RajacResult<()> {
+    fn compile_file(&self, source_file: &Path, target_dir: &Path) -> RajacResult<()> {
         println!("Compiling {}...", source_file.display());
         
         // Read source file
@@ -71,14 +72,28 @@ impl Compiler {
         // Parse the source
         let parse_result = parse(&source);
         
-        // TODO: Add actual compilation logic here
-        // For now, we'll just parse and count AST nodes as a placeholder
+        // Generate class files
+        let class_files = generate_classfiles(&parse_result.ast, &parse_result.arena)?;
+        
+        // Write class files to target directory
+        for class_file in class_files {
+            let class_name = class_file
+                .constant_pool
+                .try_get_class(class_file.this_class)
+                .context("Failed to get class name from constant pool")?;
+            let class_path = target_dir.join(format!("{}.class", class_name));
+            
+            let mut bytes = Vec::new();
+            class_file.to_bytes(&mut bytes)?;
+            fs::write(&class_path, &bytes)
+                .context(format!("Failed to write class file: {}", class_path.display()))?;
+            
+            println!("  Generated {}", class_path.display());
+        }
+        
+        // Count AST nodes for statistics
         let ast_node_count = self.count_ast_nodes(&parse_result.ast, &parse_result.arena);
-        
         println!("  Parsed {} AST nodes", ast_node_count);
-        
-        // TODO: Generate bytecode and write class files to target_dir
-        // This is where the actual compilation would happen
         
         Ok(())
     }
