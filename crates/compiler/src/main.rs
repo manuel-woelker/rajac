@@ -16,7 +16,7 @@ fn main() {
         .filter_map(|e| e.ok())
     {
         let file_path = entry.path();
-        if file_path.extension().map_or(false, |ext| ext == "java") {
+        if file_path.extension().is_some_and(|ext| ext == "java") {
             let source = match std::fs::read_to_string(file_path) {
                 Ok(s) => s,
                 Err(e) => {
