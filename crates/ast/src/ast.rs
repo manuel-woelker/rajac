@@ -96,6 +96,9 @@ pub struct Literal {
 pub struct Ast {
     pub statements: Vec<StmtId>,
     pub source: SharedString,
+    pub package: Option<PackageDecl>,
+    pub imports: Vec<ImportDecl>,
+    pub classes: Vec<ClassDeclId>,
 }
 
 impl Ast {
@@ -103,8 +106,98 @@ impl Ast {
         Self {
             statements: Vec::new(),
             source,
+            package: None,
+            imports: Vec::new(),
+            classes: Vec::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PackageDecl {
+    pub name: QualifiedName,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportDecl {
+    pub name: QualifiedName,
+    pub is_static: bool,
+    pub is_on_demand: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct QualifiedName {
+    pub segments: Vec<SharedString>,
+}
+
+impl QualifiedName {
+    pub fn new(segments: Vec<SharedString>) -> Self {
+        Self { segments }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClassKind {
+    Class,
+    Interface,
+    Enum,
+    Record,
+    Annotation,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClassDecl {
+    pub kind: ClassKind,
+    pub name: Ident,
+    pub type_params: Vec<TypeParam>,
+    pub extends: Option<TypeId>,
+    pub implements: Vec<TypeId>,
+    pub permits: Vec<TypeId>,
+    pub members: Vec<ClassMemberId>,
+    pub modifiers: Modifiers,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeParam {
+    pub name: Ident,
+    pub bounds: Vec<TypeId>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClassMember {
+    Field(Field),
+    Method(Method),
+    Constructor(Constructor),
+    StaticBlock(StmtId),
+    NestedClass(ClassDeclId),
+    NestedInterface(ClassDeclId),
+    NestedEnum(EnumDecl),
+    NestedRecord(ClassDeclId),
+    NestedAnnotation(ClassDeclId),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Constructor {
+    pub name: Ident,
+    pub params: Vec<ParamId>,
+    pub body: Option<StmtId>,
+    pub throws: Vec<TypeId>,
+    pub modifiers: Modifiers,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumDecl {
+    pub name: Ident,
+    pub implements: Vec<TypeId>,
+    pub entries: Vec<EnumEntry>,
+    pub members: Vec<ClassMemberId>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumEntry {
+    pub name: Ident,
+    pub args: Vec<ExprId>,
+    pub body: Option<Vec<ClassMemberId>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -331,6 +424,15 @@ pub struct MethodId(u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FieldId(u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ClassDeclId(u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ClassMemberId(u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EnumDeclId(u32);
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Modifiers(pub u32);
