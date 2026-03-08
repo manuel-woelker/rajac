@@ -2,7 +2,7 @@
 resolver = "3"
 
 members = [
-    "crates/base", "crates/bytecode"
+    "crates/base", "crates/bytecode", "crates/ballpit"
 ]
 
 [workspace.dependencies]
