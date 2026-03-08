@@ -4,6 +4,7 @@ use rajac_bytecode::classfile::generate_classfiles;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 use std::fs;
+use ristretto_classfile::attributes::Attribute;
 use rajac_base::result::{RajacResult, ResultExt};
 
 /// Compiler struct that handles compilation of Java source files
@@ -73,8 +74,17 @@ impl Compiler {
         let parse_result = parse(&source);
         
         // Generate class files
-        let class_files = generate_classfiles(&parse_result.ast, &parse_result.arena)?;
-        
+        let mut class_files = generate_classfiles(&parse_result.ast, &parse_result.arena)?;
+
+        for class_file in &mut class_files {
+            let source_file_attribute_index = class_file.constant_pool.add_utf8("SourceFile")?;
+            let source_file_index = class_file.constant_pool.add_utf8(source_file.file_name().unwrap().display().to_string())?;
+            class_file.attributes.push(Attribute::SourceFile {
+                name_index: source_file_attribute_index,
+                source_file_index,
+            })
+        }
+
         // Write class files to target directory
         for class_file in class_files {
             let class_name = class_file
