@@ -408,31 +408,31 @@ pub struct Field {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct StmtId(u32);
+pub struct StmtId(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ExprId(u32);
+pub struct ExprId(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TypeId(u32);
+pub struct TypeId(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ParamId(u32);
+pub struct ParamId(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct MethodId(u32);
+pub struct MethodId(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct FieldId(u32);
+pub struct FieldId(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ClassDeclId(u32);
+pub struct ClassDeclId(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ClassMemberId(u32);
+pub struct ClassMemberId(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct EnumDeclId(u32);
+pub struct EnumDeclId(pub u32);
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Modifiers(pub u32);

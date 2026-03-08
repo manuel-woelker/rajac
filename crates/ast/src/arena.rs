@@ -1,0 +1,110 @@
+pub use super::ast::*;
+
+#[derive(Debug, Default)]
+pub struct AstArena {
+    pub stmts: Vec<Stmt>,
+    pub exprs: Vec<Expr>,
+    pub types: Vec<Type>,
+    pub params: Vec<Param>,
+    pub methods: Vec<Method>,
+    pub fields: Vec<Field>,
+    pub class_decls: Vec<ClassDecl>,
+    pub class_members: Vec<ClassMember>,
+    pub enum_decls: Vec<EnumDecl>,
+}
+
+impl AstArena {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn alloc_stmt(&mut self, stmt: Stmt) -> StmtId {
+        let id = StmtId(self.stmts.len() as u32);
+        self.stmts.push(stmt);
+        id
+    }
+
+    pub fn alloc_expr(&mut self, expr: Expr) -> ExprId {
+        let id = ExprId(self.exprs.len() as u32);
+        self.exprs.push(expr);
+        id
+    }
+
+    pub fn alloc_type(&mut self, ty: Type) -> TypeId {
+        let id = TypeId(self.types.len() as u32);
+        self.types.push(ty);
+        id
+    }
+
+    pub fn alloc_param(&mut self, param: Param) -> ParamId {
+        let id = ParamId(self.params.len() as u32);
+        self.params.push(param);
+        id
+    }
+
+    pub fn alloc_method(&mut self, method: Method) -> MethodId {
+        let id = MethodId(self.methods.len() as u32);
+        self.methods.push(method);
+        id
+    }
+
+    pub fn alloc_field(&mut self, field: Field) -> FieldId {
+        let id = FieldId(self.fields.len() as u32);
+        self.fields.push(field);
+        id
+    }
+
+    pub fn alloc_class_decl(&mut self, class: ClassDecl) -> ClassDeclId {
+        let id = ClassDeclId(self.class_decls.len() as u32);
+        self.class_decls.push(class);
+        id
+    }
+
+    pub fn alloc_class_member(&mut self, member: ClassMember) -> ClassMemberId {
+        let id = ClassMemberId(self.class_members.len() as u32);
+        self.class_members.push(member);
+        id
+    }
+
+    pub fn alloc_enum_decl(&mut self, enum_decl: EnumDecl) -> EnumDeclId {
+        let id = EnumDeclId(self.enum_decls.len() as u32);
+        self.enum_decls.push(enum_decl);
+        id
+    }
+
+    pub fn stmt(&self, id: StmtId) -> &Stmt {
+        &self.stmts[id.0 as usize]
+    }
+
+    pub fn expr(&self, id: ExprId) -> &Expr {
+        &self.exprs[id.0 as usize]
+    }
+
+    pub fn ty(&self, id: TypeId) -> &Type {
+        &self.types[id.0 as usize]
+    }
+
+    pub fn param(&self, id: ParamId) -> &Param {
+        &self.params[id.0 as usize]
+    }
+
+    pub fn method(&self, id: MethodId) -> &Method {
+        &self.methods[id.0 as usize]
+    }
+
+    pub fn field(&self, id: FieldId) -> &Field {
+        &self.fields[id.0 as usize]
+    }
+
+    pub fn class_decl(&self, id: ClassDeclId) -> &ClassDecl {
+        &self.class_decls[id.0 as usize]
+    }
+
+    pub fn class_member(&self, id: ClassMemberId) -> &ClassMember {
+        &self.class_members[id.0 as usize]
+    }
+
+    pub fn enum_decl(&self, id: EnumDeclId) -> &EnumDecl {
+        &self.enum_decls[id.0 as usize]
+    }
+}
