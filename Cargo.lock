@@ -330,6 +330,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rajac-lexer"
+version = "0.1.0"
+dependencies = [
+ "rajac-token",
+]
+
+[[package]]
 name = "rajac-token"
 version = "0.1.0"
 

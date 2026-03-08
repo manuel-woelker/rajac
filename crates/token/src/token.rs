@@ -46,6 +46,8 @@ pub enum TokenKind {
     GtGt,
     LtLtEq,
     GtGtEq,
+    GtGtGt,
+    GtGtGtEq,
 
     PlusPlus,
     MinusMinus,
