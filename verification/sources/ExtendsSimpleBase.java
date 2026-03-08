@@ -1,3 +1,5 @@
+package rajac.verification;
+
 class ExtendsSimpleBaseBase {
 }
 

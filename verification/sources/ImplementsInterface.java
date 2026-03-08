@@ -1,3 +1,5 @@
+package rajac.verification;
+
 interface ImplementsInterfaceI {
     int f();
 }
