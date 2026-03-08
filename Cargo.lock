@@ -366,6 +366,7 @@ name = "rajac-bytecode"
 version = "0.1.0"
 dependencies = [
  "expect-test",
+ "rajac-ast",
  "rajac-base",
  "ristretto_classfile",
 ]

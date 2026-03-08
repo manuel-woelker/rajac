@@ -8,4 +8,5 @@ expect-test = { workspace = true }
 
 [dependencies]
 rajac-base = {path = "../base"}
+rajac-ast = {path = "../ast"}
 ristretto_classfile = {workspace = true}
