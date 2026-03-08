@@ -235,14 +235,12 @@ impl<'a> Lexer<'a> {
                 Some('/') => {
                     self.bump();
                     self.skip_line_comment();
-                    #[allow(clippy::needless_return)]
-                    return self.next_token();
+                    self.next_token()
                 }
                 Some('*') => {
                     self.bump();
                     self.skip_block_comment();
-                    #[allow(clippy::needless_return)]
-                    return self.next_token();
+                    self.next_token()
                 }
                 Some('=') => {
                     self.bump();
