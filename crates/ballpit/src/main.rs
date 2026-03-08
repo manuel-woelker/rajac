@@ -5,7 +5,7 @@ use std::path::Path;
 fn main() {
     let base_dir = "ballpit";
     let files_per_package = 1000;
-    let num_packages = 10;
+    let num_packages = 100;
 
     std::fs::remove_dir_all(base_dir).unwrap();
     std::fs::create_dir_all(base_dir).unwrap();

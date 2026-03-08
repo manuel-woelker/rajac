@@ -7,3 +7,4 @@ edition = "2024"
 rajac-parser = { path = "../parser" }
 rajac-ast = { path = "../ast" }
 walkdir = "2.5"
+rayon = "1.10"

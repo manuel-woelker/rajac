@@ -1,5 +1,6 @@
 use rajac_ast::{ClassMember, Expr, Stmt};
 use rajac_parser::parse;
+use rayon::prelude::*;
 use std::path::Path;
 use walkdir::WalkDir;
 
@@ -285,28 +286,29 @@ fn main() {
         .unwrap_or_else(|| "ballpit".to_string());
     let path = Path::new(&dir);
 
-    let mut total_ast_nodes = 0;
-
-    for entry in WalkDir::new(path)
+    // Collect all Java files first
+    let java_files: Vec<String> = WalkDir::new(path)
         .follow_links(true)
         .into_iter()
         .filter_map(|e| e.ok())
-    {
-        let file_path = entry.path();
-        if file_path.extension().is_some_and(|ext| ext == "java") {
-            let source = match std::fs::read_to_string(file_path) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("Failed to read {}: {}", file_path.display(), e);
-                    continue;
-                }
-            };
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "java"))
+        .map(|entry| entry.path().to_string_lossy().to_string())
+        .collect();
 
-            let parse_result = parse(&source);
-            let ast_nodes = count_ast_nodes(&parse_result.ast, &parse_result.arena);
-            total_ast_nodes += ast_nodes;
-        }
-    }
+    // Process files in parallel
+    let total_ast_nodes: usize = java_files
+        .par_iter()
+        .map(|file_path| match std::fs::read_to_string(file_path) {
+            Ok(source) => {
+                let parse_result = parse(&source);
+                count_ast_nodes(&parse_result.ast, &parse_result.arena)
+            }
+            Err(e) => {
+                eprintln!("Failed to read {}: {}", file_path, e);
+                0
+            }
+        })
+        .sum();
 
     println!("Total AST nodes: {}", total_ast_nodes);
 }
