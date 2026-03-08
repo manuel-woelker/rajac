@@ -4,7 +4,7 @@ use rajac_ast::{
 };
 use rajac_base::result::{RajacResult, ResultExt};
 use ristretto_classfile::{
-    ClassAccessFlags, ClassFile, ConstantPool, Field, FieldAccessFlags, FieldType, JAVA_8, Method,
+    ClassAccessFlags, ClassFile, ConstantPool, Field, FieldAccessFlags, FieldType, JAVA_21, Method,
     MethodAccessFlags,
 };
 
@@ -80,7 +80,7 @@ pub fn classfile_from_class_decl(
     let access_flags = class_access_flags(class.kind.clone(), &class.modifiers);
 
     Ok(ClassFile {
-        version: JAVA_8,
+        version: JAVA_21,
         access_flags,
         constant_pool,
         this_class,

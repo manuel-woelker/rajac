@@ -9,3 +9,7 @@ sha2 = "0.10"
 hex = "0.4"
 rajac-compiler = { path = "../../crates/compiler" }
 rajac-base = { path = "../../crates/base" }
+rajac-bytecode = { path = "../../crates/bytecode" }
+colored = "2.0"
+diff = "0.1"
+ristretto_classfile = "0.29.0"

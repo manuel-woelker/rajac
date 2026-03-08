@@ -1,5 +1,6 @@
 use rajac_base::shared_string::SharedString;
 use ristretto_classfile::{ClassFile, ConstantPool, Field, Method};
+use ristretto_classfile::attributes::Attribute;
 
 pub fn pretty_print_classfile(class_file: &ClassFile) -> SharedString {
     let mut out = String::new();
@@ -59,9 +60,20 @@ pub fn pretty_print_classfile(class_file: &ClassFile) -> SharedString {
     if !class_file.attributes.is_empty() {
         out.push_str("\n  // class attributes\n");
         for attribute in &class_file.attributes {
-            out.push_str("  /* ");
-            out.push_str(&attribute.to_string().replace("\n", "\n  "));
-            out.push_str(" */\n");
+            match attribute {
+                Attribute::SourceFile { source_file_index, .. } => {
+                    let source_file_name = class_file
+                        .constant_pool
+                        .try_get_utf8(*source_file_index)
+                        .unwrap_or("<invalid:source_file>");
+                    out.push_str(&format!("  // SourceFile: {}\n", source_file_name));
+                }
+                _ => {
+                    out.push_str("  /* ");
+                    out.push_str(&attribute.to_string().replace("\n", "\n  "));
+                    out.push_str(" */\n");
+                }
+            }
         }
     }
 

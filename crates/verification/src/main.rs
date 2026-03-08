@@ -4,6 +4,9 @@ use sha2::{Sha256, Digest};
 use std::fs;
 use rajac_compiler::Compiler;
 use rajac_base::result::{RajacResult, ResultExt};
+use rajac_bytecode::pretty_print::pretty_print_classfile;
+use colored::*;
+use diff;
 
 fn main() -> RajacResult<()> {
     let sources_dir = Path::new("verification/sources");
@@ -78,9 +81,45 @@ fn compare_outputs(reference: &Path, actual: &Path) -> RajacResult<()> {
         let act_hash = compute_sha256(act_path)?;
         
         if ref_hash != act_hash {
-            println!("Content mismatch in: {}", ref_filename);
+            println!("{}Content mismatch in: {}{}", "❌ ".red(), ref_filename, " ✓".green());
             println!("  Reference hash: {}", ref_hash);
             println!("  Actual hash: {}", act_hash);
+            
+            // Read and pretty print both class files for comparison
+            let ref_bytes = fs::read(ref_path)
+                .context(format!("Failed to read reference file: {}", ref_path.display()))?;
+            let act_bytes = fs::read(act_path)
+                .context(format!("Failed to read actual file: {}", act_path.display()))?;
+            
+            // Parse class files and pretty print them
+            use std::io::Cursor;
+            
+            let ref_class_file: ristretto_classfile::ClassFile = ristretto_classfile::ClassFile::from_bytes(&mut Cursor::new(&ref_bytes))
+                .context("Failed to parse reference class file")?;
+            let act_class_file: ristretto_classfile::ClassFile = ristretto_classfile::ClassFile::from_bytes(&mut Cursor::new(&act_bytes))
+                .context("Failed to parse actual class file")?;
+            
+            // For now, just use the actual class file as-is
+            // TODO: Add proper SourceFile attribute handling
+            
+            let ref_pretty = pretty_print_classfile(&ref_class_file);
+            let act_pretty = pretty_print_classfile(&act_class_file);
+            
+            // Generate diff
+            let ref_text = ref_pretty.as_str();
+            let act_text = act_pretty.as_str();
+            
+            let diff = diff::lines(ref_text, act_text);
+            
+            println!("{}:", "Pretty-printed comparison".yellow());
+            for change in diff {
+                match change {
+                    diff::Result::Left(line) => println!("{} {}", "-".red(), line),
+                    diff::Result::Right(line) => println!("{}{}", "+".green(), line),
+                    diff::Result::Both(line, _) => println!("  {}", line),
+                }
+            }
+            
             mismatches += 1;
         }
     }
