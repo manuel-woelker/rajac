@@ -1,26 +1,52 @@
-use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 use sha2::{Sha256, Digest};
 use std::fs;
+use rajac_compiler::Compiler;
+use rajac_base::result::{RajacResult, ResultExt};
 
-fn main() -> Result<()> {
-    let _sources_dir = Path::new("verification/sources");
+fn main() -> RajacResult<()> {
+    let sources_dir = Path::new("verification/sources");
     let reference_output = Path::new("verification/output/openjdk_21/rajac/verification");
+    let rajac_output = Path::new("verification/output/rajac/rajac/verification");
     
-    // Compile sources with rajac (this would be replaced with actual rajac compilation)
+    // Create output directory for rajac
+    fs::create_dir_all(rajac_output)
+        .context("Failed to create rajac output directory")?;
+    
+    // Compile sources with rajac
     println!("Compiling sources with rajac...");
-    // TODO: Replace with actual rajac compilation command
-    // For now, we'll just compare the reference output with itself as a placeholder
+    compile_with_rajac(sources_dir, rajac_output)?;
     
-    let rajac_output = reference_output; // Placeholder - replace with actual rajac output
-    
+    // Compare outputs
     compare_outputs(reference_output, rajac_output)?;
     
     Ok(())
 }
 
-fn compare_outputs(reference: &Path, actual: &Path) -> Result<()> {
+fn compile_with_rajac(sources_dir: &Path, output_dir: &Path) -> RajacResult<()> {
+    // Find all Java files in sources directory
+    let mut java_files = Vec::new();
+    for entry in WalkDir::new(sources_dir)
+        .follow_links(true)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        if path.is_file() && path.extension().map_or(false, |ext| ext == "java") {
+            java_files.push(path.to_path_buf());
+        }
+    }
+    
+    // Compile each file with rajac using the Compiler struct
+    let compiler = Compiler::new();
+    compiler.compile_directory(sources_dir, output_dir)?;
+    
+    println!("Compiled {} files with rajac", java_files.len());
+    Ok(())
+}
+
+fn compare_outputs(reference: &Path, actual: &Path) -> RajacResult<()> {
     println!("Comparing compiler outputs...");
     println!("Reference: {}", reference.display());
     println!("Actual: {}", actual.display());
@@ -39,8 +65,8 @@ fn compare_outputs(reference: &Path, actual: &Path) -> Result<()> {
     // Compare each file
     let mut mismatches = 0;
     for (ref_path, act_path) in reference_files.iter().zip(actual_files.iter()) {
-        let ref_filename = ref_path.file_name().unwrap().to_string_lossy();
-        let act_filename = act_path.file_name().unwrap().to_string_lossy();
+        let ref_filename = ref_path.file_name().unwrap().to_string_lossy().into_owned();
+        let act_filename = act_path.file_name().unwrap().to_string_lossy().into_owned();
         
         if ref_filename != act_filename {
             println!("Filename mismatch: {} vs {}", ref_filename, act_filename);
@@ -68,7 +94,7 @@ fn compare_outputs(reference: &Path, actual: &Path) -> Result<()> {
     Ok(())
 }
 
-fn get_class_files(dir: &Path) -> Result<Vec<PathBuf>> {
+fn get_class_files(dir: &Path) -> RajacResult<Vec<PathBuf>> {
     let mut class_files = Vec::new();
     
     for entry in WalkDir::new(dir)
@@ -86,9 +112,9 @@ fn get_class_files(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(class_files)
 }
 
-fn compute_sha256(file_path: &Path) -> Result<String> {
+fn compute_sha256(file_path: &Path) -> RajacResult<String> {
     let bytes = fs::read(file_path)
-        .with_context(|| format!("Failed to read file: {}", file_path.display()))?;
+        .context(format!("Failed to read file: {}", file_path.display()))?;
     
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
