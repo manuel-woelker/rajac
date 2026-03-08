@@ -4,5 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-rajac-lexer = { path = "../lexer" }
+rajac-parser = { path = "../parser" }
+rajac-ast = { path = "../ast" }
 walkdir = "2.5"

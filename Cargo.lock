@@ -340,7 +340,8 @@ dependencies = [
 name = "rajac-compiler"
 version = "0.1.0"
 dependencies = [
- "rajac-lexer",
+ "rajac-ast",
+ "rajac-parser",
  "walkdir",
 ]
 
