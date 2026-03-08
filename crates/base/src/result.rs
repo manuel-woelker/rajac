@@ -1,22 +1,22 @@
-use crate::error::FelicoError;
+use crate::error::RajacError;
 use crate::shared_string::SharedString;
 use std::error::Error as StdError;
 
-pub type FelicoResult<T> = Result<T, FelicoError>;
+pub type RajacResult<T> = Result<T, RajacError>;
 
 pub trait ResultExt<T> {
-    fn context(self, context: impl Into<SharedString>) -> FelicoResult<T>;
+    fn context(self, context: impl Into<SharedString>) -> RajacResult<T>;
 
-    fn with_context<C, S>(self, context: C) -> FelicoResult<T>
+    fn with_context<C, S>(self, context: C) -> RajacResult<T>
     where
         C: FnOnce() -> S,
         S: Into<SharedString>;
 }
 
 pub trait OptionExt<T> {
-    fn context(self, context: impl Into<SharedString>) -> FelicoResult<T>;
+    fn context(self, context: impl Into<SharedString>) -> RajacResult<T>;
 
-    fn with_context<C, S>(self, context: C) -> FelicoResult<T>
+    fn with_context<C, S>(self, context: C) -> RajacResult<T>
     where
         C: FnOnce() -> S,
         S: Into<SharedString>;
@@ -26,30 +26,30 @@ impl<T, E> ResultExt<T> for Result<T, E>
 where
     E: StdError + Send + Sync + 'static,
 {
-    fn context(self, context: impl Into<SharedString>) -> FelicoResult<T> {
-        self.map_err(|error| FelicoError::message(context.into()).with_std_source(error))
+    fn context(self, context: impl Into<SharedString>) -> RajacResult<T> {
+        self.map_err(|error| RajacError::message(context.into()).with_std_source(error))
     }
 
-    fn with_context<C, S>(self, context: C) -> FelicoResult<T>
+    fn with_context<C, S>(self, context: C) -> RajacResult<T>
     where
         C: FnOnce() -> S,
         S: Into<SharedString>,
     {
-        self.map_err(|error| FelicoError::message(context()).with_std_source(error))
+        self.map_err(|error| RajacError::message(context()).with_std_source(error))
     }
 }
 
 impl<T> OptionExt<T> for Option<T> {
-    fn context(self, context: impl Into<SharedString>) -> FelicoResult<T> {
-        self.ok_or_else(|| FelicoError::message(context.into()))
+    fn context(self, context: impl Into<SharedString>) -> RajacResult<T> {
+        self.ok_or_else(|| RajacError::message(context.into()))
     }
 
-    fn with_context<C, S>(self, context: C) -> FelicoResult<T>
+    fn with_context<C, S>(self, context: C) -> RajacResult<T>
     where
         C: FnOnce() -> S,
         S: Into<SharedString>,
     {
-        self.ok_or_else(|| FelicoError::message(context()))
+        self.ok_or_else(|| RajacError::message(context()))
     }
 }
 
@@ -60,7 +60,7 @@ mod tests {
     use std::io;
 
     #[test]
-    fn test_with_context_converts_to_felico_error() {
+    fn test_with_context_converts_to_rajac_error() {
         let result: Result<(), io::Error> =
             Err(io::Error::new(io::ErrorKind::NotFound, "config missing"));
         let error = result.with_context(|| "failed to load config").unwrap_err();
@@ -72,7 +72,7 @@ mod tests {
     }
 
     #[test]
-    fn test_context_converts_to_felico_error() {
+    fn test_context_converts_to_rajac_error() {
         let result: Result<(), io::Error> =
             Err(io::Error::new(io::ErrorKind::NotFound, "config missing"));
         let error = result.context("failed to load config").unwrap_err();
@@ -100,7 +100,7 @@ mod tests {
     }
 
     #[test]
-    fn test_option_context_converts_none_to_felico_error() {
+    fn test_option_context_converts_none_to_rajac_error() {
         let value: Option<i32> = None;
         let error = value.context("missing value").unwrap_err();
         expect!([r#"

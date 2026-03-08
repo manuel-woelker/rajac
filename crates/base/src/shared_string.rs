@@ -1,6 +1,6 @@
 //! Shared string wrapper type for efficient string handling.
 
-use crate::result::FelicoResult;
+use crate::result::RajacResult;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use smol_str::SmolStr;
 
@@ -50,7 +50,7 @@ impl SharedString {
         self.0.is_empty()
     }
 
-    pub fn from_utf8(ut8_bytes: &[u8]) -> FelicoResult<Self> {
+    pub fn from_utf8(ut8_bytes: &[u8]) -> RajacResult<Self> {
         Ok(Self(SmolStr::new(str::from_utf8(ut8_bytes)?)))
     }
 }

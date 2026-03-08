@@ -20,12 +20,12 @@ impl Display for ErrorKind {
 }
 
 #[derive(Debug)]
-pub struct FelicoError {
+pub struct RajacError {
     kind: ErrorKind,
-    source: Option<Box<FelicoError>>,
+    source: Option<Box<RajacError>>,
 }
 
-impl FelicoError {
+impl RajacError {
     pub fn new(kind: ErrorKind) -> Self {
         Self { kind, source: None }
     }
@@ -42,17 +42,17 @@ impl FelicoError {
         &self.kind
     }
 
-    pub fn source(&self) -> Option<&FelicoError> {
+    pub fn source(&self) -> Option<&RajacError> {
         self.source.as_deref()
     }
 
-    pub fn with_source(mut self, source: impl Into<FelicoError>) -> Self {
+    pub fn with_source(mut self, source: impl Into<RajacError>) -> Self {
         self.source = Some(Box::new(source.into()));
         self
     }
 
     pub fn with_std_source(self, source: impl StdError + Send + Sync + 'static) -> Self {
-        self.with_source(FelicoError::std(source))
+        self.with_source(RajacError::std(source))
     }
 
     pub fn write_to(&self, write: &mut dyn std::fmt::Write) -> std::fmt::Result {
@@ -72,7 +72,7 @@ impl FelicoError {
     }
 }
 
-impl<T> From<T> for FelicoError
+impl<T> From<T> for RajacError
 where
     T: StdError + Send + Sync + 'static,
 {
@@ -84,7 +84,7 @@ where
 #[macro_export]
 macro_rules! err {
     ($($arg:tt)*) => {
-        $crate::error::FelicoError::message(format!($($arg)*))
+        $crate::error::RajacError::message(format!($($arg)*))
     };
 }
 pub use err;
@@ -103,8 +103,8 @@ mod tests {
 
     use expect_test::expect;
 
-    use crate::error::FelicoError;
-    use crate::result::FelicoResult;
+    use crate::error::RajacError;
+    use crate::result::RajacResult;
 
     #[test]
     fn test_err() {
@@ -114,7 +114,7 @@ mod tests {
 
     #[test]
     fn test_bail() {
-        let err = (|| -> FelicoResult<()> {
+        let err = (|| -> RajacResult<()> {
             bail!("test {}", 123);
         })()
         .unwrap_err();
@@ -123,8 +123,8 @@ mod tests {
 
     #[test]
     fn test_error_chaining() {
-        let err = FelicoError::message("failed to read file")
-            .with_source(FelicoError::message("missing file"));
+        let err = RajacError::message("failed to read file")
+            .with_source(RajacError::message("missing file"));
         expect!([r#"
             Error: failed to read file
             Caused by: missing file
@@ -135,7 +135,7 @@ mod tests {
     #[test]
     fn test_with_std_source() {
         let io_error = io::Error::new(io::ErrorKind::NotFound, "missing config");
-        let err = FelicoError::message("cannot initialize").with_std_source(io_error);
+        let err = RajacError::message("cannot initialize").with_std_source(io_error);
         expect!([r#"
             Error: cannot initialize
             Caused by: missing config

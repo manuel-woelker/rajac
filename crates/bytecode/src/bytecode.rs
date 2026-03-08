@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod test {
-    use rajac_base::result::FelicoResult;
+    use rajac_base::result::RajacResult;
     use ristretto_classfile::attributes::Attribute;
     use ristretto_classfile::{
         ClassAccessFlags, ClassFile, ConstantPool, JAVA_8, Method, MethodAccessFlags,
@@ -8,7 +8,7 @@ mod test {
     use std::fs;
 
     #[test]
-    fn create_classfile() -> FelicoResult<()> {
+    fn create_classfile() -> RajacResult<()> {
         let mut constant_pool = ConstantPool::default();
         let this_class = constant_pool.add_class("HelloWorld")?;
         let super_class = constant_pool.add_class("java/lang/Object")?;

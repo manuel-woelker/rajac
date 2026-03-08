@@ -14,7 +14,7 @@ mod tests {
 
     #[test]
     fn hash_string_matches_hash_bytes_for_utf8_input() {
-        let input = "felico-λ";
+        let input = "rajac-λ";
 
         assert_eq!(hash_string(input), hash_bytes(input.as_bytes()));
     }
@@ -37,7 +37,7 @@ mod tests {
         assert_eq!(hash_string(""), 232177599295442350);
         assert_eq!(hash_string("alpha"), 6106490483247698475);
         assert_eq!(hash_string("beta"), 9996705554587609234);
-        assert_eq!(hash_string("felico-λ"), 12170828495467912020);
+        assert_eq!(hash_string("lambda"), 4005924631819820944);
     }
 
     #[test]
