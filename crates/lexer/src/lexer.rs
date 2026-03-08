@@ -201,6 +201,7 @@ impl<'a> Lexer<'a> {
             ']' => TokenKind::RBracket,
             ';' => TokenKind::Semi,
             ',' => TokenKind::Comma,
+            ':' => TokenKind::Colon,
             '.' => TokenKind::Dot,
             '+' => return None,
             '-' => return None,
@@ -387,10 +388,7 @@ impl<'a> Lexer<'a> {
                 self.read_number(self.pos - 1);
                 TokenKind::IntLiteral
             }
-            _ if c.is_alphabetic() || c == '_' || c == '$' => {
-                self.read_ident(self.pos - 1);
-                TokenKind::Ident
-            }
+            _ if c.is_alphabetic() || c == '_' || c == '$' => self.read_ident(self.pos - 1),
             _ => TokenKind::Eof,
         }
     }

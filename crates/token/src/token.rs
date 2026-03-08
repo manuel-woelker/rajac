@@ -13,6 +13,7 @@ pub enum TokenKind {
 
     Semi,
     Comma,
+    Colon,
     Dot,
 
     Plus,

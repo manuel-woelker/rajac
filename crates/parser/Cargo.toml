@@ -1,0 +1,10 @@
+[package]
+name = "rajac-parser"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rajac-lexer = { path = "../lexer" }
+rajac-ast = { path = "../ast" }
+rajac-token = { path = "../token" }
+rajac-base = { path = "../base" }

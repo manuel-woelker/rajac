@@ -352,6 +352,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rajac-parser"
+version = "0.1.0"
+dependencies = [
+ "rajac-ast",
+ "rajac-base",
+ "rajac-lexer",
+ "rajac-token",
+]
+
+[[package]]
 name = "rajac-token"
 version = "0.1.0"
 
