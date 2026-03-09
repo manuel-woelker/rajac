@@ -45,6 +45,7 @@ pub fn classfile_from_class_decl(
 
     let mut fields = Vec::new();
     let mut methods = Vec::new();
+    let mut has_constructor = false;
 
     for member_id in &class.members {
         let member = arena.class_member(*member_id);
@@ -65,8 +66,11 @@ pub fn classfile_from_class_decl(
                     methods.push(method_info);
                 }
             }
-            ClassMember::Constructor(_)
-            | ClassMember::StaticBlock(_)
+            ClassMember::Constructor(_) => {
+                has_constructor = true;
+                // TODO: Process actual constructors
+            }
+            ClassMember::StaticBlock(_)
             | ClassMember::NestedClass(_)
             | ClassMember::NestedInterface(_)
             | ClassMember::NestedEnum(_)
@@ -74,6 +78,13 @@ pub fn classfile_from_class_decl(
             | ClassMember::NestedAnnotation(_) => {
                 // Omitted for now.
             }
+        }
+    }
+
+    // Add default constructor if no constructors are defined and this is a class (not an interface)
+    if !has_constructor && matches!(class.kind, ClassKind::Class) {
+        if let Some(default_constructor) = create_default_constructor(&mut constant_pool, &class.name)? {
+            methods.push(default_constructor);
         }
     }
 
@@ -304,6 +315,20 @@ fn type_to_internal_class_name(
         Type::Class { name, .. } => name.0.as_str().replace('.', "/"),
         _ => "java/lang/Object".to_string(),
     })
+}
+
+fn create_default_constructor(constant_pool: &mut ConstantPool, _class_name: &Ident) -> RajacResult<Option<Method>> {
+    let name_index = constant_pool.add_utf8("<init>")?;
+    let descriptor_index = constant_pool.add_utf8("()V")?;
+    
+    let access_flags = MethodAccessFlags::PUBLIC;
+
+    Ok(Some(Method {
+        access_flags,
+        name_index,
+        descriptor_index,
+        attributes: vec![],
+    }))
 }
 
 #[cfg(test)]
