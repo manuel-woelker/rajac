@@ -61,11 +61,63 @@ fn compare_outputs(reference: &Path, actual: &Path) -> RajacResult<()> {
         println!("File count mismatch!");
         println!("Reference: {} files", reference_files.len());
         println!("Actual: {} files", actual_files.len());
-        return Ok(()); // Continue with comparison of existing files
+        
+        // Extract filenames for comparison
+        let ref_names: std::collections::HashSet<_> = reference_files.iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        let act_names: std::collections::HashSet<_> = actual_files.iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        
+        // Find files only in reference
+        let only_in_reference: Vec<_> = ref_names.difference(&act_names).collect();
+        if !only_in_reference.is_empty() {
+            println!("{}Expected files not found in actual output:", "Missing:".red());
+            for name in only_in_reference {
+                println!("  {}", name);
+            }
+        }
+        
+        // Find files only in actual
+        let only_in_actual: Vec<_> = act_names.difference(&ref_names).collect();
+        if !only_in_actual.is_empty() {
+            println!("{}Unexpected files found in actual output:", "Extra:".yellow());
+            for name in only_in_actual {
+                println!("  {}", name);
+            }
+        }
+        
+        // Find common files to compare
+        let common_names: std::collections::HashSet<_> = ref_names.intersection(&act_names).collect();
+        let ref_common: Vec<_> = reference_files.iter()
+            .filter(|p| {
+                let name = p.file_name().unwrap().to_string_lossy().into_owned();
+                common_names.contains(&name)
+            })
+            .cloned()
+            .collect();
+        let act_common: Vec<_> = actual_files.iter()
+            .filter(|p| {
+                let name = p.file_name().unwrap().to_string_lossy().into_owned();
+                common_names.contains(&name)
+            })
+            .cloned()
+            .collect();
+        
+        println!("Comparing {} common files...", common_names.len());
+        compare_file_contents(&ref_common, &act_common)?;
+    } else {
+        println!("Comparing {} files...", reference_files.len());
+        compare_file_contents(&reference_files, &actual_files)?;
     }
 
-    // Compare each file
+    Ok(())
+}
+
+fn compare_file_contents(reference_files: &[PathBuf], actual_files: &[PathBuf]) -> RajacResult<()> {
     let mut mismatches = 0;
+    
     for (ref_path, act_path) in reference_files.iter().zip(actual_files.iter()) {
         let ref_filename = ref_path.file_name().unwrap().to_string_lossy().into_owned();
         let act_filename = act_path.file_name().unwrap().to_string_lossy().into_owned();
