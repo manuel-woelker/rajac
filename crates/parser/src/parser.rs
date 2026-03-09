@@ -17,6 +17,7 @@ pub struct Parser<'a> {
     #[allow(dead_code)]
     tokens: VecDeque<Token>,
     pub arena: AstArena,
+    in_interface: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -37,6 +38,7 @@ impl<'a> Parser<'a> {
             current,
             tokens,
             arena: AstArena::new(),
+            in_interface: false,
         }
     }
 
@@ -295,9 +297,16 @@ impl<'a> Parser<'a> {
         }
 
         // Class body
+        // Set interface context before parsing members
+        let old_in_interface = self.in_interface;
+        self.in_interface = matches!(kind, ClassKind::Interface);
+
         self.expect(TokenKind::LBrace);
         let members = self.parse_class_members();
         self.expect(TokenKind::RBrace);
+
+        // Restore previous context
+        self.in_interface = old_in_interface;
 
         let class_decl = ClassDecl {
             kind,
@@ -496,9 +505,16 @@ impl<'a> Parser<'a> {
             }
         }
 
+        // Set interface context before parsing members
+        let old_in_interface = self.in_interface;
+        self.in_interface = matches!(kind, ClassKind::Interface);
+
         self.expect(TokenKind::LBrace);
         let members = self.parse_class_members();
         self.expect(TokenKind::RBrace);
+
+        // Restore previous context
+        self.in_interface = old_in_interface;
 
         let class_decl = ClassDecl {
             kind,
@@ -620,13 +636,20 @@ impl<'a> Parser<'a> {
             None
         };
 
+        // Interface methods are implicitly public
+        let final_modifiers = if self.in_interface && (modifiers.0 & (rajac_ast::Modifiers::PUBLIC | rajac_ast::Modifiers::PRIVATE | rajac_ast::Modifiers::PROTECTED)) == 0 {
+            Modifiers(modifiers.0 | rajac_ast::Modifiers::PUBLIC)
+        } else {
+            modifiers
+        };
+
         let method = Method {
             name,
             params,
             return_ty,
             body,
             throws,
-            modifiers,
+            modifiers: final_modifiers,
         };
 
         Some(self.arena.alloc_method(method))
