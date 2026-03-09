@@ -4,8 +4,8 @@ use rajac_ast::{
 };
 use rajac_base::result::{RajacResult, ResultExt};
 use ristretto_classfile::{
-    ClassAccessFlags, ClassFile, ConstantPool, Field, FieldAccessFlags, FieldType, JAVA_21, Method,
-    MethodAccessFlags,
+    ClassAccessFlags, ClassFile, ConstantPool, Field, FieldAccessFlags, FieldType, Method,
+    MethodAccessFlags, JAVA_21,
 };
 
 pub fn generate_classfiles(ast: &Ast, arena: &AstArena) -> RajacResult<Vec<ClassFile>> {
@@ -151,7 +151,10 @@ fn field_from_ast(
     constant_pool: &mut ConstantPool,
     field: &AstField,
 ) -> RajacResult<Option<Field>> {
-    if field.initializer.is_some() {
+    let is_static = field.modifiers.0 & Modifiers::STATIC != 0;
+    let has_initializer = field.initializer.is_some();
+
+    if has_initializer && !is_static {
         return Ok(None);
     }
 

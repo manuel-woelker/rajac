@@ -1,6 +1,6 @@
 use rajac_base::shared_string::SharedString;
-use ristretto_classfile::{ClassFile, ConstantPool, Field, Method};
 use ristretto_classfile::attributes::Attribute;
+use ristretto_classfile::{ClassFile, ConstantPool, Field, Method};
 
 pub fn pretty_print_classfile(class_file: &ClassFile) -> SharedString {
     let mut out = String::new();
@@ -61,7 +61,9 @@ pub fn pretty_print_classfile(class_file: &ClassFile) -> SharedString {
         out.push_str("\n  // class attributes\n");
         for attribute in &class_file.attributes {
             match attribute {
-                Attribute::SourceFile { source_file_index, .. } => {
+                Attribute::SourceFile {
+                    source_file_index, ..
+                } => {
                     let source_file_name = class_file
                         .constant_pool
                         .try_get_utf8(*source_file_index)
@@ -171,7 +173,7 @@ mod tests {
         let printed = printed.as_str();
 
         expect![[r#"
-            // version: 52.0 (Java 8)
+            // version: 65.0 (Java 21)
             public abstract interface Foo {
 
               // fields

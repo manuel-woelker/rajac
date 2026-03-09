@@ -3,7 +3,8 @@ mod test {
     use rajac_base::result::RajacResult;
     use ristretto_classfile::attributes::Attribute;
     use ristretto_classfile::{
-        ClassAccessFlags, ClassFile, ConstantPool, JAVA_8, Method, MethodAccessFlags,
+        ClassAccessFlags, ClassFile, ConstantPool, Field, FieldAccessFlags, FieldType, Method,
+        MethodAccessFlags, JAVA_8,
     };
     use std::fs;
 
@@ -25,6 +26,17 @@ mod test {
         let hello_world_index = constant_pool.add_string("Hello world!!!")?;
         let println_index =
             constant_pool.add_method_ref(print_stream_class, "println", "(Ljava/lang/String;)V")?;
+
+        let out_name = constant_pool.add_utf8("out")?;
+        let out_descriptor = constant_pool.add_utf8("Ljava/io/PrintStream;")?;
+
+        let static_field = Field {
+            access_flags: FieldAccessFlags::PUBLIC | FieldAccessFlags::STATIC,
+            name_index: out_name,
+            descriptor_index: out_descriptor,
+            field_type: FieldType::parse("Ljava/io/PrintStream;").unwrap(),
+            attributes: vec![],
+        };
 
         let code_attribute = Attribute::Code {
             name_index: code_name,
@@ -53,6 +65,7 @@ mod test {
             constant_pool,
             this_class,
             super_class,
+            fields: vec![static_field],
             methods: vec![main_method],
             ..Default::default()
         };
