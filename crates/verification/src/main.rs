@@ -154,9 +154,6 @@ fn compare_file_contents(reference_files: &[PathBuf], actual_files: &[PathBuf]) 
             ristretto_classfile::ClassFile::from_bytes(&mut Cursor::new(&act_bytes))
                 .context("Failed to parse actual class file")?;
 
-        // For now, just use the actual class file as-is
-        // TODO: Add proper SourceFile attribute handling
-
         let ref_pretty = pretty_print_classfile(&ref_class_file);
         let act_pretty = pretty_print_classfile(&act_class_file);
 
@@ -174,10 +171,9 @@ fn compare_file_contents(reference_files: &[PathBuf], actual_files: &[PathBuf]) 
 
         if ref_pretty_hash != act_pretty_hash {
             println!(
-                "{}Content mismatch in: {}{}",
+                "{}Content mismatch in: {}",
                 "❌ ".red(),
                 ref_filename,
-                " ✓".green()
             );
 
             // Generate diff
