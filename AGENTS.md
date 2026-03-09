@@ -76,6 +76,14 @@ Prefer black box testing and try to avoid mocking as much as possible.
 
 When completing a unit of work run `scripts/check-code.sh` to verify everything is green.
 
+## Running the compiler
+
+The compiler should always be run in release mode for performance:
+
+```bash
+cargo run --release -p rajac-compiler -- <source-dir>
+```
+
 ## Commit messages
 
 Commit message should be in the "Conventional Commits" format, e.g. "feat(UI): Add about button to see version and build date".
