@@ -134,42 +134,51 @@ fn compare_file_contents(reference_files: &[PathBuf], actual_files: &[PathBuf]) 
             continue;
         }
 
-        let ref_hash = compute_sha256(ref_path)?;
-        let act_hash = compute_sha256(act_path)?;
+        // Read and pretty print both class files for comparison
+        let ref_bytes = fs::read(ref_path).context(format!(
+            "Failed to read reference file: {}",
+            ref_path.display()
+        ))?;
+        let act_bytes = fs::read(act_path).context(format!(
+            "Failed to read actual file: {}",
+            act_path.display()
+        ))?;
 
-        if ref_hash != act_hash {
+        // Parse class files and pretty print them
+        use std::io::Cursor;
+
+        let ref_class_file: ristretto_classfile::ClassFile =
+            ristretto_classfile::ClassFile::from_bytes(&mut Cursor::new(&ref_bytes))
+                .context("Failed to parse reference class file")?;
+        let act_class_file: ristretto_classfile::ClassFile =
+            ristretto_classfile::ClassFile::from_bytes(&mut Cursor::new(&act_bytes))
+                .context("Failed to parse actual class file")?;
+
+        // For now, just use the actual class file as-is
+        // TODO: Add proper SourceFile attribute handling
+
+        let ref_pretty = pretty_print_classfile(&ref_class_file);
+        let act_pretty = pretty_print_classfile(&act_class_file);
+
+        // Compare hashes of pretty-printed output instead of raw bytecode
+        let ref_pretty_hash = {
+            let mut hasher = Sha256::new();
+            hasher.update(ref_pretty.as_bytes());
+            hex::encode(hasher.finalize())
+        };
+        let act_pretty_hash = {
+            let mut hasher = Sha256::new();
+            hasher.update(act_pretty.as_bytes());
+            hex::encode(hasher.finalize())
+        };
+
+        if ref_pretty_hash != act_pretty_hash {
             println!(
                 "{}Content mismatch in: {}{}",
                 "❌ ".red(),
                 ref_filename,
                 " ✓".green()
             );
-            
-            // Read and pretty print both class files for comparison
-            let ref_bytes = fs::read(ref_path).context(format!(
-                "Failed to read reference file: {}",
-                ref_path.display()
-            ))?;
-            let act_bytes = fs::read(act_path).context(format!(
-                "Failed to read actual file: {}",
-                act_path.display()
-            ))?;
-
-            // Parse class files and pretty print them
-            use std::io::Cursor;
-
-            let ref_class_file: ristretto_classfile::ClassFile =
-                ristretto_classfile::ClassFile::from_bytes(&mut Cursor::new(&ref_bytes))
-                    .context("Failed to parse reference class file")?;
-            let act_class_file: ristretto_classfile::ClassFile =
-                ristretto_classfile::ClassFile::from_bytes(&mut Cursor::new(&act_bytes))
-                    .context("Failed to parse actual class file")?;
-
-            // For now, just use the actual class file as-is
-            // TODO: Add proper SourceFile attribute handling
-
-            let ref_pretty = pretty_print_classfile(&ref_class_file);
-            let act_pretty = pretty_print_classfile(&act_class_file);
 
             // Generate diff
             let ref_text = ref_pretty.as_str();
@@ -227,13 +236,3 @@ fn get_class_files(dir: &Path) -> RajacResult<Vec<PathBuf>> {
     Ok(class_files)
 }
 
-fn compute_sha256(file_path: &Path) -> RajacResult<String> {
-    let bytes =
-        fs::read(file_path).context(format!("Failed to read file: {}", file_path.display()))?;
-
-    let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    let result = hasher.finalize();
-
-    Ok(hex::encode(result))
-}
