@@ -89,20 +89,26 @@ fn compare_outputs(reference: &Path, actual: &Path) -> RajacResult<()> {
         }
         
         // Find common files to compare
-        let common_names: std::collections::HashSet<_> = ref_names.intersection(&act_names).collect();
-        let ref_common: Vec<_> = reference_files.iter()
-            .filter(|p| {
-                let name = p.file_name().unwrap().to_string_lossy().into_owned();
-                common_names.contains(&name)
+        let common_names: std::collections::HashSet<_> = ref_names.intersection(&act_names).cloned().collect();
+        
+        // Sort filenames for consistent comparison
+        let mut sorted_names: Vec<_> = common_names.iter().collect::<Vec<_>>();
+        sorted_names.sort();
+        
+        // Create ordered vectors for comparison by finding matching paths
+        let ref_common: Vec<_> = sorted_names.iter()
+            .filter_map(|name| {
+                reference_files.iter().find(|p| {
+                    p.file_name().unwrap().to_string_lossy().into_owned() == **name
+                }).cloned()
             })
-            .cloned()
             .collect();
-        let act_common: Vec<_> = actual_files.iter()
-            .filter(|p| {
-                let name = p.file_name().unwrap().to_string_lossy().into_owned();
-                common_names.contains(&name)
+        let act_common: Vec<_> = sorted_names.iter()
+            .filter_map(|name| {
+                actual_files.iter().find(|p| {
+                    p.file_name().unwrap().to_string_lossy().into_owned() == **name
+                }).cloned()
             })
-            .cloned()
             .collect();
         
         println!("Comparing {} common files...", common_names.len());
