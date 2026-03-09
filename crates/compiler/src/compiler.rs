@@ -1,6 +1,7 @@
 use rajac_base::result::{RajacResult, ResultExt};
 use rajac_bytecode::classfile::generate_classfiles;
 use rajac_parser::parse;
+use rayon::prelude::*;
 use ristretto_classfile::attributes::Attribute;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -39,10 +40,23 @@ impl Compiler {
             return Ok(());
         }
 
-        // Compile each file
-        for java_file in &java_files {
-            self.compile_file(java_file, target_dir)?;
+        // Compile each file in parallel
+        let results: Vec<RajacResult<usize>> = java_files
+            .par_iter()
+            .map(|java_file| self.compile_file(java_file, target_dir))
+            .collect();
+
+        // Check for errors and sum classfile counts
+        let mut total_classfiles = 0;
+        for result in results {
+            total_classfiles += result?;
         }
+
+        println!(
+            "Compiled {} Java files -> {} class files",
+            java_files.len(),
+            total_classfiles
+        );
 
         Ok(())
     }
@@ -65,8 +79,8 @@ impl Compiler {
         Ok(java_files)
     }
 
-    /// Compile a single Java file
-    fn compile_file(&self, source_file: &Path, target_dir: &Path) -> RajacResult<()> {
+    /// Compile a single Java file, returns the number of class files generated
+    fn compile_file(&self, source_file: &Path, target_dir: &Path) -> RajacResult<usize> {
         // Read source file
         let source = fs::read_to_string(source_file).context("Failed to read source file")?;
 
@@ -90,6 +104,8 @@ impl Compiler {
         // Write class files to target directory
         let classes_dir = target_dir.join("classes");
 
+        let classfile_count = class_files.len();
+
         for class_file in class_files {
             let class_name = class_file
                 .constant_pool
@@ -110,6 +126,6 @@ impl Compiler {
             ))?;
         }
 
-        Ok(())
+        Ok(classfile_count)
     }
 }
