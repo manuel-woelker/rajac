@@ -86,8 +86,6 @@ fn compare_outputs(reference: &Path, actual: &Path) -> RajacResult<()> {
                 ref_filename,
                 " ✓".green()
             );
-            println!("  Reference hash: {}", ref_hash);
-            println!("  Actual hash:    {}", act_hash);
 
             // Read and pretty print both class files for comparison
             let ref_bytes = fs::read(ref_path).context(format!(
@@ -121,11 +119,10 @@ fn compare_outputs(reference: &Path, actual: &Path) -> RajacResult<()> {
 
             let diff = diff::lines(ref_text, act_text);
 
-            println!("{}:", "Pretty-printed comparison".yellow());
             for change in diff {
                 match change {
-                    diff::Result::Left(line) => println!("{}{}", "-".red(), line),
-                    diff::Result::Right(line) => println!("{}{}", "+".green(), line),
+                    diff::Result::Left(line) => println!("  {}{}", "-".red(), line),
+                    diff::Result::Right(line) => println!("  {}{}", "+".green(), line),
                     diff::Result::Both(_line, _) => (), // Nothing to emit,
                 }
             }
