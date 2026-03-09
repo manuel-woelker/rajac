@@ -10,17 +10,18 @@ use walkdir::WalkDir;
 fn main() -> RajacResult<()> {
     let sources_dir = Path::new("verification/sources");
     let reference_output = Path::new("verification/output/openjdk_21/rajac/verification");
-    let rajac_output = Path::new("verification/output/rajac/rajac/verification");
+    let rajac_base_output = Path::new("verification/output/rajac/rajac/verification");
+    let rajac_output = rajac_base_output.join("classes");
 
     // Create output directory for rajac
-    fs::create_dir_all(rajac_output).context("Failed to create rajac output directory")?;
+    fs::create_dir_all(&rajac_output).context("Failed to create rajac output directory")?;
 
     // Compile sources with rajac
     println!("Compiling sources with rajac...");
-    compile_with_rajac(sources_dir, rajac_output)?;
+    compile_with_rajac(sources_dir, rajac_base_output)?;
 
     // Compare outputs
-    compare_outputs(reference_output, rajac_output)?;
+    compare_outputs(reference_output, &rajac_output)?;
 
     Ok(())
 }

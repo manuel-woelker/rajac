@@ -94,12 +94,19 @@ impl Compiler {
         }
 
         // Write class files to target directory
+        let classes_dir = target_dir.join("classes");
+
         for class_file in class_files {
             let class_name = class_file
                 .constant_pool
                 .try_get_class(class_file.this_class)
                 .context("Failed to get class name from constant pool")?;
-            let class_path = target_dir.join(format!("{}.class", class_name));
+
+            let class_path = classes_dir.join(format!("{}.class", class_name));
+
+            if let Some(parent) = class_path.parent() {
+                fs::create_dir_all(parent).context("Failed to create package directory")?;
+            }
 
             let mut bytes = Vec::new();
             class_file.to_bytes(&mut bytes)?;
