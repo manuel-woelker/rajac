@@ -144,7 +144,7 @@ fn compare_file_contents(reference_files: &[PathBuf], actual_files: &[PathBuf]) 
                 ref_filename,
                 " ✓".green()
             );
-
+            
             // Read and pretty print both class files for comparison
             let ref_bytes = fs::read(ref_path).context(format!(
                 "Failed to read reference file: {}",
@@ -177,12 +177,23 @@ fn compare_file_contents(reference_files: &[PathBuf], actual_files: &[PathBuf]) 
 
             let diff = diff::lines(ref_text, act_text);
 
+            let mut has_changes = false;
             for change in diff {
                 match change {
-                    diff::Result::Left(line) => println!("  {}{}", "-".red(), line),
-                    diff::Result::Right(line) => println!("  {}{}", "+".green(), line),
+                    diff::Result::Left(line) => {
+                        println!("  {}{}", "-".red(), line);
+                        has_changes = true;
+                    },
+                    diff::Result::Right(line) => {
+                        println!("  {}{}", "+".green(), line);
+                        has_changes = true;
+                    },
                     diff::Result::Both(_line, _) => (), // Nothing to emit,
                 }
+            }
+            
+            if !has_changes {
+                println!("  {} No differences in pretty-printed output (bytecode differs only in implementation details)", "Note:".yellow());
             }
 
             mismatches += 1;
