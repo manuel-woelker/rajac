@@ -1,11 +1,11 @@
 use rajac_ast::{ClassMember, Expr, Stmt};
-use rajac_parser::parse;
+use rajac_base::result::{RajacResult, ResultExt};
 use rajac_bytecode::classfile::generate_classfiles;
+use rajac_parser::parse;
+use ristretto_classfile::attributes::Attribute;
+use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
-use std::fs;
-use ristretto_classfile::attributes::Attribute;
-use rajac_base::result::{RajacResult, ResultExt};
 
 /// Compiler struct that handles compilation of Java source files
 pub struct Compiler {
@@ -19,66 +19,74 @@ impl Compiler {
             // Initialize any state here
         }
     }
-    
+}
+
+impl Default for Compiler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Compiler {
     /// Compile all Java files in a source directory to a target directory
     pub fn compile_directory(&self, source_dir: &Path, target_dir: &Path) -> RajacResult<()> {
         // Create target directory if it doesn't exist
-        fs::create_dir_all(target_dir)
-            .context("Failed to create target directory")?;
-        
+        fs::create_dir_all(target_dir).context("Failed to create target directory")?;
+
         // Find all Java files in source directory
         let java_files = self.find_java_files(source_dir)?;
-        
+
         if java_files.is_empty() {
             println!("No Java files found in {}", source_dir.display());
             return Ok(());
         }
-        
+
         println!("Found {} Java files to compile", java_files.len());
-        
+
         // Compile each file
         for java_file in &java_files {
             self.compile_file(java_file, target_dir)?;
         }
-        
+
         Ok(())
     }
-    
+
     /// Find all Java files in a directory
     fn find_java_files(&self, dir: &Path) -> RajacResult<Vec<PathBuf>> {
         let mut java_files = Vec::new();
-        
+
         for entry in WalkDir::new(dir)
             .follow_links(true)
             .into_iter()
             .filter_map(|e| e.ok())
         {
             let path = entry.path();
-            if path.is_file() && path.extension().map_or(false, |ext| ext == "java") {
+            if path.is_file() && path.extension().is_some_and(|ext| ext == "java") {
                 java_files.push(path.to_path_buf());
             }
         }
-        
+
         Ok(java_files)
     }
-    
+
     /// Compile a single Java file
     fn compile_file(&self, source_file: &Path, target_dir: &Path) -> RajacResult<()> {
         println!("Compiling {}...", source_file.display());
-        
+
         // Read source file
-        let source = fs::read_to_string(source_file)
-            .context("Failed to read source file")?;
-        
+        let source = fs::read_to_string(source_file).context("Failed to read source file")?;
+
         // Parse the source
         let parse_result = parse(&source);
-        
+
         // Generate class files
         let mut class_files = generate_classfiles(&parse_result.ast, &parse_result.arena)?;
 
         for class_file in &mut class_files {
             let source_file_attribute_index = class_file.constant_pool.add_utf8("SourceFile")?;
-            let source_file_index = class_file.constant_pool.add_utf8(source_file.file_name().unwrap().display().to_string())?;
+            let source_file_index = class_file
+                .constant_pool
+                .add_utf8(source_file.file_name().unwrap().display().to_string())?;
             class_file.attributes.push(Attribute::SourceFile {
                 name_index: source_file_attribute_index,
                 source_file_index,
@@ -92,47 +100,49 @@ impl Compiler {
                 .try_get_class(class_file.this_class)
                 .context("Failed to get class name from constant pool")?;
             let class_path = target_dir.join(format!("{}.class", class_name));
-            
+
             let mut bytes = Vec::new();
             class_file.to_bytes(&mut bytes)?;
-            fs::write(&class_path, &bytes)
-                .context(format!("Failed to write class file: {}", class_path.display()))?;
-            
+            fs::write(&class_path, &bytes).context(format!(
+                "Failed to write class file: {}",
+                class_path.display()
+            ))?;
+
             println!("  Generated {}", class_path.display());
         }
-        
+
         // Count AST nodes for statistics
         let ast_node_count = self.count_ast_nodes(&parse_result.ast, &parse_result.arena);
         println!("  Parsed {} AST nodes", ast_node_count);
-        
+
         Ok(())
     }
-    
+
     /// Count all AST nodes in the parsed AST (helper function)
     fn count_ast_nodes(&self, ast: &rajac_ast::Ast, arena: &rajac_ast::AstArena) -> usize {
         let mut count = 1; // Count the compilation unit itself
-        
+
         // Count classes
         count += ast.classes.len();
-        
+
         // Count all members in classes
         for class_id in &ast.classes {
             let class = arena.class_decl(*class_id);
             count += class.members.len();
-            
+
             // Count statements and expressions in members
             for member_id in &class.members {
                 let member = arena.class_member(*member_id);
                 count += self.count_member_nodes(member, arena);
             }
         }
-        
+
         count
     }
-    
+
     fn count_member_nodes(&self, member: &ClassMember, arena: &rajac_ast::AstArena) -> usize {
         let mut count = 1; // The member itself
-        
+
         match member {
             ClassMember::Field(field) => {
                 count += 1; // Field type
@@ -188,16 +198,20 @@ impl Compiler {
                 }
             }
         }
-        
+
         count
     }
-    
+
     fn count_stmt_nodes(&self, stmt_id: rajac_ast::StmtId, arena: &rajac_ast::AstArena) -> usize {
         let mut count = 1; // The statement itself
-        
+
         let stmt = arena.stmt(stmt_id);
         match stmt {
-            Stmt::Empty | Stmt::Break(_) | Stmt::Continue(_) | Stmt::Return(None) | Stmt::Throw(_) => {
+            Stmt::Empty
+            | Stmt::Break(_)
+            | Stmt::Continue(_)
+            | Stmt::Return(None)
+            | Stmt::Throw(_) => {
                 // These have minimal additional nodes
             }
             Stmt::Block(stmts) => {
@@ -289,13 +303,13 @@ impl Compiler {
                 }
             }
         }
-        
+
         count
     }
-    
+
     fn count_expr_nodes(&self, expr_id: rajac_ast::ExprId, arena: &rajac_ast::AstArena) -> usize {
         let mut count = 1; // The expression itself
-        
+
         let expr = arena.expr(expr_id);
         match expr {
             Expr::Error | Expr::Ident(_) | Expr::Literal(_) | Expr::This(_) | Expr::Super => {
@@ -380,7 +394,7 @@ impl Compiler {
                 }
             }
         }
-        
+
         count
     }
 }

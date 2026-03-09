@@ -4,8 +4,8 @@ use rajac_ast::{
 };
 use rajac_base::result::{RajacResult, ResultExt};
 use ristretto_classfile::{
-    ClassAccessFlags, ClassFile, ConstantPool, Field, FieldAccessFlags, FieldType, Method,
-    MethodAccessFlags, JAVA_21,
+    ClassAccessFlags, ClassFile, ConstantPool, Field, FieldAccessFlags, FieldType, JAVA_21, Method,
+    MethodAccessFlags,
 };
 
 pub fn generate_classfiles(ast: &Ast, arena: &AstArena) -> RajacResult<Vec<ClassFile>> {

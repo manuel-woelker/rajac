@@ -3,8 +3,8 @@ mod test {
     use rajac_base::result::RajacResult;
     use ristretto_classfile::attributes::Attribute;
     use ristretto_classfile::{
-        ClassAccessFlags, ClassFile, ConstantPool, Field, FieldAccessFlags, FieldType, Method,
-        MethodAccessFlags, JAVA_8,
+        ClassAccessFlags, ClassFile, ConstantPool, Field, FieldAccessFlags, FieldType, JAVA_8,
+        Method, MethodAccessFlags,
     };
     use std::fs;
 
