@@ -252,19 +252,34 @@ fn format_instruction(instruction: &ristretto_classfile::attributes::Instruction
         Instruction::Ldc(index) => {
             match constant_pool.try_get_utf8(u16::from(*index)) {
                 Ok(value) => format!("ldc \"{}\"", value),
-                Err(_) => format!("ldc #{}", index),
+                Err(_) => {
+                    match constant_pool.try_get_string(u16::from(*index)) {
+                        Ok(value) => format!("ldc \"{}\"", value),
+                        Err(_) => format!("ldc #{}", index),
+                    }
+                }
             }
         },
         Instruction::Ldc_w(index) => {
             match constant_pool.try_get_utf8(*index) {
                 Ok(value) => format!("ldc_w \"{}\"", value),
-                Err(_) => format!("ldc_w #{}", index),
+                Err(_) => {
+                    match constant_pool.try_get_string(*index) {
+                        Ok(value) => format!("ldc_w \"{}\"", value),
+                        Err(_) => format!("ldc_w #{}", index),
+                    }
+                }
             }
         },
         Instruction::Ldc2_w(index) => {
             match constant_pool.try_get_utf8(*index) {
                 Ok(value) => format!("ldc2_w \"{}\"", value),
-                Err(_) => format!("ldc2_w #{}", index),
+                Err(_) => {
+                    match constant_pool.try_get_string(*index) {
+                        Ok(value) => format!("ldc2_w \"{}\"", value),
+                        Err(_) => format!("ldc2_w #{}", index),
+                    }
+                }
             }
         },
         Instruction::Iload(index) => format!("iload {}", index),
