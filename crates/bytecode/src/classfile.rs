@@ -428,7 +428,7 @@ fn method_from_ast(
     let descriptor_index = constant_pool.add_utf8(&descriptor)?;
 
     let mut access_flags = method_access_flags(&method.modifiers);
-    
+
     let attributes = if let Some(body_id) = method.body {
         // Generate bytecode for method with body
         generate_method_bytecode(arena, constant_pool, method, body_id)?
@@ -465,35 +465,41 @@ fn generate_method_bytecode(
     body_id: rajac_ast::StmtId,
 ) -> RajacResult<Vec<ristretto_classfile::attributes::Attribute>> {
     let body = arena.stmt(body_id);
-    
+
     // For now, implement a simple pattern matcher for the Println.java main method
     // TODO: Implement a proper AST visitor for bytecode generation
-    
+
     if let rajac_ast::Stmt::Block(stmts) = body {
         // Check if this is the Println main method pattern
         if stmts.len() == 1 {
             let stmt = arena.stmt(stmts[0]);
             if let rajac_ast::Stmt::Expr(expr_id) = stmt {
                 let expr = arena.expr(*expr_id);
-                if let rajac_ast::Expr::MethodCall { 
-                    expr: target_expr_id, 
-                    name: method_name, 
+                if let rajac_ast::Expr::MethodCall {
+                    expr: target_expr_id,
+                    name: method_name,
                     type_args: _,
-                    args 
-                } = expr {
+                    args,
+                } = expr
+                {
                     // Check if this matches System.out.println("Hello, World!")
-                    if method_name.as_str() == "println" 
-                        && args.len() == 1 
+                    if method_name.as_str() == "println"
+                        && args.len() == 1
                         && target_expr_id.is_some()
-                        && matches_method_call_pattern(arena, target_expr_id.unwrap(), method_name, &args) {
-                        
+                        && matches_method_call_pattern(
+                            arena,
+                            target_expr_id.unwrap(),
+                            method_name,
+                            args,
+                        )
+                    {
                         return generate_println_bytecode(constant_pool, arena.expr(args[0]));
                     }
                 }
             }
         }
     }
-    
+
     // For now, return empty bytecode for unsupported patterns
     let code_name = constant_pool.add_utf8("Code")?;
     let max_locals = method.params.len() as u16 + 1; // +1 for 'this' if not static
@@ -514,19 +520,23 @@ fn matches_method_call_pattern(
     _args: &[rajac_ast::ExprId],
 ) -> bool {
     let target_expr = arena.expr(target_expr_id);
-    
+
     // Check if target is System.out
-    if let rajac_ast::Expr::FieldAccess { expr: target_expr_id, name: field_name } = target_expr {
+    if let rajac_ast::Expr::FieldAccess {
+        expr: target_expr_id,
+        name: field_name,
+    } = target_expr
+    {
         if field_name.as_str() != "out" {
             return false;
         }
-        
+
         let target_of_target = arena.expr(*target_expr_id);
         if let rajac_ast::Expr::Ident(system_name) = target_of_target {
             return system_name.as_str() == "System";
         }
     }
-    
+
     false
 }
 
@@ -535,15 +545,16 @@ fn generate_println_bytecode(
     string_expr: &rajac_ast::Expr,
 ) -> RajacResult<Vec<ristretto_classfile::attributes::Attribute>> {
     let code_name = constant_pool.add_utf8("Code")?;
-    
+
     // Add System.out field reference
     let system_class = constant_pool.add_class("java/lang/System")?;
     let printstream_class = constant_pool.add_class("java/io/PrintStream")?;
     let system_out = constant_pool.add_field_ref(system_class, "out", "Ljava/io/PrintStream;")?;
-    
+
     // Add PrintStream.println method reference
-    let println_method = constant_pool.add_method_ref(printstream_class, "println", "(Ljava/lang/String;)V")?;
-    
+    let println_method =
+        constant_pool.add_method_ref(printstream_class, "println", "(Ljava/lang/String;)V")?;
+
     // Add string literal to constant pool
     let string_literal = if let rajac_ast::Expr::Literal(literal) = string_expr {
         if matches!(literal.kind, rajac_ast::LiteralKind::String) {
@@ -554,19 +565,21 @@ fn generate_println_bytecode(
     } else {
         constant_pool.add_string("")? // Default empty string for unsupported patterns
     };
-    
+
     // Generate bytecode: getstatic, ldc, invokevirtual, return
     let code = vec![
         ristretto_classfile::attributes::Instruction::Getstatic(system_out),
-        ristretto_classfile::attributes::Instruction::Ldc(u8::try_from(string_literal).unwrap_or(0)),
+        ristretto_classfile::attributes::Instruction::Ldc(
+            u8::try_from(string_literal).unwrap_or(0),
+        ),
         ristretto_classfile::attributes::Instruction::Invokevirtual(println_method),
         ristretto_classfile::attributes::Instruction::Return,
     ];
-    
+
     Ok(vec![ristretto_classfile::attributes::Attribute::Code {
         name_index: code_name,
         max_stack: 2,  // Need stack for getstatic result and string parameter
-        max_locals: 1,  // Need local variable for args parameter
+        max_locals: 1, // Need local variable for args parameter
         code,
         exception_table: vec![],
         attributes: vec![],
@@ -684,7 +697,7 @@ fn create_default_constructor(
 
     // Create Code attribute for default constructor
     let code_name = constant_pool.add_utf8("Code")?;
-    
+
     // Add superclass class reference for invokespecial
     let super_class = constant_pool.add_class(super_internal_name)?;
     let super_init = constant_pool.add_method_ref(super_class, "<init>", "()V")?;
@@ -699,7 +712,7 @@ fn create_default_constructor(
     let code_attribute = ristretto_classfile::attributes::Attribute::Code {
         name_index: code_name,
         max_stack: 1,  // Need stack for aload_0 and invokespecial
-        max_locals: 1,  // Need local variable for 'this'
+        max_locals: 1, // Need local variable for 'this'
         code,
         exception_table: vec![],
         attributes: vec![],
@@ -813,16 +826,23 @@ mod tests {
         // Now methods with bodies should be processed and have Code attributes
         // We should have 2 methods: the method with body + default constructor
         assert_eq!(class_file.methods.len(), 2);
-        
+
         // Find our method with body
-        let method_with_body = class_file.methods.iter().find(|m| {
-            class_file.constant_pool.try_get_utf8(m.name_index).ok() == Some("g")
-        }).expect("method 'g' should be present");
-        
+        let method_with_body = class_file
+            .methods
+            .iter()
+            .find(|m| class_file.constant_pool.try_get_utf8(m.name_index).ok() == Some("g"))
+            .expect("method 'g' should be present");
+
         assert!(!method_with_body.attributes.is_empty());
-        
+
         // Check that it has a Code attribute
-        let has_code = method_with_body.attributes.iter().any(|attr| matches!(attr, ristretto_classfile::attributes::Attribute::Code { .. }));
+        let has_code = method_with_body.attributes.iter().any(|attr| {
+            matches!(
+                attr,
+                ristretto_classfile::attributes::Attribute::Code { .. }
+            )
+        });
         assert!(has_code);
 
         Ok(())

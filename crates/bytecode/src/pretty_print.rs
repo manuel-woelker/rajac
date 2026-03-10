@@ -192,11 +192,12 @@ fn pretty_print_method(out: &mut String, constant_pool: &ConstantPool, method: &
             code,
             exception_table,
             ..
-        } = attribute {
-            out.push_str(&format!("    Code:\n"));
+        } = attribute
+        {
+            out.push_str("    Code:\n");
             out.push_str(&format!("     max_stack = {}\n", max_stack));
             out.push_str(&format!("     max_locals = {}\n", max_locals));
-            
+
             if !code.is_empty() {
                 out.push_str("     Code:\n");
                 for (i, instruction) in code.iter().enumerate() {
@@ -205,7 +206,7 @@ fn pretty_print_method(out: &mut String, constant_pool: &ConstantPool, method: &
                     out.push_str(&format!("      {}: {}\n", offset, instruction_str));
                 }
             }
-            
+
             if !exception_table.is_empty() {
                 out.push_str("     ExceptionTable:\n");
                 for (i, exception) in exception_table.iter().enumerate() {
@@ -219,7 +220,7 @@ fn pretty_print_method(out: &mut String, constant_pool: &ConstantPool, method: &
                     ));
                 }
             }
-            
+
             // Print Code attributes (like LineNumberTable, LocalVariableTable)
             // This is a placeholder - we'd need to handle Code sub-attributes
             // but the current structure doesn't expose them directly
@@ -227,9 +228,12 @@ fn pretty_print_method(out: &mut String, constant_pool: &ConstantPool, method: &
     }
 }
 
-fn format_instruction(instruction: &ristretto_classfile::attributes::Instruction, constant_pool: &ConstantPool) -> String {
+fn format_instruction(
+    instruction: &ristretto_classfile::attributes::Instruction,
+    constant_pool: &ConstantPool,
+) -> String {
     use ristretto_classfile::attributes::Instruction;
-    
+
     match instruction {
         Instruction::Nop => "nop".to_string(),
         Instruction::Aconst_null => "aconst_null".to_string(),
@@ -249,38 +253,26 @@ fn format_instruction(instruction: &ristretto_classfile::attributes::Instruction
         Instruction::Dconst_1 => "dconst_1".to_string(),
         Instruction::Bipush(byte) => format!("bipush {}", byte),
         Instruction::Sipush(short) => format!("sipush {}", short),
-        Instruction::Ldc(index) => {
-            match constant_pool.try_get_utf8(u16::from(*index)) {
+        Instruction::Ldc(index) => match constant_pool.try_get_utf8(u16::from(*index)) {
+            Ok(value) => format!("ldc \"{}\"", value),
+            Err(_) => match constant_pool.try_get_string(u16::from(*index)) {
                 Ok(value) => format!("ldc \"{}\"", value),
-                Err(_) => {
-                    match constant_pool.try_get_string(u16::from(*index)) {
-                        Ok(value) => format!("ldc \"{}\"", value),
-                        Err(_) => format!("ldc #{}", index),
-                    }
-                }
-            }
+                Err(_) => format!("ldc #{}", index),
+            },
         },
-        Instruction::Ldc_w(index) => {
-            match constant_pool.try_get_utf8(*index) {
+        Instruction::Ldc_w(index) => match constant_pool.try_get_utf8(*index) {
+            Ok(value) => format!("ldc_w \"{}\"", value),
+            Err(_) => match constant_pool.try_get_string(*index) {
                 Ok(value) => format!("ldc_w \"{}\"", value),
-                Err(_) => {
-                    match constant_pool.try_get_string(*index) {
-                        Ok(value) => format!("ldc_w \"{}\"", value),
-                        Err(_) => format!("ldc_w #{}", index),
-                    }
-                }
-            }
+                Err(_) => format!("ldc_w #{}", index),
+            },
         },
-        Instruction::Ldc2_w(index) => {
-            match constant_pool.try_get_utf8(*index) {
+        Instruction::Ldc2_w(index) => match constant_pool.try_get_utf8(*index) {
+            Ok(value) => format!("ldc2_w \"{}\"", value),
+            Err(_) => match constant_pool.try_get_string(*index) {
                 Ok(value) => format!("ldc2_w \"{}\"", value),
-                Err(_) => {
-                    match constant_pool.try_get_string(*index) {
-                        Ok(value) => format!("ldc2_w \"{}\"", value),
-                        Err(_) => format!("ldc2_w #{}", index),
-                    }
-                }
-            }
+                Err(_) => format!("ldc2_w #{}", index),
+            },
         },
         Instruction::Iload(index) => format!("iload {}", index),
         Instruction::Lload(index) => format!("lload {}", index),
@@ -432,168 +424,218 @@ fn format_instruction(instruction: &ristretto_classfile::attributes::Instruction
         Instruction::Jsr(branch) => format!("jsr {}", branch),
         Instruction::Ret(index) => format!("ret {}", index),
         Instruction::Tableswitch(table_switch) => {
-            format!("tableswitch {{ {} to {} }}", table_switch.low, table_switch.high)
-        },
+            format!(
+                "tableswitch {{ {} to {} }}",
+                table_switch.low, table_switch.high
+            )
+        }
         Instruction::Lookupswitch(lookup_switch) => {
             format!("lookupswitch {{ {} entries }}", lookup_switch.pairs.len())
-        },
+        }
         Instruction::Ireturn => "ireturn".to_string(),
         Instruction::Lreturn => "lreturn".to_string(),
         Instruction::Freturn => "freturn".to_string(),
         Instruction::Dreturn => "dreturn".to_string(),
         Instruction::Areturn => "areturn".to_string(),
         Instruction::Return => "return".to_string(),
-        Instruction::Getstatic(index) => {
-            match constant_pool.try_get_field_ref(*index) {
-                Ok((class_index, name_and_type_index)) => {
-                    let class = constant_pool.try_get_class(*class_index)
-                        .unwrap_or("<invalid:class>");
-                    let (name_index, descriptor_index) = constant_pool.try_get_name_and_type(*name_and_type_index)
-                        .unwrap_or((&0, &0));
-                    let name = constant_pool.try_get_utf8(*name_index)
-                        .unwrap_or("<invalid:name>");
-                    let descriptor = constant_pool.try_get_utf8(*descriptor_index)
-                        .unwrap_or("<invalid:descriptor>");
-                    format!("getstatic {}.{}:{}", 
-                        internal_to_java_name(class), name, descriptor)
-                },
-                Err(_) => format!("getstatic #{}", index),
+        Instruction::Getstatic(index) => match constant_pool.try_get_field_ref(*index) {
+            Ok((class_index, name_and_type_index)) => {
+                let class = constant_pool
+                    .try_get_class(*class_index)
+                    .unwrap_or("<invalid:class>");
+                let (name_index, descriptor_index) = constant_pool
+                    .try_get_name_and_type(*name_and_type_index)
+                    .unwrap_or((&0, &0));
+                let name = constant_pool
+                    .try_get_utf8(*name_index)
+                    .unwrap_or("<invalid:name>");
+                let descriptor = constant_pool
+                    .try_get_utf8(*descriptor_index)
+                    .unwrap_or("<invalid:descriptor>");
+                format!(
+                    "getstatic {}.{}:{}",
+                    internal_to_java_name(class),
+                    name,
+                    descriptor
+                )
             }
+            Err(_) => format!("getstatic #{}", index),
         },
-        Instruction::Putstatic(index) => {
-            match constant_pool.try_get_field_ref(*index) {
-                Ok((class_index, name_and_type_index)) => {
-                    let class = constant_pool.try_get_class(*class_index)
-                        .unwrap_or("<invalid:class>");
-                    let (name_index, descriptor_index) = constant_pool.try_get_name_and_type(*name_and_type_index)
-                        .unwrap_or((&0, &0));
-                    let name = constant_pool.try_get_utf8(*name_index)
-                        .unwrap_or("<invalid:name>");
-                    let descriptor = constant_pool.try_get_utf8(*descriptor_index)
-                        .unwrap_or("<invalid:descriptor>");
-                    format!("putstatic {}.{}:{}", 
-                        internal_to_java_name(class), name, descriptor)
-                },
-                Err(_) => format!("putstatic #{}", index),
+        Instruction::Putstatic(index) => match constant_pool.try_get_field_ref(*index) {
+            Ok((class_index, name_and_type_index)) => {
+                let class = constant_pool
+                    .try_get_class(*class_index)
+                    .unwrap_or("<invalid:class>");
+                let (name_index, descriptor_index) = constant_pool
+                    .try_get_name_and_type(*name_and_type_index)
+                    .unwrap_or((&0, &0));
+                let name = constant_pool
+                    .try_get_utf8(*name_index)
+                    .unwrap_or("<invalid:name>");
+                let descriptor = constant_pool
+                    .try_get_utf8(*descriptor_index)
+                    .unwrap_or("<invalid:descriptor>");
+                format!(
+                    "putstatic {}.{}:{}",
+                    internal_to_java_name(class),
+                    name,
+                    descriptor
+                )
             }
+            Err(_) => format!("putstatic #{}", index),
         },
-        Instruction::Getfield(index) => {
-            match constant_pool.try_get_field_ref(*index) {
-                Ok((class_index, name_and_type_index)) => {
-                    let class = constant_pool.try_get_class(*class_index)
-                        .unwrap_or("<invalid:class>");
-                    let (name_index, descriptor_index) = constant_pool.try_get_name_and_type(*name_and_type_index)
-                        .unwrap_or((&0, &0));
-                    let name = constant_pool.try_get_utf8(*name_index)
-                        .unwrap_or("<invalid:name>");
-                    let descriptor = constant_pool.try_get_utf8(*descriptor_index)
-                        .unwrap_or("<invalid:descriptor>");
-                    format!("getfield {}.{}:{}", 
-                        internal_to_java_name(class), name, descriptor)
-                },
-                Err(_) => format!("getfield #{}", index),
+        Instruction::Getfield(index) => match constant_pool.try_get_field_ref(*index) {
+            Ok((class_index, name_and_type_index)) => {
+                let class = constant_pool
+                    .try_get_class(*class_index)
+                    .unwrap_or("<invalid:class>");
+                let (name_index, descriptor_index) = constant_pool
+                    .try_get_name_and_type(*name_and_type_index)
+                    .unwrap_or((&0, &0));
+                let name = constant_pool
+                    .try_get_utf8(*name_index)
+                    .unwrap_or("<invalid:name>");
+                let descriptor = constant_pool
+                    .try_get_utf8(*descriptor_index)
+                    .unwrap_or("<invalid:descriptor>");
+                format!(
+                    "getfield {}.{}:{}",
+                    internal_to_java_name(class),
+                    name,
+                    descriptor
+                )
             }
+            Err(_) => format!("getfield #{}", index),
         },
-        Instruction::Putfield(index) => {
-            match constant_pool.try_get_field_ref(*index) {
-                Ok((class_index, name_and_type_index)) => {
-                    let class = constant_pool.try_get_class(*class_index)
-                        .unwrap_or("<invalid:class>");
-                    let (name_index, descriptor_index) = constant_pool.try_get_name_and_type(*name_and_type_index)
-                        .unwrap_or((&0, &0));
-                    let name = constant_pool.try_get_utf8(*name_index)
-                        .unwrap_or("<invalid:name>");
-                    let descriptor = constant_pool.try_get_utf8(*descriptor_index)
-                        .unwrap_or("<invalid:descriptor>");
-                    format!("putfield {}.{}:{}", 
-                        internal_to_java_name(class), name, descriptor)
-                },
-                Err(_) => format!("putfield #{}", index),
+        Instruction::Putfield(index) => match constant_pool.try_get_field_ref(*index) {
+            Ok((class_index, name_and_type_index)) => {
+                let class = constant_pool
+                    .try_get_class(*class_index)
+                    .unwrap_or("<invalid:class>");
+                let (name_index, descriptor_index) = constant_pool
+                    .try_get_name_and_type(*name_and_type_index)
+                    .unwrap_or((&0, &0));
+                let name = constant_pool
+                    .try_get_utf8(*name_index)
+                    .unwrap_or("<invalid:name>");
+                let descriptor = constant_pool
+                    .try_get_utf8(*descriptor_index)
+                    .unwrap_or("<invalid:descriptor>");
+                format!(
+                    "putfield {}.{}:{}",
+                    internal_to_java_name(class),
+                    name,
+                    descriptor
+                )
             }
+            Err(_) => format!("putfield #{}", index),
         },
-        Instruction::Invokevirtual(index) => {
-            match constant_pool.try_get_method_ref(*index) {
-                Ok((class_index, name_and_type_index)) => {
-                    let class = constant_pool.try_get_class(*class_index)
-                        .unwrap_or("<invalid:class>");
-                    let (name_index, descriptor_index) = constant_pool.try_get_name_and_type(*name_and_type_index)
-                        .unwrap_or((&0, &0));
-                    let name = constant_pool.try_get_utf8(*name_index)
-                        .unwrap_or("<invalid:name>");
-                    let descriptor = constant_pool.try_get_utf8(*descriptor_index)
-                        .unwrap_or("<invalid:descriptor>");
-                    format!("invokevirtual {}.{}:{}", 
-                        internal_to_java_name(class), name, descriptor)
-                },
-                Err(_) => format!("invokevirtual #{}", index),
+        Instruction::Invokevirtual(index) => match constant_pool.try_get_method_ref(*index) {
+            Ok((class_index, name_and_type_index)) => {
+                let class = constant_pool
+                    .try_get_class(*class_index)
+                    .unwrap_or("<invalid:class>");
+                let (name_index, descriptor_index) = constant_pool
+                    .try_get_name_and_type(*name_and_type_index)
+                    .unwrap_or((&0, &0));
+                let name = constant_pool
+                    .try_get_utf8(*name_index)
+                    .unwrap_or("<invalid:name>");
+                let descriptor = constant_pool
+                    .try_get_utf8(*descriptor_index)
+                    .unwrap_or("<invalid:descriptor>");
+                format!(
+                    "invokevirtual {}.{}:{}",
+                    internal_to_java_name(class),
+                    name,
+                    descriptor
+                )
             }
+            Err(_) => format!("invokevirtual #{}", index),
         },
-        Instruction::Invokespecial(index) => {
-            match constant_pool.try_get_method_ref(*index) {
-                Ok((class_index, name_and_type_index)) => {
-                    let class = constant_pool.try_get_class(*class_index)
-                        .unwrap_or("<invalid:class>");
-                    let (name_index, descriptor_index) = constant_pool.try_get_name_and_type(*name_and_type_index)
-                        .unwrap_or((&0, &0));
-                    let name = constant_pool.try_get_utf8(*name_index)
-                        .unwrap_or("<invalid:name>");
-                    let descriptor = constant_pool.try_get_utf8(*descriptor_index)
-                        .unwrap_or("<invalid:descriptor>");
-                    format!("invokespecial {}.{}:{}", 
-                        internal_to_java_name(class), name, descriptor)
-                },
-                Err(_) => format!("invokespecial #{}", index),
+        Instruction::Invokespecial(index) => match constant_pool.try_get_method_ref(*index) {
+            Ok((class_index, name_and_type_index)) => {
+                let class = constant_pool
+                    .try_get_class(*class_index)
+                    .unwrap_or("<invalid:class>");
+                let (name_index, descriptor_index) = constant_pool
+                    .try_get_name_and_type(*name_and_type_index)
+                    .unwrap_or((&0, &0));
+                let name = constant_pool
+                    .try_get_utf8(*name_index)
+                    .unwrap_or("<invalid:name>");
+                let descriptor = constant_pool
+                    .try_get_utf8(*descriptor_index)
+                    .unwrap_or("<invalid:descriptor>");
+                format!(
+                    "invokespecial {}.{}:{}",
+                    internal_to_java_name(class),
+                    name,
+                    descriptor
+                )
             }
+            Err(_) => format!("invokespecial #{}", index),
         },
-        Instruction::Invokestatic(index) => {
-            match constant_pool.try_get_method_ref(*index) {
-                Ok((class_index, name_and_type_index)) => {
-                    let class = constant_pool.try_get_class(*class_index)
-                        .unwrap_or("<invalid:class>");
-                    let (name_index, descriptor_index) = constant_pool.try_get_name_and_type(*name_and_type_index)
-                        .unwrap_or((&0, &0));
-                    let name = constant_pool.try_get_utf8(*name_index)
-                        .unwrap_or("<invalid:name>");
-                    let descriptor = constant_pool.try_get_utf8(*descriptor_index)
-                        .unwrap_or("<invalid:descriptor>");
-                    format!("invokestatic {}.{}:{}", 
-                        internal_to_java_name(class), name, descriptor)
-                },
-                Err(_) => format!("invokestatic #{}", index),
+        Instruction::Invokestatic(index) => match constant_pool.try_get_method_ref(*index) {
+            Ok((class_index, name_and_type_index)) => {
+                let class = constant_pool
+                    .try_get_class(*class_index)
+                    .unwrap_or("<invalid:class>");
+                let (name_index, descriptor_index) = constant_pool
+                    .try_get_name_and_type(*name_and_type_index)
+                    .unwrap_or((&0, &0));
+                let name = constant_pool
+                    .try_get_utf8(*name_index)
+                    .unwrap_or("<invalid:name>");
+                let descriptor = constant_pool
+                    .try_get_utf8(*descriptor_index)
+                    .unwrap_or("<invalid:descriptor>");
+                format!(
+                    "invokestatic {}.{}:{}",
+                    internal_to_java_name(class),
+                    name,
+                    descriptor
+                )
             }
+            Err(_) => format!("invokestatic #{}", index),
         },
         Instruction::Invokeinterface(index, count) => {
             match constant_pool.try_get_interface_method_ref(*index) {
                 Ok((class_index, name_and_type_index)) => {
-                    let class = constant_pool.try_get_class(*class_index)
+                    let class = constant_pool
+                        .try_get_class(*class_index)
                         .unwrap_or("<invalid:class>");
-                    let (name_index, descriptor_index) = constant_pool.try_get_name_and_type(*name_and_type_index)
+                    let (name_index, descriptor_index) = constant_pool
+                        .try_get_name_and_type(*name_and_type_index)
                         .unwrap_or((&0, &0));
-                    let name = constant_pool.try_get_utf8(*name_index)
+                    let name = constant_pool
+                        .try_get_utf8(*name_index)
                         .unwrap_or("<invalid:name>");
-                    let descriptor = constant_pool.try_get_utf8(*descriptor_index)
+                    let descriptor = constant_pool
+                        .try_get_utf8(*descriptor_index)
                         .unwrap_or("<invalid:descriptor>");
-                    format!("invokeinterface {}.{}:{} {}", 
-                        internal_to_java_name(class), name, descriptor, count)
-                },
+                    format!(
+                        "invokeinterface {}.{}:{} {}",
+                        internal_to_java_name(class),
+                        name,
+                        descriptor,
+                        count
+                    )
+                }
                 Err(_) => format!("invokeinterface #{} {}", index, count),
             }
-        },
-        Instruction::Invokedynamic(index) => {
-            match constant_pool.try_get_invoke_dynamic(*index) {
-                Ok((name, descriptor)) => {
-                    format!("invokedynamic {}:{}", name, descriptor)
-                },
-                Err(_) => format!("invokedynamic #{}", index),
+        }
+        Instruction::Invokedynamic(index) => match constant_pool.try_get_invoke_dynamic(*index) {
+            Ok((name, descriptor)) => {
+                format!("invokedynamic {}:{}", name, descriptor)
             }
+            Err(_) => format!("invokedynamic #{}", index),
         },
-        Instruction::New(index) => {
-            match constant_pool.try_get_class(*index) {
-                Ok(class) => {
-                    format!("new {}", internal_to_java_name(class))
-                },
-                Err(_) => format!("new #{}", index),
+        Instruction::New(index) => match constant_pool.try_get_class(*index) {
+            Ok(class) => {
+                format!("new {}", internal_to_java_name(class))
             }
+            Err(_) => format!("new #{}", index),
         },
         Instruction::Newarray(array_type) => {
             let type_name = match array_type {
@@ -607,32 +649,26 @@ fn format_instruction(instruction: &ristretto_classfile::attributes::Instruction
                 ristretto_classfile::attributes::ArrayType::Long => "long",
             };
             format!("newarray {}", type_name)
-        },
-        Instruction::Anewarray(index) => {
-            match constant_pool.try_get_class(*index) {
-                Ok(class) => {
-                    format!("anewarray {}", internal_to_java_name(class))
-                },
-                Err(_) => format!("anewarray #{}", index),
+        }
+        Instruction::Anewarray(index) => match constant_pool.try_get_class(*index) {
+            Ok(class) => {
+                format!("anewarray {}", internal_to_java_name(class))
             }
+            Err(_) => format!("anewarray #{}", index),
         },
         Instruction::Arraylength => "arraylength".to_string(),
         Instruction::Athrow => "athrow".to_string(),
-        Instruction::Checkcast(index) => {
-            match constant_pool.try_get_class(*index) {
-                Ok(class) => {
-                    format!("checkcast {}", internal_to_java_name(class))
-                },
-                Err(_) => format!("checkcast #{}", index),
+        Instruction::Checkcast(index) => match constant_pool.try_get_class(*index) {
+            Ok(class) => {
+                format!("checkcast {}", internal_to_java_name(class))
             }
+            Err(_) => format!("checkcast #{}", index),
         },
-        Instruction::Instanceof(index) => {
-            match constant_pool.try_get_class(*index) {
-                Ok(class) => {
-                    format!("instanceof {}", internal_to_java_name(class))
-                },
-                Err(_) => format!("instanceof #{}", index),
+        Instruction::Instanceof(index) => match constant_pool.try_get_class(*index) {
+            Ok(class) => {
+                format!("instanceof {}", internal_to_java_name(class))
             }
+            Err(_) => format!("instanceof #{}", index),
         },
         Instruction::Monitorenter => "monitorenter".to_string(),
         Instruction::Monitorexit => "monitorexit".to_string(),
@@ -640,11 +676,15 @@ fn format_instruction(instruction: &ristretto_classfile::attributes::Instruction
         Instruction::Multianewarray(index, dimensions) => {
             match constant_pool.try_get_class(*index) {
                 Ok(class) => {
-                    format!("multianewarray {} {}", internal_to_java_name(class), dimensions)
-                },
+                    format!(
+                        "multianewarray {} {}",
+                        internal_to_java_name(class),
+                        dimensions
+                    )
+                }
                 Err(_) => format!("multianewarray #{} {}", index, dimensions),
             }
-        },
+        }
         Instruction::Ifnull(branch) => format!("ifnull {}", branch),
         Instruction::Ifnonnull(branch) => format!("ifnonnull {}", branch),
         Instruction::Goto_w(branch) => format!("goto_w {}", branch),

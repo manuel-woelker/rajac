@@ -411,8 +411,11 @@ impl<'a> Parser<'a> {
             TokenKind::StringLiteral => {
                 let raw_value = &self.source[self.current.span.clone()];
                 // Strip the surrounding quotes from string literal
-                let value = if raw_value.len() >= 2 && raw_value.starts_with('"') && raw_value.ends_with('"') {
-                    &raw_value[1..raw_value.len()-1]
+                let value = if raw_value.len() >= 2
+                    && raw_value.starts_with('"')
+                    && raw_value.ends_with('"')
+                {
+                    &raw_value[1..raw_value.len() - 1]
                 } else {
                     raw_value
                 };
