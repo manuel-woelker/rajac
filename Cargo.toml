@@ -8,7 +8,7 @@ members = [
 [workspace.dependencies]
 expect-test = "1.5.1"
 anstream = "1.0.0"
-smol_str = "0.3.5"
+ecow = "0.2.2"
 speedy = "0.8.7"
 relative-path = "2.0.1"
 rocksdb = { version = "0.24.0" }

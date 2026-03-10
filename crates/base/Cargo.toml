@@ -8,7 +8,7 @@ expect-test = { workspace = true }
 
 [dependencies]
 anstream = {workspace = true}
-smol_str = {workspace = true}
+ecow = {workspace = true}
 speedy = {workspace = true}
 relative-path = {workspace = true}
 tracing = {workspace = true}
