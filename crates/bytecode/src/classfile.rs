@@ -83,7 +83,7 @@ pub fn classfile_from_class_decl(
 
     // Add default constructor if no constructors are defined and this is a class (not an interface)
     if !has_constructor && matches!(class.kind, ClassKind::Class) {
-        if let Some(default_constructor) = create_default_constructor(&mut constant_pool, &class.name)? {
+        if let Some(default_constructor) = create_default_constructor(&mut constant_pool, &class.modifiers)? {
             methods.push(default_constructor);
         }
     }
@@ -317,11 +317,17 @@ fn type_to_internal_class_name(
     })
 }
 
-fn create_default_constructor(constant_pool: &mut ConstantPool, _class_name: &Ident) -> RajacResult<Option<Method>> {
+fn create_default_constructor(constant_pool: &mut ConstantPool, modifiers: &Modifiers) -> RajacResult<Option<Method>> {
     let name_index = constant_pool.add_utf8("<init>")?;
     let descriptor_index = constant_pool.add_utf8("()V")?;
     
-    let access_flags = MethodAccessFlags::PUBLIC;
+    let mut access_flags = MethodAccessFlags::default();
+    if modifiers.is_public() {
+        access_flags |= MethodAccessFlags::PUBLIC;
+    }
+    if modifiers.is_protected() {
+        access_flags |= MethodAccessFlags::PROTECTED;
+    }
 
     Ok(Some(Method {
         access_flags,

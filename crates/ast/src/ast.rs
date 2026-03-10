@@ -455,27 +455,27 @@ impl Modifiers {
     pub const ENUM: u32 = 0x4000;
     pub const MODULE: u32 = 0x8000;
 
-    pub fn is_public(self) -> bool {
+    pub fn is_public(&self) -> bool {
         self.0 & Self::PUBLIC != 0
     }
 
-    pub fn is_private(self) -> bool {
+    pub fn is_private(&self) -> bool {
         self.0 & Self::PRIVATE != 0
     }
 
-    pub fn is_protected(self) -> bool {
+    pub fn is_protected(&self) -> bool {
         self.0 & Self::PROTECTED != 0
     }
 
-    pub fn is_static(self) -> bool {
+    pub fn is_static(&self) -> bool {
         self.0 & Self::STATIC != 0
     }
 
-    pub fn is_final(self) -> bool {
+    pub fn is_final(&self) -> bool {
         self.0 & Self::FINAL != 0
     }
 
-    pub fn is_abstract(self) -> bool {
+    pub fn is_abstract(&self) -> bool {
         self.0 & Self::ABSTRACT != 0
     }
 }
