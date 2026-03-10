@@ -141,7 +141,7 @@ fn classfile_from_class_decl_with_context(
     if !has_constructor
         && matches!(class.kind, ClassKind::Class)
         && let Some(default_constructor) =
-            create_default_constructor(&mut constant_pool, &class.modifiers)?
+            create_default_constructor(&mut constant_pool, &class.modifiers, &super_internal_name)?
     {
         methods.push(default_constructor);
     }
@@ -544,6 +544,7 @@ fn qualified_name_to_internal(name: &ResolvedName) -> String {
 fn create_default_constructor(
     constant_pool: &mut ConstantPool,
     modifiers: &Modifiers,
+    super_internal_name: &str,
 ) -> RajacResult<Option<Method>> {
     let name_index = constant_pool.add_utf8("<init>")?;
     let descriptor_index = constant_pool.add_utf8("()V")?;
@@ -556,11 +557,34 @@ fn create_default_constructor(
         access_flags |= MethodAccessFlags::PROTECTED;
     }
 
+    // Create Code attribute for default constructor
+    let code_name = constant_pool.add_utf8("Code")?;
+    
+    // Add superclass class reference for invokespecial
+    let super_class = constant_pool.add_class(super_internal_name)?;
+    let super_init = constant_pool.add_method_ref(super_class, "<init>", "()V")?;
+
+    // Generate bytecode: aload_0, invokespecial Object.<init>, return
+    let code = vec![
+        ristretto_classfile::attributes::Instruction::Aload_0,
+        ristretto_classfile::attributes::Instruction::Invokespecial(super_init),
+        ristretto_classfile::attributes::Instruction::Return,
+    ];
+
+    let code_attribute = ristretto_classfile::attributes::Attribute::Code {
+        name_index: code_name,
+        max_stack: 1,  // Need stack for aload_0 and invokespecial
+        max_locals: 1,  // Need local variable for 'this'
+        code,
+        exception_table: vec![],
+        attributes: vec![],
+    };
+
     Ok(Some(Method {
         access_flags,
         name_index,
         descriptor_index,
-        attributes: vec![],
+        attributes: vec![code_attribute],
     }))
 }
 
