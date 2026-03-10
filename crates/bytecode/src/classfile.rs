@@ -82,10 +82,12 @@ pub fn classfile_from_class_decl(
     }
 
     // Add default constructor if no constructors are defined and this is a class (not an interface)
-    if !has_constructor && matches!(class.kind, ClassKind::Class) {
-        if let Some(default_constructor) = create_default_constructor(&mut constant_pool, &class.modifiers)? {
-            methods.push(default_constructor);
-        }
+    if !has_constructor
+        && matches!(class.kind, ClassKind::Class)
+        && let Some(default_constructor) =
+            create_default_constructor(&mut constant_pool, &class.modifiers)?
+    {
+        methods.push(default_constructor);
     }
 
     let access_flags = class_access_flags(class.kind.clone(), &class.modifiers);
@@ -317,10 +319,13 @@ fn type_to_internal_class_name(
     })
 }
 
-fn create_default_constructor(constant_pool: &mut ConstantPool, modifiers: &Modifiers) -> RajacResult<Option<Method>> {
+fn create_default_constructor(
+    constant_pool: &mut ConstantPool,
+    modifiers: &Modifiers,
+) -> RajacResult<Option<Method>> {
     let name_index = constant_pool.add_utf8("<init>")?;
     let descriptor_index = constant_pool.add_utf8("()V")?;
-    
+
     let mut access_flags = MethodAccessFlags::default();
     if modifiers.is_public() {
         access_flags |= MethodAccessFlags::PUBLIC;
@@ -413,7 +418,7 @@ mod tests {
         let member_id = arena.alloc_class_member(ClassMember::Method(method));
 
         let class_id = arena.alloc_class_decl(ClassDecl {
-            kind: ClassKind::Class,
+            kind: ClassKind::Interface,
             name: Ident::new(SharedString::new("Foo")),
             type_params: vec![],
             extends: None,

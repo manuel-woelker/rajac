@@ -472,6 +472,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rajac-symbols"
+version = "0.1.0"
+dependencies = [
+ "rajac-base",
+]
+
+[[package]]
 name = "rajac-token"
 version = "0.1.0"
 

@@ -637,7 +637,13 @@ impl<'a> Parser<'a> {
         };
 
         // Interface methods are implicitly public
-        let final_modifiers = if self.in_interface && (modifiers.0 & (rajac_ast::Modifiers::PUBLIC | rajac_ast::Modifiers::PRIVATE | rajac_ast::Modifiers::PROTECTED)) == 0 {
+        let final_modifiers = if self.in_interface
+            && (modifiers.0
+                & (rajac_ast::Modifiers::PUBLIC
+                    | rajac_ast::Modifiers::PRIVATE
+                    | rajac_ast::Modifiers::PROTECTED))
+                == 0
+        {
             Modifiers(modifiers.0 | rajac_ast::Modifiers::PUBLIC)
         } else {
             modifiers
