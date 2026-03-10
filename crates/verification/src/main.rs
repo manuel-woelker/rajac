@@ -29,24 +29,10 @@ fn main() -> RajacResult<()> {
 }
 
 fn compile_with_rajac(sources_dir: &Path, output_dir: &Path) -> RajacResult<()> {
-    // Find all Java files in sources directory
-    let mut java_files = Vec::new();
-    for entry in WalkDir::new(sources_dir)
-        .follow_links(true)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
-        let path = entry.path();
-        if path.is_file() && path.extension().is_some_and(|ext| ext == "java") {
-            java_files.push(path.to_path_buf());
-        }
-    }
-
-    // Compile each file with rajac using the Compiler struct
+    // Compile sources with rajac using the Compiler struct
     let compiler = Compiler::new();
     compiler.compile_directory(sources_dir, output_dir)?;
 
-    println!("Compiled {} files with rajac", java_files.len());
     Ok(())
 }
 
