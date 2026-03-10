@@ -128,7 +128,7 @@ fn populate_symbol_table(symbol_table: &mut SymbolTable, ast: &Ast, arena: &AstA
 
     for class_id in &ast.classes {
         let class = arena.class_decl(*class_id);
-        let name = class.name.0.clone();
+        let name = class.name.name.clone();
         let kind = match class.kind {
             ClassKind::Class => SymbolKind::Class,
             ClassKind::Interface => SymbolKind::Interface,

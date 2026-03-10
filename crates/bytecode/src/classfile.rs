@@ -193,7 +193,7 @@ fn collect_nested_class_infos(
         };
 
         let nested_decl = arena.class_decl(class_id);
-        let simple_name = nested_decl.name.0.as_str().to_string();
+        let simple_name = nested_decl.name.as_str().to_string();
         let internal_name = format!("{this_internal_name}${simple_name}");
 
         nested.push(NestedClassInfo {
@@ -215,10 +215,10 @@ fn internal_class_name(ast: &Ast, class_name: &Ident) -> String {
             if !s.is_empty() {
                 s.push('/');
             }
-            s.push_str(class_name.0.as_str());
+            s.push_str(class_name.as_str());
             s
         }
-        None => class_name.0.as_str().to_string(),
+        None => class_name.as_str().to_string(),
     }
 }
 
@@ -241,7 +241,7 @@ fn build_inner_classes_attribute(
             .with_context(|| {
                 format!("failed to add outer class '{outer_internal_name}' to constant pool")
             })?;
-        let name_index = constant_pool.add_utf8(class.name.0.as_str())?;
+        let name_index = constant_pool.add_utf8(class.name.as_str())?;
         classes.push(InnerClass {
             class_info_index: this_class,
             outer_class_info_index: outer_class,
@@ -372,7 +372,7 @@ fn field_from_ast(
         return Ok(None);
     }
 
-    let name_index = constant_pool.add_utf8(field.name.0.as_str())?;
+    let name_index = constant_pool.add_utf8(field.name.as_str())?;
     let descriptor = type_to_descriptor(arena, field.ty)?;
     let descriptor_index = constant_pool.add_utf8(&descriptor)?;
     let field_type =
@@ -434,7 +434,7 @@ fn method_from_ast(
         return Ok(None);
     }
 
-    let name_index = constant_pool.add_utf8(method.name.0.as_str())?;
+    let name_index = constant_pool.add_utf8(method.name.as_str())?;
     let descriptor = method_to_descriptor(arena, method)?;
     let descriptor_index = constant_pool.add_utf8(&descriptor)?;
 
@@ -503,7 +503,7 @@ fn type_to_descriptor(arena: &AstArena, type_id: rajac_ast::TypeId) -> RajacResu
             rajac_ast::PrimitiveType::Double => "D".to_string(),
             rajac_ast::PrimitiveType::Void => "V".to_string(),
         },
-        Type::Class { name, .. } => format!("L{};", name.0.as_str().replace('.', "/")),
+        Type::Class { name, .. } => format!("L{};", name.as_str().replace('.', "/")),
         Type::Array { ty } => format!("[{}", type_to_descriptor(arena, *ty)?),
         Type::TypeVariable { .. } | Type::Wildcard { .. } => "Ljava/lang/Object;".to_string(),
     })
@@ -515,7 +515,7 @@ fn type_to_internal_class_name(
 ) -> RajacResult<String> {
     let ty = arena.ty(type_id);
     Ok(match ty {
-        Type::Class { name, .. } => name.0.as_str().replace('.', "/"),
+        Type::Class { name, .. } => name.as_str().replace('.', "/"),
         _ => "java/lang/Object".to_string(),
     })
 }

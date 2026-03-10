@@ -4,6 +4,9 @@ use crate::shared_string::SharedString;
 use serde::{Deserialize, Serialize};
 use speedy::{Readable, Writable};
 
+pub const UNRESOLVED_PACKAGE: &str = "<unresolved>";
+pub const UNRESOLVED_NAME: &str = "<unresolved>";
+
 /// # What does this represent?
 /// A package-qualified name represented by a package and a local identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Readable, Writable, Serialize, Deserialize)]
@@ -41,6 +44,12 @@ impl QualifiedName {
     /// Returns true if this name is in the default package.
     pub fn is_default_package(&self) -> bool {
         self.package_name.is_empty()
+    }
+}
+
+impl Default for QualifiedName {
+    fn default() -> Self {
+        Self::new(UNRESOLVED_PACKAGE.into(), UNRESOLVED_NAME.into())
     }
 }
 
