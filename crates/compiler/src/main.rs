@@ -9,7 +9,7 @@ fn main() {
 
     let compiler = Compiler::new();
 
-    if let Err(e) = compiler.compile_directory(source_dir, source_dir) {
+    if let Err(e) = compiler.compile_directory(source_dir, &source_dir.join("classes")) {
         eprintln!("Compilation failed: {:?}", e);
         std::process::exit(1);
     }
