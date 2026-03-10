@@ -449,6 +449,7 @@ dependencies = [
  "rajac-base",
  "rajac-bytecode",
  "rajac-parser",
+ "rajac-symbols",
  "rayon",
  "ristretto_classfile",
  "walkdir",

@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 rajac-parser = { path = "../parser" }
 rajac-ast = { path = "../ast" }
+rajac-symbols = { path = "../symbols" }
 walkdir = "2.5"
 rayon = "1.10"
 rajac-base = { path = "../base" }
