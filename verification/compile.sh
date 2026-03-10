@@ -15,10 +15,11 @@ fi
 # Create output directory name
 OUTPUT_DIR="/data/projects/rajac/verification/output/${COMPILER_NAME}_${COMPILER_VERSION}"
 
+rm -rf "$OUTPUT_DIR"
 # Create output directory
 mkdir -p "$OUTPUT_DIR"
 
-# Compile all Java files
-$JAVA_HOME/bin/javac -d "$OUTPUT_DIR" /data/projects/rajac/verification/sources/*.java
+# Compile all Java files recursively
+find /data/projects/rajac/verification/sources -name "*.java" -type f | xargs $JAVA_HOME/bin/javac -d "$OUTPUT_DIR"
 
 echo "Compiled Java files to: $OUTPUT_DIR"
