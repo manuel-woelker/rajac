@@ -53,7 +53,14 @@ pub fn pretty_print_classfile(class_file: &ClassFile) -> SharedString {
     }
 
     out.push_str("\n  // methods\n");
-    for method in &class_file.methods {
+    // Sort methods alphabetically by name for consistent output
+    let mut sorted_methods: Vec<_> = class_file.methods.iter().collect();
+    sorted_methods.sort_by(|a, b| {
+        let name_a = class_file.constant_pool.try_get_utf8(a.name_index).unwrap_or("");
+        let name_b = class_file.constant_pool.try_get_utf8(b.name_index).unwrap_or("");
+        name_a.cmp(name_b)
+    });
+    for method in sorted_methods {
         pretty_print_method(&mut out, &class_file.constant_pool, method);
     }
 
