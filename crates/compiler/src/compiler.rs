@@ -1,5 +1,7 @@
-use rajac_ast::{Ast, AstArena, ClassKind};
+use rajac_ast::{Ast, AstArena, ClassKind, ClassMemberId, ExprId, StmtId, TypeId};
+use rajac_base::qualified_name::QualifiedName as ResolvedName;
 use rajac_base::result::{RajacResult, ResultExt};
+use rajac_base::shared_string::SharedString;
 use rajac_bytecode::classfile::generate_classfiles;
 use rajac_parser::parse;
 use rajac_symbols::{Symbol, SymbolKind, SymbolTable};
@@ -45,7 +47,7 @@ impl Compiler {
             return Ok(());
         }
 
-        let compilation_units: Vec<CompilationUnit> = java_files
+        let mut compilation_units: Vec<CompilationUnit> = java_files
             .par_iter()
             .map(|java_file| {
                 let source = fs::read_to_string(java_file).context("Failed to read source file")?;
@@ -65,6 +67,14 @@ impl Compiler {
                 &unit.parse_result.arena,
             );
         }
+
+        compilation_units.par_iter_mut().for_each(|unit| {
+            resolve_identifiers(
+                &unit.parse_result.ast,
+                &mut unit.parse_result.arena,
+                &symbol_table,
+            );
+        });
 
         let results: Vec<RajacResult<usize>> = compilation_units
             .par_iter()
@@ -136,6 +146,529 @@ fn populate_symbol_table(symbol_table: &mut SymbolTable, ast: &Ast, arena: &AstA
         };
         package.insert(name.to_string(), Symbol::new(name, kind));
     }
+}
+
+/// Context for resolving identifiers using the symbol table, package, and imports.
+struct ResolveContext<'a> {
+    symbol_table: &'a SymbolTable,
+    current_package: String,
+    single_type_imports: Vec<(String, String)>,
+    on_demand_imports: Vec<String>,
+}
+
+impl<'a> ResolveContext<'a> {
+    /// Builds a resolution context from the current AST and symbol table.
+    fn new(ast: &Ast, symbol_table: &'a SymbolTable) -> Self {
+        let current_package = ast
+            .package
+            .as_ref()
+            .map(|p| package_name_from_segments(&p.name.segments))
+            .unwrap_or_default();
+
+        let mut single_type_imports = Vec::new();
+        let mut on_demand_imports = Vec::new();
+
+        for import in &ast.imports {
+            if import.is_on_demand {
+                on_demand_imports.push(package_name_from_segments(&import.name.segments));
+            } else if let Some((package, name)) = split_import_name(&import.name.segments) {
+                single_type_imports.push((package, name));
+            }
+        }
+
+        Self {
+            symbol_table,
+            current_package,
+            single_type_imports,
+            on_demand_imports,
+        }
+    }
+}
+
+/// Resolves identifiers in the AST and updates their qualified names in-place.
+fn resolve_identifiers(ast: &Ast, arena: &mut AstArena, symbol_table: &SymbolTable) {
+    let context = ResolveContext::new(ast, symbol_table);
+
+    for stmt_id in &ast.statements {
+        resolve_stmt(*stmt_id, arena, &context);
+    }
+
+    for class_id in &ast.classes {
+        resolve_class_decl(*class_id, arena, &context);
+    }
+}
+
+/// Resolves a class declaration and all nested members.
+fn resolve_class_decl(
+    class_id: rajac_ast::ClassDeclId,
+    arena: &mut AstArena,
+    context: &ResolveContext,
+) {
+    let (members, extends, implements, permits) = {
+        let class = &mut arena.class_decls[class_id.0 as usize];
+        resolve_ident(&mut class.name, context);
+        for param in &mut class.type_params {
+            resolve_ident(&mut param.name, context);
+        }
+        (
+            class.members.clone(),
+            class.extends,
+            class.implements.clone(),
+            class.permits.clone(),
+        )
+    };
+
+    if let Some(type_id) = extends {
+        resolve_type(type_id, arena, context);
+    }
+    for type_id in implements {
+        resolve_type(type_id, arena, context);
+    }
+    for type_id in permits {
+        resolve_type(type_id, arena, context);
+    }
+    for member_id in members {
+        resolve_class_member(member_id, arena, context);
+    }
+}
+
+/// Resolves identifiers in a class member.
+fn resolve_class_member(member_id: ClassMemberId, arena: &mut AstArena, context: &ResolveContext) {
+    let mut member = arena.class_members[member_id.0 as usize].clone();
+
+    match &mut member {
+        rajac_ast::ClassMember::Field(field) => resolve_field(field, arena, context),
+        rajac_ast::ClassMember::Method(method) => resolve_method(method, arena, context),
+        rajac_ast::ClassMember::Constructor(constructor) => {
+            resolve_constructor(constructor, arena, context)
+        }
+        rajac_ast::ClassMember::StaticBlock(stmt_id) => resolve_stmt(*stmt_id, arena, context),
+        rajac_ast::ClassMember::NestedClass(class_id)
+        | rajac_ast::ClassMember::NestedInterface(class_id)
+        | rajac_ast::ClassMember::NestedRecord(class_id)
+        | rajac_ast::ClassMember::NestedAnnotation(class_id) => {
+            resolve_class_decl(*class_id, arena, context)
+        }
+        rajac_ast::ClassMember::NestedEnum(enum_decl) => {
+            resolve_enum_decl(enum_decl, arena, context)
+        }
+    }
+
+    arena.class_members[member_id.0 as usize] = member;
+}
+
+/// Resolves identifiers in an enum declaration.
+fn resolve_enum_decl(
+    enum_decl: &mut rajac_ast::EnumDecl,
+    arena: &mut AstArena,
+    context: &ResolveContext,
+) {
+    resolve_ident(&mut enum_decl.name, context);
+
+    for type_id in enum_decl.implements.clone() {
+        resolve_type(type_id, arena, context);
+    }
+
+    for entry in &mut enum_decl.entries {
+        resolve_ident(&mut entry.name, context);
+        for expr_id in entry.args.clone() {
+            resolve_expr(expr_id, arena, context);
+        }
+        if let Some(members) = &entry.body {
+            for member_id in members.clone() {
+                resolve_class_member(member_id, arena, context);
+            }
+        }
+    }
+
+    for member_id in enum_decl.members.clone() {
+        resolve_class_member(member_id, arena, context);
+    }
+}
+
+/// Resolves identifiers in a field declaration.
+fn resolve_field(field: &mut rajac_ast::Field, arena: &mut AstArena, context: &ResolveContext) {
+    resolve_ident(&mut field.name, context);
+    resolve_type(field.ty, arena, context);
+    if let Some(expr_id) = field.initializer {
+        resolve_expr(expr_id, arena, context);
+    }
+}
+
+/// Resolves identifiers in a method declaration.
+fn resolve_method(method: &mut rajac_ast::Method, arena: &mut AstArena, context: &ResolveContext) {
+    resolve_ident(&mut method.name, context);
+    for param_id in method.params.clone() {
+        resolve_param(param_id, arena, context);
+    }
+    resolve_type(method.return_ty, arena, context);
+    for throws_id in method.throws.clone() {
+        resolve_type(throws_id, arena, context);
+    }
+    if let Some(body) = method.body {
+        resolve_stmt(body, arena, context);
+    }
+}
+
+/// Resolves identifiers in a constructor declaration.
+fn resolve_constructor(
+    constructor: &mut rajac_ast::Constructor,
+    arena: &mut AstArena,
+    context: &ResolveContext,
+) {
+    resolve_ident(&mut constructor.name, context);
+    for param_id in constructor.params.clone() {
+        resolve_param(param_id, arena, context);
+    }
+    for throws_id in constructor.throws.clone() {
+        resolve_type(throws_id, arena, context);
+    }
+    if let Some(body) = constructor.body {
+        resolve_stmt(body, arena, context);
+    }
+}
+
+/// Resolves identifiers in a parameter.
+fn resolve_param(param_id: rajac_ast::ParamId, arena: &mut AstArena, context: &ResolveContext) {
+    let param = &mut arena.params[param_id.0 as usize];
+    resolve_ident(&mut param.name, context);
+    resolve_type(param.ty, arena, context);
+}
+
+/// Resolves identifiers in a statement.
+fn resolve_stmt(stmt_id: StmtId, arena: &mut AstArena, context: &ResolveContext) {
+    let (exprs, stmts, types, params) = {
+        let stmt = &mut arena.stmts[stmt_id.0 as usize];
+        let mut exprs = Vec::new();
+        let mut stmts = Vec::new();
+        let mut types = Vec::new();
+        let mut params = Vec::new();
+
+        match stmt {
+            rajac_ast::Stmt::Empty => {}
+            rajac_ast::Stmt::Block(items) => {
+                stmts.extend(items.iter().copied());
+            }
+            rajac_ast::Stmt::Expr(expr_id) => exprs.push(*expr_id),
+            rajac_ast::Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                exprs.push(*condition);
+                stmts.push(*then_branch);
+                if let Some(else_branch) = else_branch {
+                    stmts.push(*else_branch);
+                }
+            }
+            rajac_ast::Stmt::While { condition, body } => {
+                exprs.push(*condition);
+                stmts.push(*body);
+            }
+            rajac_ast::Stmt::DoWhile { body, condition } => {
+                stmts.push(*body);
+                exprs.push(*condition);
+            }
+            rajac_ast::Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(init) = init {
+                    match init {
+                        rajac_ast::ForInit::Expr(expr_id) => exprs.push(*expr_id),
+                        rajac_ast::ForInit::LocalVar {
+                            ty,
+                            name,
+                            initializer,
+                        } => {
+                            types.push(*ty);
+                            resolve_ident(name, context);
+                            if let Some(init) = initializer {
+                                exprs.push(*init);
+                            }
+                        }
+                    }
+                }
+                if let Some(condition) = condition {
+                    exprs.push(*condition);
+                }
+                if let Some(update) = update {
+                    exprs.push(*update);
+                }
+                stmts.push(*body);
+            }
+            rajac_ast::Stmt::Switch { expr, cases } => {
+                exprs.push(*expr);
+                for case in cases {
+                    for label in &case.labels {
+                        match label {
+                            rajac_ast::SwitchLabel::Case(expr_id) => exprs.push(*expr_id),
+                            rajac_ast::SwitchLabel::Default => {}
+                        }
+                    }
+                    stmts.extend(case.body.iter().copied());
+                }
+            }
+            rajac_ast::Stmt::Return(expr_id) => {
+                if let Some(expr_id) = expr_id {
+                    exprs.push(*expr_id);
+                }
+            }
+            rajac_ast::Stmt::Break(name) | rajac_ast::Stmt::Continue(name) => {
+                if let Some(name) = name {
+                    resolve_ident(name, context);
+                }
+            }
+            rajac_ast::Stmt::Label(name, body) => {
+                resolve_ident(name, context);
+                stmts.push(*body);
+            }
+            rajac_ast::Stmt::Try {
+                try_block,
+                catches,
+                finally_block,
+            } => {
+                stmts.push(*try_block);
+                for clause in catches {
+                    params.push(clause.param);
+                    stmts.push(clause.body);
+                }
+                if let Some(finally_block) = finally_block {
+                    stmts.push(*finally_block);
+                }
+            }
+            rajac_ast::Stmt::Throw(expr_id) => exprs.push(*expr_id),
+            rajac_ast::Stmt::Synchronized { expr, block } => {
+                if let Some(expr_id) = expr {
+                    exprs.push(*expr_id);
+                }
+                stmts.push(*block);
+            }
+            rajac_ast::Stmt::LocalVar {
+                ty,
+                name,
+                initializer,
+            } => {
+                types.push(*ty);
+                resolve_ident(name, context);
+                if let Some(init) = initializer {
+                    exprs.push(*init);
+                }
+            }
+        }
+
+        (exprs, stmts, types, params)
+    };
+
+    for type_id in types {
+        resolve_type(type_id, arena, context);
+    }
+    for param_id in params {
+        resolve_param(param_id, arena, context);
+    }
+    for expr_id in exprs {
+        resolve_expr(expr_id, arena, context);
+    }
+    for stmt_id in stmts {
+        resolve_stmt(stmt_id, arena, context);
+    }
+}
+
+/// Resolves identifiers in an expression.
+fn resolve_expr(expr_id: ExprId, arena: &mut AstArena, context: &ResolveContext) {
+    let (exprs, types) = {
+        let expr = &mut arena.exprs[expr_id.0 as usize];
+        let mut exprs = Vec::new();
+        let mut types = Vec::new();
+
+        match expr {
+            rajac_ast::Expr::Error => {}
+            rajac_ast::Expr::Ident(name) => resolve_ident(name, context),
+            rajac_ast::Expr::Literal(_) => {}
+            rajac_ast::Expr::Unary { expr, .. } => exprs.push(*expr),
+            rajac_ast::Expr::Binary { lhs, rhs, .. } => {
+                exprs.push(*lhs);
+                exprs.push(*rhs);
+            }
+            rajac_ast::Expr::Assign { lhs, rhs, .. } => {
+                exprs.push(*lhs);
+                exprs.push(*rhs);
+            }
+            rajac_ast::Expr::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                exprs.push(*condition);
+                exprs.push(*then_expr);
+                exprs.push(*else_expr);
+            }
+            rajac_ast::Expr::Cast { ty, expr } => {
+                types.push(*ty);
+                exprs.push(*expr);
+            }
+            rajac_ast::Expr::InstanceOf { expr, ty } => {
+                exprs.push(*expr);
+                types.push(*ty);
+            }
+            rajac_ast::Expr::FieldAccess { expr, name } => {
+                exprs.push(*expr);
+                resolve_ident(name, context);
+            }
+            rajac_ast::Expr::MethodCall {
+                expr,
+                name,
+                type_args,
+                args,
+            } => {
+                if let Some(expr_id) = expr {
+                    exprs.push(*expr_id);
+                }
+                resolve_ident(name, context);
+                if let Some(type_args) = type_args {
+                    types.extend(type_args.iter().copied());
+                }
+                exprs.extend(args.iter().copied());
+            }
+            rajac_ast::Expr::New { ty, args } => {
+                types.push(*ty);
+                exprs.extend(args.iter().copied());
+            }
+            rajac_ast::Expr::NewArray { ty, dimensions } => {
+                types.push(*ty);
+                exprs.extend(dimensions.iter().copied());
+            }
+            rajac_ast::Expr::ArrayAccess { array, index } => {
+                exprs.push(*array);
+                exprs.push(*index);
+            }
+            rajac_ast::Expr::ArrayLength { array } => exprs.push(*array),
+            rajac_ast::Expr::This(expr_id) => {
+                if let Some(expr_id) = expr_id {
+                    exprs.push(*expr_id);
+                }
+            }
+            rajac_ast::Expr::Super => {}
+            rajac_ast::Expr::SuperCall {
+                name,
+                type_args,
+                args,
+            } => {
+                resolve_ident(name, context);
+                if let Some(type_args) = type_args {
+                    types.extend(type_args.iter().copied());
+                }
+                exprs.extend(args.iter().copied());
+            }
+        }
+
+        (exprs, types)
+    };
+
+    for type_id in types {
+        resolve_type(type_id, arena, context);
+    }
+    for expr_id in exprs {
+        resolve_expr(expr_id, arena, context);
+    }
+}
+
+/// Resolves identifiers in a type.
+fn resolve_type(type_id: TypeId, arena: &mut AstArena, context: &ResolveContext) {
+    let types = {
+        let ty = &mut arena.types[type_id.0 as usize];
+        let mut types = Vec::new();
+
+        match ty {
+            rajac_ast::Type::Error => {}
+            rajac_ast::Type::Primitive(_) => {}
+            rajac_ast::Type::Class { name, type_args } => {
+                resolve_ident(name, context);
+                if let Some(type_args) = type_args {
+                    types.extend(type_args.iter().copied());
+                }
+            }
+            rajac_ast::Type::Array { ty } => types.push(*ty),
+            rajac_ast::Type::TypeVariable { name } => resolve_ident(name, context),
+            rajac_ast::Type::Wildcard { bound } => {
+                if let Some(bound) = bound {
+                    match bound {
+                        rajac_ast::WildcardBound::Extends(type_id)
+                        | rajac_ast::WildcardBound::Super(type_id) => types.push(*type_id),
+                    }
+                }
+            }
+            rajac_ast::Type::NonCanonical => {}
+        }
+
+        types
+    };
+
+    for type_id in types {
+        resolve_type(type_id, arena, context);
+    }
+}
+
+/// Resolves a single identifier if it maps to a known symbol.
+fn resolve_ident(ident: &mut rajac_ast::Ident, context: &ResolveContext) {
+    if ident.qualified_name != ResolvedName::default() {
+        return;
+    }
+
+    if let Some(resolved) = resolve_class_name(&ident.name, context) {
+        ident.qualified_name = resolved;
+    }
+}
+
+/// Resolves a class name using the current package and imports.
+fn resolve_class_name(name: &SharedString, context: &ResolveContext) -> Option<ResolvedName> {
+    let name_str = name.as_str();
+
+    for (package, import_name) in &context.single_type_imports {
+        if import_name == name_str && package_has_symbol(context.symbol_table, package, name_str) {
+            return Some(ResolvedName::new(SharedString::new(package), name.clone()));
+        }
+    }
+
+    if package_has_symbol(context.symbol_table, &context.current_package, name_str) {
+        return Some(ResolvedName::new(
+            SharedString::new(&context.current_package),
+            name.clone(),
+        ));
+    }
+
+    for package in &context.on_demand_imports {
+        if package_has_symbol(context.symbol_table, package, name_str) {
+            return Some(ResolvedName::new(SharedString::new(package), name.clone()));
+        }
+    }
+
+    None
+}
+
+/// Returns true if the symbol table contains a class in the given package.
+fn package_has_symbol(symbol_table: &SymbolTable, package: &str, name: &str) -> bool {
+    symbol_table
+        .get_package(package)
+        .is_some_and(|pkg| pkg.contains(name))
+}
+
+/// Joins qualified name segments into a Java-style package name.
+fn package_name_from_segments(segments: &[SharedString]) -> String {
+    segments
+        .iter()
+        .map(|segment| segment.as_str())
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+/// Splits import segments into (package, name).
+fn split_import_name(segments: &[SharedString]) -> Option<(String, String)> {
+    let (name, package) = segments.split_last()?;
+    let package = package_name_from_segments(package);
+    Some((package, name.as_str().to_string()))
 }
 
 fn emit_classfiles(
