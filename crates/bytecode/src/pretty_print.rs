@@ -70,6 +70,42 @@ pub fn pretty_print_classfile(class_file: &ClassFile) -> SharedString {
                         .unwrap_or("<invalid:source_file>");
                     out.push_str(&format!("  // SourceFile: {}\n", source_file_name));
                 }
+                Attribute::InnerClasses { classes, .. } => {
+                    out.push_str("  // InnerClasses:\n");
+                    for entry in classes {
+                        let inner_name =
+                            resolve_class_name(&class_file.constant_pool, entry.class_info_index);
+                        let outer_name = resolve_optional_class_name(
+                            &class_file.constant_pool,
+                            entry.outer_class_info_index,
+                            "<none>",
+                        );
+                        let inner_simple = resolve_optional_utf8(
+                            &class_file.constant_pool,
+                            entry.name_index,
+                            "<anonymous>",
+                        );
+                        out.push_str(&format!(
+                            "  // - inner: {} outer: {} name: {} flags: {}\n",
+                            inner_name, outer_name, inner_simple, entry.access_flags
+                        ));
+                    }
+                }
+                Attribute::NestHost {
+                    host_class_index, ..
+                } => {
+                    let host_name =
+                        resolve_class_name(&class_file.constant_pool, *host_class_index);
+                    out.push_str(&format!("  // NestHost: {}\n", host_name));
+                }
+                Attribute::NestMembers { class_indexes, .. } => {
+                    out.push_str("  // NestMembers:\n");
+                    for class_index in class_indexes {
+                        let member_name =
+                            resolve_class_name(&class_file.constant_pool, *class_index);
+                        out.push_str(&format!("  // - {}\n", member_name));
+                    }
+                }
                 _ => {
                     out.push_str("  /* ");
                     out.push_str(&attribute.to_string().replace("\n", "\n  "));
@@ -86,6 +122,34 @@ pub fn pretty_print_classfile(class_file: &ClassFile) -> SharedString {
 
 fn internal_to_java_name(internal: &str) -> String {
     internal.replace('/', ".")
+}
+
+fn resolve_class_name(constant_pool: &ConstantPool, index: u16) -> String {
+    constant_pool
+        .try_get_class(index)
+        .map(internal_to_java_name)
+        .unwrap_or_else(|_| "<invalid:class>".to_string())
+}
+
+fn resolve_optional_class_name(
+    constant_pool: &ConstantPool,
+    index: u16,
+    empty_value: &str,
+) -> String {
+    if index == 0 {
+        return empty_value.to_string();
+    }
+    resolve_class_name(constant_pool, index)
+}
+
+fn resolve_optional_utf8(constant_pool: &ConstantPool, index: u16, empty_value: &str) -> String {
+    if index == 0 {
+        return empty_value.to_string();
+    }
+    constant_pool
+        .try_get_utf8(index)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|_| "<invalid:utf8>".to_string())
 }
 
 fn pretty_print_field(out: &mut String, constant_pool: &ConstantPool, field: &Field) {
@@ -127,6 +191,8 @@ mod tests {
     use rajac_ast::{
         Ast, AstArena, ClassDecl, ClassKind, ClassMember, Field, Ident, Method, Modifiers, Type,
     };
+    use ristretto_classfile::attributes::{InnerClass, NestedClassAccessFlags};
+    use ristretto_classfile::{ClassAccessFlags, ConstantPool, JAVA_21};
 
     #[test]
     fn pretty_print_is_java_like_and_includes_details() {
@@ -181,6 +247,60 @@ mod tests {
 
               // methods
               public abstract f /* ()V */;
+            }
+        "#]]
+        .assert_eq(printed);
+    }
+
+    #[test]
+    fn pretty_prints_inner_classes_and_nesthost_details() {
+        let mut constant_pool = ConstantPool::default();
+        let outer_class = constant_pool.add_class("p/Outer").unwrap();
+        let inner_class = constant_pool.add_class("p/Outer$Inner").unwrap();
+        let super_class = constant_pool.add_class("java/lang/Object").unwrap();
+        let inner_name = constant_pool.add_utf8("Inner").unwrap();
+        let inner_classes_name = constant_pool.add_utf8("InnerClasses").unwrap();
+        let nest_host_name = constant_pool.add_utf8("NestHost").unwrap();
+
+        let class_file = ClassFile {
+            version: JAVA_21,
+            access_flags: ClassAccessFlags::PUBLIC,
+            constant_pool,
+            this_class: inner_class,
+            super_class,
+            interfaces: vec![],
+            fields: vec![],
+            methods: vec![],
+            attributes: vec![
+                Attribute::InnerClasses {
+                    name_index: inner_classes_name,
+                    classes: vec![InnerClass {
+                        class_info_index: inner_class,
+                        outer_class_info_index: outer_class,
+                        name_index: inner_name,
+                        access_flags: NestedClassAccessFlags::PRIVATE,
+                    }],
+                },
+                Attribute::NestHost {
+                    name_index: nest_host_name,
+                    host_class_index: outer_class,
+                },
+            ],
+        };
+
+        let printed = pretty_print_classfile(&class_file);
+        let printed = printed.as_str();
+
+        expect![[r#"
+            // version: 65.0 (Java 21)
+            public class p.Outer$Inner {
+
+              // methods
+
+              // class attributes
+              // InnerClasses:
+              // - inner: p.Outer$Inner outer: p.Outer name: Inner flags: (0x0002) ACC_PRIVATE
+              // NestHost: p.Outer
             }
         "#]]
         .assert_eq(printed);
