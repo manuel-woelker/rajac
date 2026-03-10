@@ -1,17 +1,29 @@
 use rajac_ast::{
-    Ast, AstArena, ClassDeclId, ClassKind, ClassMember, Field as AstField, Ident,
+    Ast, AstArena, ClassDecl, ClassDeclId, ClassKind, ClassMember, Field as AstField, Ident,
     Method as AstMethod, Modifiers, Type,
 };
 use rajac_base::result::{RajacResult, ResultExt};
+use ristretto_classfile::attributes::{Attribute, InnerClass, NestedClassAccessFlags};
 use ristretto_classfile::{
     ClassAccessFlags, ClassFile, ConstantPool, Field, FieldAccessFlags, FieldType, JAVA_21, Method,
     MethodAccessFlags,
 };
 
+#[derive(Clone, Debug)]
+struct NestedClassInfo {
+    class_id: ClassDeclId,
+    internal_name: String,
+    simple_name: String,
+    modifiers: Modifiers,
+    kind: ClassKind,
+}
+
 pub fn generate_classfiles(ast: &Ast, arena: &AstArena) -> RajacResult<Vec<ClassFile>> {
-    let mut class_files = Vec::with_capacity(ast.classes.len());
+    let mut class_files = Vec::new();
     for class_id in &ast.classes {
-        class_files.push(classfile_from_class_decl(ast, arena, *class_id)?);
+        let class = arena.class_decl(*class_id);
+        let internal_name = internal_class_name(ast, &class.name);
+        emit_classfiles_for_class(arena, *class_id, internal_name, None, &mut class_files)?;
     }
     Ok(class_files)
 }
@@ -22,12 +34,55 @@ pub fn classfile_from_class_decl(
     class_id: ClassDeclId,
 ) -> RajacResult<ClassFile> {
     let class = arena.class_decl(class_id);
+    let this_internal_name = internal_class_name(ast, &class.name);
+    classfile_from_class_decl_with_context(arena, class_id, &this_internal_name, None, &[])
+}
+
+fn emit_classfiles_for_class(
+    arena: &AstArena,
+    class_id: ClassDeclId,
+    this_internal_name: String,
+    outer_internal_name: Option<String>,
+    class_files: &mut Vec<ClassFile>,
+) -> RajacResult<()> {
+    let class = arena.class_decl(class_id);
+    let nested_classes = collect_nested_class_infos(arena, class, &this_internal_name);
+
+    let class_file = classfile_from_class_decl_with_context(
+        arena,
+        class_id,
+        &this_internal_name,
+        outer_internal_name.as_deref(),
+        &nested_classes,
+    )?;
+    class_files.push(class_file);
+
+    for nested in nested_classes {
+        emit_classfiles_for_class(
+            arena,
+            nested.class_id,
+            nested.internal_name,
+            Some(this_internal_name.clone()),
+            class_files,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn classfile_from_class_decl_with_context(
+    arena: &AstArena,
+    class_id: ClassDeclId,
+    this_internal_name: &str,
+    outer_internal_name: Option<&str>,
+    nested_classes: &[NestedClassInfo],
+) -> RajacResult<ClassFile> {
+    let class = arena.class_decl(class_id);
 
     let mut constant_pool = ConstantPool::default();
 
-    let this_internal_name = internal_class_name(ast, &class.name);
     let this_class = constant_pool
-        .add_class(&this_internal_name)
+        .add_class(this_internal_name)
         .with_context(|| {
             format!("failed to add class name '{this_internal_name}' to constant pool")
         })?;
@@ -90,6 +145,17 @@ pub fn classfile_from_class_decl(
         methods.push(default_constructor);
     }
 
+    let mut attributes = Vec::new();
+    if let Some(inner_classes) = build_inner_classes_attribute(
+        &mut constant_pool,
+        this_class,
+        outer_internal_name,
+        class,
+        nested_classes,
+    )? {
+        attributes.push(inner_classes);
+    }
+
     let access_flags = class_access_flags(class.kind.clone(), &class.modifiers);
 
     Ok(ClassFile {
@@ -100,8 +166,46 @@ pub fn classfile_from_class_decl(
         super_class,
         fields,
         methods,
+        attributes,
         ..Default::default()
     })
+}
+
+fn collect_nested_class_infos(
+    arena: &AstArena,
+    class: &ClassDecl,
+    this_internal_name: &str,
+) -> Vec<NestedClassInfo> {
+    let mut nested = Vec::new();
+
+    for member_id in &class.members {
+        let member = arena.class_member(*member_id);
+        let class_id = match member {
+            ClassMember::NestedClass(class_id)
+            | ClassMember::NestedInterface(class_id)
+            | ClassMember::NestedRecord(class_id)
+            | ClassMember::NestedAnnotation(class_id) => *class_id,
+            ClassMember::NestedEnum(_) => continue,
+            ClassMember::Field(_)
+            | ClassMember::Method(_)
+            | ClassMember::Constructor(_)
+            | ClassMember::StaticBlock(_) => continue,
+        };
+
+        let nested_decl = arena.class_decl(class_id);
+        let simple_name = nested_decl.name.0.as_str().to_string();
+        let internal_name = format!("{this_internal_name}${simple_name}");
+
+        nested.push(NestedClassInfo {
+            class_id,
+            internal_name,
+            simple_name,
+            modifiers: nested_decl.modifiers.clone(),
+            kind: nested_decl.kind.clone(),
+        });
+    }
+
+    nested
 }
 
 fn internal_class_name(ast: &Ast, class_name: &Ident) -> String {
@@ -116,6 +220,59 @@ fn internal_class_name(ast: &Ast, class_name: &Ident) -> String {
         }
         None => class_name.0.as_str().to_string(),
     }
+}
+
+fn build_inner_classes_attribute(
+    constant_pool: &mut ConstantPool,
+    this_class: u16,
+    outer_internal_name: Option<&str>,
+    class: &ClassDecl,
+    nested_classes: &[NestedClassInfo],
+) -> RajacResult<Option<Attribute>> {
+    if outer_internal_name.is_none() && nested_classes.is_empty() {
+        return Ok(None);
+    }
+
+    let mut classes = Vec::new();
+
+    if let Some(outer_internal_name) = outer_internal_name {
+        let outer_class = constant_pool
+            .add_class(outer_internal_name)
+            .with_context(|| {
+                format!("failed to add outer class '{outer_internal_name}' to constant pool")
+            })?;
+        let name_index = constant_pool.add_utf8(class.name.0.as_str())?;
+        classes.push(InnerClass {
+            class_info_index: this_class,
+            outer_class_info_index: outer_class,
+            name_index,
+            access_flags: nested_class_access_flags(class.kind.clone(), &class.modifiers),
+        });
+    }
+
+    for nested in nested_classes {
+        let class_info_index = constant_pool
+            .add_class(&nested.internal_name)
+            .with_context(|| {
+                format!(
+                    "failed to add nested class '{}' to constant pool",
+                    nested.internal_name
+                )
+            })?;
+        let name_index = constant_pool.add_utf8(&nested.simple_name)?;
+        classes.push(InnerClass {
+            class_info_index,
+            outer_class_info_index: this_class,
+            name_index,
+            access_flags: nested_class_access_flags(nested.kind.clone(), &nested.modifiers),
+        });
+    }
+
+    let name_index = constant_pool.add_utf8("InnerClasses")?;
+    Ok(Some(Attribute::InnerClasses {
+        name_index,
+        classes,
+    }))
 }
 
 fn class_access_flags(kind: ClassKind, modifiers: &Modifiers) -> ClassAccessFlags {
@@ -150,6 +307,50 @@ fn class_access_flags(kind: ClassKind, modifiers: &Modifiers) -> ClassAccessFlag
             // No dedicated access flag; marker attribute omitted for now.
         }
         ClassKind::Class => {}
+    }
+
+    flags
+}
+
+fn nested_class_access_flags(kind: ClassKind, modifiers: &Modifiers) -> NestedClassAccessFlags {
+    let mut flags = NestedClassAccessFlags::empty();
+
+    if has_modifier(modifiers, Modifiers::PUBLIC) {
+        flags |= NestedClassAccessFlags::PUBLIC;
+    }
+    if has_modifier(modifiers, Modifiers::PRIVATE) {
+        flags |= NestedClassAccessFlags::PRIVATE;
+    }
+    if has_modifier(modifiers, Modifiers::PROTECTED) {
+        flags |= NestedClassAccessFlags::PROTECTED;
+    }
+    if has_modifier(modifiers, Modifiers::STATIC) {
+        flags |= NestedClassAccessFlags::STATIC;
+    }
+    if has_modifier(modifiers, Modifiers::FINAL) {
+        flags |= NestedClassAccessFlags::FINAL;
+    }
+    if has_modifier(modifiers, Modifiers::ABSTRACT) {
+        flags |= NestedClassAccessFlags::ABSTRACT;
+    }
+    if has_modifier(modifiers, Modifiers::SYNTHETIC) {
+        flags |= NestedClassAccessFlags::SYNTHETIC;
+    }
+
+    match kind {
+        ClassKind::Interface => {
+            flags |= NestedClassAccessFlags::INTERFACE;
+            flags |= NestedClassAccessFlags::ABSTRACT;
+        }
+        ClassKind::Enum => {
+            flags |= NestedClassAccessFlags::ENUM;
+        }
+        ClassKind::Annotation => {
+            flags |= NestedClassAccessFlags::ANNOTATION;
+            flags |= NestedClassAccessFlags::INTERFACE;
+            flags |= NestedClassAccessFlags::ABSTRACT;
+        }
+        ClassKind::Record | ClassKind::Class => {}
     }
 
     flags
@@ -345,7 +546,10 @@ fn create_default_constructor(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rajac_ast::{Ast, AstArena, ClassDecl, ClassKind, Ident, Method, Modifiers, Param, Type};
+    use rajac_ast::{
+        Ast, AstArena, ClassDecl, ClassKind, ClassMember, Ident, Method, Modifiers, PackageDecl,
+        Param, QualifiedName, Type,
+    };
     use rajac_base::shared_string::SharedString;
 
     #[test]
@@ -437,6 +641,127 @@ mod tests {
         class_file.verify()?;
 
         assert!(class_file.methods.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn emits_inner_class_files_and_attributes() -> RajacResult<()> {
+        let mut arena = AstArena::new();
+        let mut ast = Ast::new(SharedString::new("test"));
+        ast.package = Some(PackageDecl {
+            name: QualifiedName::new(vec![SharedString::new("p")]),
+        });
+
+        let inner_id = arena.alloc_class_decl(ClassDecl {
+            kind: ClassKind::Class,
+            name: Ident::new(SharedString::new("Inner")),
+            type_params: vec![],
+            extends: None,
+            implements: vec![],
+            permits: vec![],
+            members: vec![],
+            modifiers: Modifiers(Modifiers::PRIVATE),
+        });
+
+        let inner_member_id = arena.alloc_class_member(ClassMember::NestedClass(inner_id));
+
+        let outer_id = arena.alloc_class_decl(ClassDecl {
+            kind: ClassKind::Class,
+            name: Ident::new(SharedString::new("Outer")),
+            type_params: vec![],
+            extends: None,
+            implements: vec![],
+            permits: vec![],
+            members: vec![inner_member_id],
+            modifiers: Modifiers(Modifiers::PUBLIC),
+        });
+
+        ast.classes.push(outer_id);
+
+        let class_files = generate_classfiles(&ast, &arena)?;
+        assert_eq!(class_files.len(), 2);
+
+        let mut outer = None;
+        let mut inner = None;
+
+        for class_file in &class_files {
+            match class_file.class_name()? {
+                "p/Outer" => outer = Some(class_file),
+                "p/Outer$Inner" => inner = Some(class_file),
+                other => panic!("unexpected class emitted: {other}"),
+            }
+        }
+
+        let outer = outer.expect("outer class not emitted");
+        let inner = inner.expect("inner class not emitted");
+
+        let outer_inner_attr = outer
+            .attributes
+            .iter()
+            .find_map(|attr| match attr {
+                Attribute::InnerClasses { classes, .. } => Some(classes),
+                _ => None,
+            })
+            .expect("outer class missing InnerClasses attribute");
+
+        let outer_entry = outer_inner_attr
+            .iter()
+            .find(|entry| {
+                outer
+                    .constant_pool
+                    .try_get_class(entry.class_info_index)
+                    .ok()
+                    == Some("p/Outer$Inner")
+            })
+            .expect("outer class missing inner class entry");
+
+        assert_eq!(
+            outer
+                .constant_pool
+                .try_get_class(outer_entry.outer_class_info_index)?,
+            "p/Outer"
+        );
+        assert_eq!(
+            outer.constant_pool.try_get_utf8(outer_entry.name_index)?,
+            "Inner"
+        );
+        assert!(
+            outer_entry
+                .access_flags
+                .contains(NestedClassAccessFlags::PRIVATE)
+        );
+
+        let inner_attr = inner
+            .attributes
+            .iter()
+            .find_map(|attr| match attr {
+                Attribute::InnerClasses { classes, .. } => Some(classes),
+                _ => None,
+            })
+            .expect("inner class missing InnerClasses attribute");
+
+        let inner_entry = inner_attr
+            .iter()
+            .find(|entry| {
+                inner
+                    .constant_pool
+                    .try_get_class(entry.class_info_index)
+                    .ok()
+                    == Some("p/Outer$Inner")
+            })
+            .expect("inner class missing self entry");
+
+        assert_eq!(
+            inner
+                .constant_pool
+                .try_get_class(inner_entry.outer_class_info_index)?,
+            "p/Outer"
+        );
+        assert_eq!(
+            inner.constant_pool.try_get_utf8(inner_entry.name_index)?,
+            "Inner"
+        );
 
         Ok(())
     }
