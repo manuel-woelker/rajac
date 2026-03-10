@@ -2,6 +2,7 @@ use rajac_ast::{
     Ast, AstArena, ClassDecl, ClassDeclId, ClassKind, ClassMember, Field as AstField, Ident,
     Method as AstMethod, Modifiers, Type,
 };
+use rajac_base::qualified_name::QualifiedName as ResolvedName;
 use rajac_base::result::{RajacResult, ResultExt};
 use ristretto_classfile::attributes::{Attribute, InnerClass, NestedClassAccessFlags};
 use ristretto_classfile::{
@@ -209,6 +210,10 @@ fn collect_nested_class_infos(
 }
 
 fn internal_class_name(ast: &Ast, class_name: &Ident) -> String {
+    if class_name.qualified_name != ResolvedName::default() {
+        return qualified_name_to_internal(&class_name.qualified_name);
+    }
+
     match &ast.package {
         Some(pkg) => {
             let mut s = pkg.name.segments.join("/");
@@ -503,7 +508,7 @@ fn type_to_descriptor(arena: &AstArena, type_id: rajac_ast::TypeId) -> RajacResu
             rajac_ast::PrimitiveType::Double => "D".to_string(),
             rajac_ast::PrimitiveType::Void => "V".to_string(),
         },
-        Type::Class { name, .. } => format!("L{};", name.as_str().replace('.', "/")),
+        Type::Class { name, .. } => format!("L{};", ident_to_internal_name(name)),
         Type::Array { ty } => format!("[{}", type_to_descriptor(arena, *ty)?),
         Type::TypeVariable { .. } | Type::Wildcard { .. } => "Ljava/lang/Object;".to_string(),
     })
@@ -515,9 +520,25 @@ fn type_to_internal_class_name(
 ) -> RajacResult<String> {
     let ty = arena.ty(type_id);
     Ok(match ty {
-        Type::Class { name, .. } => name.as_str().replace('.', "/"),
+        Type::Class { name, .. } => ident_to_internal_name(name),
         _ => "java/lang/Object".to_string(),
     })
+}
+
+fn ident_to_internal_name(name: &Ident) -> String {
+    if name.qualified_name != ResolvedName::default() {
+        return qualified_name_to_internal(&name.qualified_name);
+    }
+
+    name.as_str().replace('.', "/")
+}
+
+fn qualified_name_to_internal(name: &ResolvedName) -> String {
+    let package = name.package_name().as_str().replace('.', "/");
+    if package.is_empty() {
+        return name.name().as_str().to_string();
+    }
+    format!("{}/{}", package, name.name().as_str())
 }
 
 fn create_default_constructor(
