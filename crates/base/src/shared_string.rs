@@ -9,7 +9,7 @@ use smol_str::SmolStr;
 /// This type provides copy-on-write semantics with cheap cloning,
 /// making it ideal for storing strings that are shared across multiple
 /// parts of the compiler without unnecessary allocations.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SharedString(pub SmolStr);
 
 impl SharedString {
@@ -100,6 +100,12 @@ impl std::borrow::Borrow<str> for SharedString {
 impl std::fmt::Display for SharedString {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl std::fmt::Debug for SharedString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "`{}`", self.0)
     }
 }
 
