@@ -5,6 +5,7 @@ use ristretto_classfile::ClassFile;
 use std::io::{Cursor, Read};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Instant;
 use zip::ZipArchive;
 
 pub struct Classpath {
@@ -110,6 +111,7 @@ impl Classpath {
 
         drop(archive);
 
+        let start = Instant::now();
         let parsed_classes: Vec<(String, String, bool)> = class_names
             .par_iter()
             .filter_map(|name| {
@@ -123,6 +125,12 @@ impl Classpath {
                 parse_class_file(&class_file).map(|p| (p.package, p.class_name, p.is_interface))
             })
             .collect();
+        println!(
+            "Read {:?} in {}ms ({} classes)",
+            jar,
+            start.elapsed().as_millis(),
+            parsed_classes.len()
+        );
 
         for (package, class_name, is_interface) in parsed_classes {
             let package = symbol_table.package(&package);
