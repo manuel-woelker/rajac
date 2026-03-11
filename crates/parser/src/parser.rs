@@ -2,6 +2,7 @@ use rajac_ast::*;
 use rajac_base::shared_string::SharedString;
 use rajac_lexer::Lexer;
 use rajac_token::{Token, TokenKind};
+use rajac_types::{ClassType, Ident, PrimitiveType, Type, TypeId, TypeParam, WildcardBound};
 use std::collections::VecDeque;
 
 /// Result of parsing, containing the AST and arena
@@ -723,44 +724,44 @@ impl<'a> Parser<'a> {
         let ty = match self.peek() {
             TokenKind::KwBoolean => {
                 self.bump();
-                Type::Primitive(PrimitiveType::Boolean)
+                Type::primitive(PrimitiveType::Boolean)
             }
             TokenKind::KwByte => {
                 self.bump();
-                Type::Primitive(PrimitiveType::Byte)
+                Type::primitive(PrimitiveType::Byte)
             }
             TokenKind::KwChar => {
                 self.bump();
-                Type::Primitive(PrimitiveType::Char)
+                Type::primitive(PrimitiveType::Char)
             }
             TokenKind::KwShort => {
                 self.bump();
-                Type::Primitive(PrimitiveType::Short)
+                Type::primitive(PrimitiveType::Short)
             }
             TokenKind::KwInt => {
                 self.bump();
-                Type::Primitive(PrimitiveType::Int)
+                Type::primitive(PrimitiveType::Int)
             }
             TokenKind::KwLong => {
                 self.bump();
-                Type::Primitive(PrimitiveType::Long)
+                Type::primitive(PrimitiveType::Long)
             }
             TokenKind::KwFloat => {
                 self.bump();
-                Type::Primitive(PrimitiveType::Float)
+                Type::primitive(PrimitiveType::Float)
             }
             TokenKind::KwDouble => {
                 self.bump();
-                Type::Primitive(PrimitiveType::Double)
+                Type::primitive(PrimitiveType::Double)
             }
             TokenKind::KwVoid => {
                 self.bump();
-                Type::Primitive(PrimitiveType::Void)
+                Type::primitive(PrimitiveType::Void)
             }
             TokenKind::KwVar => {
                 self.bump();
                 // var is desugared to int for now - type inference should happen in later phases
-                Type::Primitive(PrimitiveType::Int)
+                Type::primitive(PrimitiveType::Int)
             }
             TokenKind::Ident => {
                 let name = Ident::new(self.ident_text());
@@ -772,7 +773,9 @@ impl<'a> Parser<'a> {
                     None
                 };
 
-                Type::Class { name, type_args }
+                let class_type = ClassType::new(name.name.as_str().to_string())
+                    .with_type_args(type_args.unwrap_or_default());
+                Type::class(class_type)
             }
             TokenKind::Question => {
                 self.bump();
@@ -783,7 +786,7 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
-                Type::Wildcard { bound }
+                Type::wildcard(bound)
             }
             _ => return None,
         };
@@ -793,7 +796,7 @@ impl<'a> Parser<'a> {
         // Handle array notation
         while self.consume(TokenKind::LBracket) {
             self.expect(TokenKind::RBracket);
-            let array_type = Type::Array { ty: ty_id };
+            let array_type = Type::array(ty_id);
             ty_id = self.arena.alloc_type(array_type);
         }
 
@@ -816,7 +819,7 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
-                let wildcard = Type::Wildcard { bound };
+                let wildcard = Type::wildcard(bound);
                 args.push(self.arena.alloc_type(wildcard));
             } else if let Some(ty) = self.parse_type() {
                 args.push(ty);

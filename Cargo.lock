@@ -660,6 +660,7 @@ name = "rajac-ast"
 version = "0.1.0"
 dependencies = [
  "rajac-base",
+ "rajac-types",
 ]
 
 [[package]]
@@ -685,6 +686,7 @@ dependencies = [
  "expect-test",
  "rajac-ast",
  "rajac-base",
+ "rajac-types",
  "ristretto_classfile",
 ]
 
@@ -710,6 +712,7 @@ dependencies = [
  "rajac-classpath",
  "rajac-parser",
  "rajac-symbols",
+ "rajac-types",
  "rayon",
  "ristretto_classfile",
  "walkdir",
@@ -730,6 +733,7 @@ dependencies = [
  "rajac-base",
  "rajac-lexer",
  "rajac-token",
+ "rajac-types",
 ]
 
 [[package]]
@@ -742,6 +746,13 @@ dependencies = [
 [[package]]
 name = "rajac-token"
 version = "0.1.0"
+
+[[package]]
+name = "rajac-types"
+version = "0.1.0"
+dependencies = [
+ "rajac-base",
+]
 
 [[package]]
 name = "rapidhash"

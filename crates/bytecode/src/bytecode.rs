@@ -1,8 +1,6 @@
-use rajac_ast::{
-    AstArena, Expr as AstExpr, ExprId, Ident, Literal, LiteralKind, PrimitiveType, Stmt, StmtId,
-    Type, TypeId,
-};
+use rajac_ast::{AstArena, Expr as AstExpr, ExprId, Literal, LiteralKind, Stmt, StmtId};
 use rajac_base::result::RajacResult;
+use rajac_types::{ClassType, Ident, PrimitiveType, Type, TypeId};
 use ristretto_classfile::ConstantPool;
 use ristretto_classfile::attributes::Instruction;
 
@@ -658,14 +656,14 @@ fn type_of_expr(expr: &AstExpr) -> Type {
             LiteralKind::Double => Type::Primitive(PrimitiveType::Double),
             LiteralKind::Bool => Type::Primitive(PrimitiveType::Boolean),
             LiteralKind::Char => Type::Primitive(PrimitiveType::Char),
-            LiteralKind::String => Type::Class {
-                name: Ident::new(lit.value.clone()),
-                type_args: None,
-            },
-            LiteralKind::Null => Type::Class {
-                name: Ident::new("null".into()),
-                type_args: None,
-            },
+            LiteralKind::String => {
+                let class_type = ClassType::new("String".to_string());
+                Type::class(class_type)
+            }
+            LiteralKind::Null => {
+                let class_type = ClassType::new("null".to_string());
+                Type::class(class_type)
+            }
         },
         AstExpr::Binary { op, .. } => match op {
             rajac_ast::BinaryOp::Add
@@ -692,17 +690,17 @@ fn type_of_expr(expr: &AstExpr) -> Type {
         AstExpr::FieldAccess { .. } => Type::Primitive(PrimitiveType::Void),
         AstExpr::This(_) => Type::Primitive(PrimitiveType::Void),
         AstExpr::Super => Type::Primitive(PrimitiveType::Void),
-        AstExpr::New { ty: _, .. } => Type::Class {
-            name: Ident::new("Object".into()),
-            type_args: None,
-        },
-        AstExpr::NewArray { ty, .. } => Type::Array { ty: *ty },
+        AstExpr::New { ty: _, .. } => {
+            let class_type = ClassType::new("Object".to_string());
+            Type::class(class_type)
+        }
+        AstExpr::NewArray { ty, .. } => Type::array(*ty),
         AstExpr::ArrayAccess { .. } => Type::Primitive(PrimitiveType::Void),
         AstExpr::ArrayLength { .. } => Type::Primitive(PrimitiveType::Int),
-        AstExpr::Cast { ty: _, .. } => Type::Class {
-            name: Ident::new("Object".into()),
-            type_args: None,
-        },
+        AstExpr::Cast { ty: _, .. } => {
+            let class_type = ClassType::new("Object".to_string());
+            Type::class(class_type)
+        }
         AstExpr::InstanceOf { .. } => Type::Primitive(PrimitiveType::Boolean),
         AstExpr::Assign { .. } => Type::Primitive(PrimitiveType::Void),
         AstExpr::Unary { .. } => Type::Primitive(PrimitiveType::Int),

@@ -1,10 +1,11 @@
-pub use super::ast::*;
+use super::ast::*;
+use rajac_types::{Type, TypeArena, TypeId};
 
 #[derive(Debug, Default)]
 pub struct AstArena {
     pub stmts: Vec<Stmt>,
     pub exprs: Vec<Expr>,
-    pub types: Vec<Type>,
+    pub types: TypeArena,
     pub params: Vec<Param>,
     pub methods: Vec<Method>,
     pub fields: Vec<Field>,
@@ -31,9 +32,7 @@ impl AstArena {
     }
 
     pub fn alloc_type(&mut self, ty: Type) -> TypeId {
-        let id = TypeId(self.types.len() as u32);
-        self.types.push(ty);
-        id
+        self.types.alloc(ty)
     }
 
     pub fn alloc_param(&mut self, param: Param) -> ParamId {
@@ -81,7 +80,11 @@ impl AstArena {
     }
 
     pub fn ty(&self, id: TypeId) -> &Type {
-        &self.types[id.0 as usize]
+        self.types.get(id)
+    }
+
+    pub fn ty_mut(&mut self, id: TypeId) -> &mut Type {
+        self.types.get_mut(id)
     }
 
     pub fn param(&self, id: ParamId) -> &Param {

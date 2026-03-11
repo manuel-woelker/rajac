@@ -8,3 +8,4 @@ rajac-lexer = { path = "../lexer" }
 rajac-ast = { path = "../ast" }
 rajac-token = { path = "../token" }
 rajac-base = { path = "../base" }
+rajac-types = { path = "../types" }

@@ -1,8 +1,7 @@
 [package]
-name = "rajac-ast"
+name = "rajac-types"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 rajac-base = { path = "../base" }
-rajac-types = { path = "../types" }

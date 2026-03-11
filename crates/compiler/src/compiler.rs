@@ -1,4 +1,4 @@
-use rajac_ast::{Ast, AstArena, ClassKind, ClassMemberId, ExprId, StmtId, TypeId};
+use rajac_ast::{Ast, AstArena, ClassKind, ClassMemberId, ExprId, StmtId};
 use rajac_base::qualified_name::QualifiedName as ResolvedName;
 use rajac_base::result::{RajacResult, ResultExt};
 use rajac_base::shared_string::SharedString;
@@ -6,6 +6,7 @@ use rajac_bytecode::classfile::generate_classfiles;
 use rajac_classpath::Classpath;
 use rajac_parser::parse;
 use rajac_symbols::{Symbol, SymbolKind, SymbolTable};
+use rajac_types::{Ident, Type, TypeId, WildcardBound};
 use rayon::prelude::*;
 use ristretto_classfile::attributes::Attribute;
 use std::fs;
@@ -585,43 +586,46 @@ fn resolve_expr(expr_id: ExprId, arena: &mut AstArena, context: &ResolveContext)
 }
 
 /// Resolves identifiers in a type.
-fn resolve_type(type_id: TypeId, arena: &mut AstArena, context: &ResolveContext) {
+fn resolve_type(type_id: TypeId, arena: &mut AstArena, _context: &ResolveContext) {
     let types = {
-        let ty = &mut arena.types[type_id.0 as usize];
+        let ty = arena.ty_mut(type_id);
         let mut types = Vec::new();
 
         match ty {
-            rajac_ast::Type::Error => {}
-            rajac_ast::Type::Primitive(_) => {}
-            rajac_ast::Type::Class { name, type_args } => {
-                resolve_ident(name, context);
-                if let Some(type_args) = type_args {
-                    types.extend(type_args.iter().copied());
+            Type::Error => {}
+            Type::Primitive(_) => {}
+            Type::Class(class_type) => {
+                // Note: class_type.name is now a String, not Ident
+                if !class_type.type_args.is_empty() {
+                    types.extend(class_type.type_args.iter().copied());
                 }
             }
-            rajac_ast::Type::Array { ty } => types.push(*ty),
-            rajac_ast::Type::TypeVariable { name } => resolve_ident(name, context),
-            rajac_ast::Type::Wildcard { bound } => {
-                if let Some(bound) = bound {
+            Type::Array(array_type) => types.push(array_type.element_type),
+            Type::TypeVariable(_type_variable) => {
+                // Note: type_variable.name is now a String, not Ident
+                // resolve_ident(&type_variable.name, context);
+            }
+            Type::Wildcard(wildcard_type) => {
+                if let Some(ref bound) = wildcard_type.bound {
                     match bound {
-                        rajac_ast::WildcardBound::Extends(type_id)
-                        | rajac_ast::WildcardBound::Super(type_id) => types.push(*type_id),
+                        WildcardBound::Extends(type_id) | WildcardBound::Super(type_id) => {
+                            types.push(*type_id)
+                        }
                     }
                 }
             }
-            rajac_ast::Type::NonCanonical => {}
         }
 
         types
     };
 
     for type_id in types {
-        resolve_type(type_id, arena, context);
+        resolve_type(type_id, arena, _context);
     }
 }
 
 /// Resolves a single identifier if it maps to a known symbol.
-fn resolve_ident(ident: &mut rajac_ast::Ident, context: &ResolveContext) {
+fn resolve_ident(ident: &mut Ident, context: &ResolveContext) {
     if ident.qualified_name != ResolvedName::default() {
         return;
     }

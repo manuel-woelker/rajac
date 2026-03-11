@@ -1,6 +1,7 @@
 use crate::parser::Parser;
 use rajac_ast::*;
 use rajac_token::TokenKind;
+use rajac_types::Ident;
 
 impl<'a> Parser<'a> {
     /// Parse a block of statements

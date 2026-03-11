@@ -1,5 +1,5 @@
-use rajac_base::qualified_name::QualifiedName as ResolvedName;
 use rajac_base::shared_string::SharedString;
+use rajac_types::{Ident, TypeId, TypeParam};
 use std::ops::Range;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,25 +14,6 @@ pub struct AstNode<T> {
 impl<T> AstNode<T> {
     pub fn new(kind: T, span: Span) -> Self {
         Self { kind, span }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Ident {
-    pub name: SharedString,
-    pub qualified_name: ResolvedName,
-}
-
-impl Ident {
-    pub fn new(name: SharedString) -> Self {
-        Self {
-            name,
-            qualified_name: ResolvedName::default(),
-        }
-    }
-
-    pub fn as_str(&self) -> &str {
-        self.name.as_str()
     }
 }
 
@@ -166,12 +147,6 @@ pub struct ClassDecl {
     pub permits: Vec<TypeId>,
     pub members: Vec<ClassMemberId>,
     pub modifiers: Modifiers,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct TypeParam {
-    pub name: Ident,
-    pub bounds: Vec<TypeId>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -355,45 +330,6 @@ pub enum Expr {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Type {
-    Error,
-    Primitive(PrimitiveType),
-    Class {
-        name: Ident,
-        type_args: Option<Vec<TypeId>>,
-    },
-    Array {
-        ty: TypeId,
-    },
-    TypeVariable {
-        name: Ident,
-    },
-    Wildcard {
-        bound: Option<WildcardBound>,
-    },
-    NonCanonical,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum PrimitiveType {
-    Boolean,
-    Byte,
-    Char,
-    Short,
-    Int,
-    Long,
-    Float,
-    Double,
-    Void,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum WildcardBound {
-    Extends(TypeId),
-    Super(TypeId),
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub struct Param {
     pub ty: TypeId,
     pub name: Ident,
@@ -423,9 +359,6 @@ pub struct StmtId(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ExprId(pub u32);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TypeId(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ParamId(pub u32);
