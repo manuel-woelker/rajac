@@ -3,6 +3,7 @@ use rajac_ast::{
     Type, TypeId,
 };
 use rajac_base::result::RajacResult;
+use ristretto_classfile::ConstantPool;
 use ristretto_classfile::attributes::Instruction;
 
 pub struct BytecodeEmitter {
@@ -29,15 +30,17 @@ impl Default for BytecodeEmitter {
 
 pub struct CodeGenerator<'arena> {
     arena: &'arena AstArena,
+    constant_pool: &'arena mut ConstantPool,
     emitter: BytecodeEmitter,
     max_stack: u16,
     max_locals: u16,
 }
 
 impl<'arena> CodeGenerator<'arena> {
-    pub fn new(arena: &'arena AstArena) -> Self {
+    pub fn new(arena: &'arena AstArena, constant_pool: &'arena mut ConstantPool) -> Self {
         Self {
             arena,
+            constant_pool,
             emitter: BytecodeEmitter::new(),
             max_stack: 2,
             max_locals: 1,
@@ -74,13 +77,14 @@ impl<'arena> CodeGenerator<'arena> {
     pub fn generate_constructor_body(
         &mut self,
         super_internal_name: &str,
-        constant_pool: &mut ristretto_classfile::ConstantPool,
     ) -> RajacResult<(Vec<Instruction>, u16, u16)> {
         self.max_locals = 1;
 
         self.emit(Instruction::Aload_0);
-        let super_class = constant_pool.add_class(super_internal_name)?;
-        let super_init = constant_pool.add_method_ref(super_class, "<init>", "()V")?;
+        let super_class = self.constant_pool.add_class(super_internal_name)?;
+        let super_init = self
+            .constant_pool
+            .add_method_ref(super_class, "<init>", "()V")?;
         self.emit(Instruction::Invokespecial(super_init));
 
         self.emit(Instruction::Return);
@@ -283,7 +287,14 @@ impl<'arena> CodeGenerator<'arena> {
                     }
                 }
             }
-            LiteralKind::String => {}
+            LiteralKind::String => {
+                let string_index = self.constant_pool.add_string(literal.value.as_str())?;
+                if string_index <= u8::MAX as u16 {
+                    self.emit(Instruction::Ldc(string_index as u8));
+                } else {
+                    self.emit(Instruction::Ldc_w(string_index));
+                }
+            }
             LiteralKind::Bool => {
                 if literal.value.as_str() == "true" {
                     self.emit(Instruction::Iconst_1);
@@ -432,7 +443,11 @@ impl<'arena> CodeGenerator<'arena> {
     }
 
     fn emit_system_out(&mut self) -> RajacResult<()> {
-        self.emit(Instruction::Getstatic(0));
+        let system_class = self.constant_pool.add_class("java/lang/System")?;
+        let system_out =
+            self.constant_pool
+                .add_field_ref(system_class, "out", "Ljava/io/PrintStream;")?;
+        self.emit(Instruction::Getstatic(system_out));
         Ok(())
     }
 
@@ -469,7 +484,12 @@ impl<'arena> CodeGenerator<'arena> {
     }
 
     fn emit_println_call(&mut self, args: &[ExprId]) -> RajacResult<()> {
-        self.emit(Instruction::Getstatic(0));
+        let system_class = self.constant_pool.add_class("java/lang/System")?;
+        let printstream_class = self.constant_pool.add_class("java/io/PrintStream")?;
+        let system_out =
+            self.constant_pool
+                .add_field_ref(system_class, "out", "Ljava/io/PrintStream;")?;
+        self.emit(Instruction::Getstatic(system_out));
 
         if !args.is_empty() {
             self.emit_expression(args[0])?;
@@ -477,7 +497,12 @@ impl<'arena> CodeGenerator<'arena> {
             self.emit(Instruction::Aconst_null);
         }
 
-        self.emit(Instruction::Invokevirtual(0));
+        let println_method = self.constant_pool.add_method_ref(
+            printstream_class,
+            "println",
+            "(Ljava/lang/String;)V",
+        )?;
+        self.emit(Instruction::Invokevirtual(println_method));
 
         Ok(())
     }

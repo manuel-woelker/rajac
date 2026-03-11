@@ -467,7 +467,7 @@ fn generate_method_bytecode(
 ) -> RajacResult<Vec<ristretto_classfile::attributes::Attribute>> {
     let is_static = method.modifiers.0 & Modifiers::STATIC != 0;
 
-    let mut code_gen = CodeGenerator::new(arena);
+    let mut code_gen = CodeGenerator::new(arena, constant_pool);
     let (instructions, max_stack, max_locals) =
         code_gen.generate_method_body(is_static, body_id)?;
 
