@@ -4,7 +4,6 @@ use rayon::prelude::*;
 use ristretto_classfile::ClassFile;
 use std::io::{Cursor, Read};
 use std::path::Path;
-use std::sync::Arc;
 use std::time::Instant;
 use zip::ZipArchive;
 
@@ -92,17 +91,19 @@ impl Classpath {
         jar: &Path,
         symbol_table: &mut SymbolTable,
     ) -> RajacResult<()> {
-        let jar_data = Arc::new(std::fs::read(jar).context("Failed to read JAR file")?);
+        let jar_data = std::fs::read(jar).context("Failed to read JAR file")?;
 
-        let jar_cursor = Cursor::new(jar_data.as_ref());
+        let jar_cursor = Cursor::new(&jar_data);
         let mut archive = ZipArchive::new(jar_cursor).context("Failed to read JAR file")?;
 
-        let class_names: Vec<String> = (0..archive.len())
+        let class_data: Vec<(String, Vec<u8>)> = (0..archive.len())
             .filter_map(|i| {
-                let file = archive.by_index(i).ok()?;
+                let mut file = archive.by_index(i).ok()?;
                 let name = file.name().to_string();
                 if name.ends_with(".class") && !name.contains('$') {
-                    Some(name)
+                    let mut bytes = Vec::new();
+                    file.read_to_end(&mut bytes).ok()?;
+                    Some((name, bytes))
                 } else {
                     None
                 }
@@ -112,15 +113,9 @@ impl Classpath {
         drop(archive);
 
         let start = Instant::now();
-        let parsed_classes: Vec<(String, String, bool)> = class_names
-            .par_iter()
-            .filter_map(|name| {
-                let jar_data = jar_data.clone();
-                let jar_cursor = Cursor::new(jar_data.as_ref());
-                let mut archive = ZipArchive::new(jar_cursor).ok()?;
-                let mut file = archive.by_name(name).ok()?;
-                let mut bytes = Vec::new();
-                file.read_to_end(&mut bytes).ok()?;
+        let parsed_classes: Vec<(String, String, bool)> = class_data
+            .into_par_iter()
+            .filter_map(|(_name, bytes)| {
                 let class_file = ClassFile::from_bytes(&mut Cursor::new(bytes)).ok()?;
                 parse_class_file(&class_file).map(|p| (p.package, p.class_name, p.is_interface))
             })
