@@ -1,0 +1,11 @@
+[package]
+name = "rajac-classpath"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rajac-base = { path = "../base" }
+rajac-symbols = { path = "../symbols" }
+ristretto_classfile = { workspace = true }
+walkdir = { workspace = true }
+zip = "2.2.2"
