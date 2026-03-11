@@ -34,6 +34,8 @@ pub struct CodeGenerator<'arena> {
     emitter: BytecodeEmitter,
     max_stack: u16,
     max_locals: u16,
+    next_local_slot: u16,
+    local_vars: std::collections::HashMap<String, u16>,
 }
 
 impl<'arena> CodeGenerator<'arena> {
@@ -44,6 +46,8 @@ impl<'arena> CodeGenerator<'arena> {
             emitter: BytecodeEmitter::new(),
             max_stack: 2,
             max_locals: 1,
+            next_local_slot: 1, // slot 0 is for 'this'
+            local_vars: std::collections::HashMap::new(),
         }
     }
 
@@ -131,7 +135,41 @@ impl<'arena> CodeGenerator<'arena> {
                     _ => self.emit(Instruction::Areturn),
                 }
             }
-            Stmt::LocalVar { .. } => {}
+            Stmt::LocalVar {
+                ty,
+                name,
+                initializer,
+            } => {
+                if let Some(expr_id) = initializer {
+                    self.emit_expression(*expr_id)?;
+                    let slot = self.next_local_slot;
+                    self.next_local_slot += 1;
+                    self.max_locals = self.max_locals.max(self.next_local_slot);
+                    self.local_vars.insert(name.as_str().to_string(), slot);
+
+                    let ty = self.arena.ty(*ty);
+                    match ty {
+                        Type::Primitive(PrimitiveType::Int)
+                        | Type::Primitive(PrimitiveType::Boolean)
+                        | Type::Primitive(PrimitiveType::Byte)
+                        | Type::Primitive(PrimitiveType::Short)
+                        | Type::Primitive(PrimitiveType::Char) => match slot {
+                            0 => self.emit(Instruction::Istore_0),
+                            1 => self.emit(Instruction::Istore_1),
+                            2 => self.emit(Instruction::Istore_2),
+                            3 => self.emit(Instruction::Istore_3),
+                            _ => self.emit(Instruction::Istore(slot as u8)),
+                        },
+                        _ => match slot {
+                            0 => self.emit(Instruction::Astore_0),
+                            1 => self.emit(Instruction::Astore_1),
+                            2 => self.emit(Instruction::Astore_2),
+                            3 => self.emit(Instruction::Astore_3),
+                            _ => self.emit(Instruction::Astore(slot as u8)),
+                        },
+                    }
+                }
+            }
             Stmt::If { .. } | Stmt::While { .. } | Stmt::For { .. } | Stmt::DoWhile { .. } => {}
             Stmt::Break(_) | Stmt::Continue(_) | Stmt::Label(_, _) | Stmt::Switch { .. } => {}
             Stmt::Throw(_) => {}
@@ -144,7 +182,20 @@ impl<'arena> CodeGenerator<'arena> {
         let expr = self.arena.expr(expr_id);
         match expr {
             AstExpr::Error => {}
-            AstExpr::Ident(_) => {}
+            AstExpr::Ident(ident) => {
+                if let Some(&slot) = self.local_vars.get(ident.as_str()) {
+                    if slot <= 3 {
+                        self.emit(match slot {
+                            0 => Instruction::Iload_0,
+                            1 => Instruction::Iload_1,
+                            2 => Instruction::Iload_2,
+                            _ => Instruction::Iload_3,
+                        });
+                    } else {
+                        self.emit(Instruction::Iload(slot as u8));
+                    }
+                }
+            }
             AstExpr::Literal(literal) => {
                 self.emit_literal(literal)?;
             }
@@ -316,6 +367,108 @@ impl<'arena> CodeGenerator<'arena> {
         rhs: ExprId,
     ) -> RajacResult<()> {
         use rajac_ast::BinaryOp;
+
+        // Handle string concatenation: if either operand is a string literal
+        // and the operation is Add, compute the result at compile time
+        if matches!(op, BinaryOp::Add) {
+            let lhs_expr = self.arena.expr(lhs);
+            let rhs_expr = self.arena.expr(rhs);
+
+            let lhs_string = match lhs_expr {
+                AstExpr::Literal(lit) if matches!(lit.kind, LiteralKind::String) => {
+                    Some(lit.value.as_str().to_string())
+                }
+                _ => None,
+            };
+            let rhs_string = match rhs_expr {
+                AstExpr::Literal(lit) if matches!(lit.kind, LiteralKind::String) => {
+                    Some(lit.value.as_str().to_string())
+                }
+                _ => None,
+            };
+            let lhs_int = match lhs_expr {
+                AstExpr::Literal(lit) if matches!(lit.kind, LiteralKind::Int) => {
+                    lit.value.as_str().parse::<i32>().ok()
+                }
+                _ => None,
+            };
+            let rhs_int = match rhs_expr {
+                AstExpr::Literal(lit) if matches!(lit.kind, LiteralKind::Int) => {
+                    lit.value.as_str().parse::<i32>().ok()
+                }
+                _ => None,
+            };
+
+            // String + anything or anything + String = string concatenation
+            // Check for compile-time constant string concatenation
+            if let (Some(lhs_lit), Some(rhs_lit)) = (&lhs_string, &rhs_string) {
+                let result = format!("{}{}", lhs_lit, rhs_lit);
+                let string_index = self.constant_pool.add_string(&result)?;
+                if string_index <= u8::MAX as u16 {
+                    self.emit(Instruction::Ldc(string_index as u8));
+                } else {
+                    self.emit(Instruction::Ldc_w(string_index));
+                }
+                return Ok(());
+            }
+            if let (Some(lhs_lit), Some(rhs_int)) = (&lhs_string, rhs_int) {
+                let result = format!("{}{}", lhs_lit, rhs_int);
+                let string_index = self.constant_pool.add_string(&result)?;
+                if string_index <= u8::MAX as u16 {
+                    self.emit(Instruction::Ldc(string_index as u8));
+                } else {
+                    self.emit(Instruction::Ldc_w(string_index));
+                }
+                return Ok(());
+            }
+            if let (Some(rhs_lit), Some(lhs_int)) = (&rhs_string, lhs_int) {
+                let result = format!("{}{}", lhs_int, rhs_lit);
+                let string_index = self.constant_pool.add_string(&result)?;
+                if string_index <= u8::MAX as u16 {
+                    self.emit(Instruction::Ldc(string_index as u8));
+                } else {
+                    self.emit(Instruction::Ldc_w(string_index));
+                }
+                return Ok(());
+            }
+
+            // String + anything or anything + String = string concatenation (non-constant)
+            // Use StringBuilder for runtime concatenation
+            if lhs_string.is_some() || rhs_string.is_some() {
+                // new StringBuilder()
+                let sb_class = self.constant_pool.add_class("java/lang/StringBuilder")?;
+                self.emit(Instruction::New(sb_class));
+                self.emit(Instruction::Dup);
+                let sb_init = self
+                    .constant_pool
+                    .add_method_ref(sb_class, "<init>", "()V")?;
+                self.emit(Instruction::Invokespecial(sb_init));
+
+                // Append lhs
+                self.emit_expression(lhs)?;
+                let sb_append = self.constant_pool.add_method_ref(
+                    sb_class,
+                    "append",
+                    "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
+                )?;
+                self.emit(Instruction::Invokevirtual(sb_append));
+
+                // Append rhs
+                self.emit_expression(rhs)?;
+                self.emit(Instruction::Invokevirtual(sb_append));
+
+                // toString()
+                let to_string = self.constant_pool.add_method_ref(
+                    sb_class,
+                    "toString",
+                    "()Ljava/lang/String;",
+                )?;
+                self.emit(Instruction::Invokevirtual(to_string));
+
+                return Ok(());
+            }
+        }
+
         match op {
             BinaryOp::Add => {
                 self.emit_expression(lhs)?;

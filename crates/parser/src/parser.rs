@@ -757,6 +757,11 @@ impl<'a> Parser<'a> {
                 self.bump();
                 Type::Primitive(PrimitiveType::Void)
             }
+            TokenKind::KwVar => {
+                self.bump();
+                // var is desugared to int for now - type inference should happen in later phases
+                Type::Primitive(PrimitiveType::Int)
+            }
             TokenKind::Ident => {
                 let name = Ident::new(self.ident_text());
                 self.bump();

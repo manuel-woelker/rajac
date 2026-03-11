@@ -73,7 +73,6 @@ impl<'a> Parser<'a> {
     }
 
     fn is_local_var_decl(&self) -> bool {
-        // Quick heuristic: if we see a type followed by an identifier, it's likely a local var
         matches!(
             self.peek(),
             TokenKind::KwBoolean
@@ -85,6 +84,7 @@ impl<'a> Parser<'a> {
                 | TokenKind::KwFloat
                 | TokenKind::KwDouble
                 | TokenKind::KwVoid
+                | TokenKind::KwVar
         )
     }
 
