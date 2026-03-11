@@ -33,6 +33,7 @@ pub struct CodeGenerator<'arena> {
     constant_pool: &'arena mut ConstantPool,
     emitter: BytecodeEmitter,
     max_stack: u16,
+    current_stack: i32,
     max_locals: u16,
     next_local_slot: u16,
     local_vars: std::collections::HashMap<String, u16>,
@@ -45,6 +46,7 @@ impl<'arena> CodeGenerator<'arena> {
             constant_pool,
             emitter: BytecodeEmitter::new(),
             max_stack: 2,
+            current_stack: 0,
             max_locals: 1,
             next_local_slot: 1, // slot 0 is for 'this'
             local_vars: std::collections::HashMap::new(),
@@ -101,6 +103,9 @@ impl<'arena> CodeGenerator<'arena> {
     }
 
     fn emit(&mut self, instruction: Instruction) {
+        let delta = stack_effect(&instruction);
+        self.current_stack = (self.current_stack + delta).max(0);
+        self.max_stack = self.max_stack.max(self.current_stack as u16);
         self.emulator().emit(instruction);
     }
 
@@ -433,37 +438,20 @@ impl<'arena> CodeGenerator<'arena> {
             }
 
             // String + anything or anything + String = string concatenation (non-constant)
-            // Use StringBuilder for runtime concatenation
+            // Use invokedynamic (same as OpenJDK 11+)
             if lhs_string.is_some() || rhs_string.is_some() {
-                // new StringBuilder()
-                let sb_class = self.constant_pool.add_class("java/lang/StringBuilder")?;
-                self.emit(Instruction::New(sb_class));
-                self.emit(Instruction::Dup);
-                let sb_init = self
-                    .constant_pool
-                    .add_method_ref(sb_class, "<init>", "()V")?;
-                self.emit(Instruction::Invokespecial(sb_init));
-
-                // Append lhs
+                // Emit both operands
                 self.emit_expression(lhs)?;
-                let sb_append = self.constant_pool.add_method_ref(
-                    sb_class,
-                    "append",
-                    "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
-                )?;
-                self.emit(Instruction::Invokevirtual(sb_append));
-
-                // Append rhs
                 self.emit_expression(rhs)?;
-                self.emit(Instruction::Invokevirtual(sb_append));
 
-                // toString()
-                let to_string = self.constant_pool.add_method_ref(
-                    sb_class,
-                    "toString",
-                    "()Ljava/lang/String;",
+                // invokedynamic for string concatenation
+                // Bootstrap method: StringConcatFactory.makeConcatWithConstants
+                let invokedynamic = self.constant_pool.add_invoke_dynamic(
+                    0,
+                    "makeConcatWithConstants",
+                    "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
                 )?;
-                self.emit(Instruction::Invokevirtual(to_string));
+                self.emit(Instruction::Invokedynamic(invokedynamic));
 
                 return Ok(());
             }
@@ -736,4 +724,62 @@ fn type_to_internal_class_name_from_type_id(type_id: TypeId) -> String {
 fn type_to_descriptor(type_id: TypeId) -> String {
     let _ = type_id;
     "Ljava/lang/Object;".to_string()
+}
+
+fn stack_effect(instr: &Instruction) -> i32 {
+    use Instruction::*;
+    match instr {
+        Nop => 0,
+        Aconst_null => 1,
+        Iconst_m1 | Iconst_0 | Iconst_1 | Iconst_2 | Iconst_3 | Iconst_4 | Iconst_5 => 1,
+        Lconst_0 | Lconst_1 => 2,
+        Fconst_0 | Fconst_1 | Fconst_2 => 1,
+        Dconst_0 | Dconst_1 => 2,
+        Bipush(_) | Sipush(_) => 1,
+        Ldc(_) => 1,
+        Ldc_w(_) => 1,
+        Ldc2_w(_) => 2,
+        Iload(_) | Fload(_) | Aload(_) => 1,
+        Lload(_) | Dload(_) => 2,
+        Iload_0 | Iload_1 | Iload_2 | Iload_3 | Fload_0 | Fload_1 | Fload_2 | Fload_3 | Aload_0
+        | Aload_1 | Aload_2 | Aload_3 => 1,
+        Lload_0 | Lload_1 | Lload_2 | Lload_3 | Dload_0 | Dload_1 | Dload_2 | Dload_3 => 2,
+        Istore(_) | Fstore(_) | Astore(_) => -1,
+        Lstore(_) | Dstore(_) => -2,
+        Istore_0 | Istore_1 | Istore_2 | Istore_3 | Fstore_0 | Fstore_1 | Fstore_2 | Fstore_3
+        | Astore_0 | Astore_1 | Astore_2 | Astore_3 => -1,
+        Lstore_0 | Lstore_1 | Lstore_2 | Lstore_3 | Dstore_0 | Dstore_1 | Dstore_2 | Dstore_3 => -2,
+        Pop => -1,
+        Pop2 => -2,
+        Dup => 1,
+        Dup_x1 => 0,
+        Dup_x2 => -1,
+        Dup2 => 2,
+        Swap => 0,
+        Iadd | Isub | Imul | Idiv | Irem | Iand | Ior | Ixor => -1,
+        Ladd | Lsub | Lmul | Ldiv | Lrem | Land | Lor | Lxor => -2,
+        Fadd | Fsub | Fmul | Fdiv | Frem => -1,
+        Dadd | Dsub | Dmul | Ddiv | Drem => -2,
+        Ineg => 0,
+        Lneg => 0,
+        Fneg | Dneg => 0,
+        Ishl | Lshl | Ishr | Lshr | Iushr | Lushr => -1,
+        Ireturn | Freturn | Areturn | Return => 0,
+        Lreturn | Dreturn => -2,
+        Getstatic(_) => 1,
+        Putstatic(_) => -1,
+        Getfield(_) => 0,
+        Putfield(_) => -2,
+        Invokevirtual(_) => -1,
+        Invokespecial(_) => -1,
+        Invokestatic(_) => 0,
+        New(_) => 1,
+        Anewarray(_) => 0,
+        Multianewarray(_, _) => 0,
+        Arraylength => 0,
+        Athrow => 0,
+        Checkcast(_) => 0,
+        Instanceof(_) => 0,
+        _ => 0,
+    }
 }
