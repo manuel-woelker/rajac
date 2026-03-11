@@ -601,13 +601,14 @@ fn resolve_type(type_id: TypeId, arena: &mut AstArena, context: &ResolveContext)
                 }
                 // Try to resolve the class name if it's not already qualified
                 if class_type.package.is_none()
-                    && let Some(_resolved_name) =
+                    && let Some(resolved_name) =
                         resolve_class_name(&SharedString::new(&class_type.name), context)
                 {
                     // Update the class type with the resolved package
-                    // This is a bit of a hack since ClassType is immutable
-                    // In a proper implementation, we'd have a mutable reference or return a new ClassType
-                    // For now, we'll handle this in the bytecode generation phase
+                    let package = resolved_name.package_name().as_str();
+                    if !package.is_empty() {
+                        *ty = Type::Class(class_type.clone().with_package(package.to_string()));
+                    }
                 }
             }
             Type::Array(array_type) => types.push(array_type.element_type),
