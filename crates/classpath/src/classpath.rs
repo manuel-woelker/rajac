@@ -2,6 +2,7 @@ use rajac_base::shared_string::SharedString;
 use rajac_symbols::{Symbol, SymbolKind, SymbolTable};
 use rayon::prelude::*;
 use ristretto_classfile::ClassFile;
+use std::fs::File;
 use std::io::{Cursor, Read};
 use std::path::Path;
 use std::time::Instant;
@@ -91,19 +92,17 @@ impl Classpath {
         jar: &Path,
         symbol_table: &mut SymbolTable,
     ) -> RajacResult<()> {
-        let jar_data = std::fs::read(jar).context("Failed to read JAR file")?;
+        let file = File::open(jar).context("Failed to open JAR file")?;
+        let mut archive = ZipArchive::new(file).context("Failed to read JAR file")?;
 
-        let jar_cursor = Cursor::new(&jar_data);
-        let mut archive = ZipArchive::new(jar_cursor).context("Failed to read JAR file")?;
-
-        let class_data: Vec<(String, Vec<u8>)> = (0..archive.len())
+        let class_data: Vec<Vec<u8>> = (0..archive.len())
             .filter_map(|i| {
                 let mut file = archive.by_index(i).ok()?;
-                let name = file.name().to_string();
+                let name = file.name();
                 if name.ends_with(".class") && !name.contains('$') {
                     let mut bytes = Vec::new();
                     file.read_to_end(&mut bytes).ok()?;
-                    Some((name, bytes))
+                    Some(bytes)
                 } else {
                     None
                 }
@@ -115,7 +114,7 @@ impl Classpath {
         let start = Instant::now();
         let parsed_classes: Vec<(String, String, bool)> = class_data
             .into_par_iter()
-            .filter_map(|(_name, bytes)| {
+            .filter_map(|bytes| {
                 let class_file = ClassFile::from_bytes(&mut Cursor::new(bytes)).ok()?;
                 parse_class_file(&class_file).map(|p| (p.package, p.class_name, p.is_interface))
             })
