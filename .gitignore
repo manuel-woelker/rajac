@@ -2,3 +2,5 @@
 /.idea
 /ballpit
 /verification/output/rajac
+perf.data*
+flamegraph.svg

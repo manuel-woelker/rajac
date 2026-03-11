@@ -34,7 +34,8 @@ lto = false
 
 
 [profile.release]
+debug = true
 opt-level = "z"
 lto = true
-strip = true
+#strip = true
 codegen-units = 1
