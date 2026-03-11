@@ -706,6 +706,7 @@ dependencies = [
  "rajac-ast",
  "rajac-base",
  "rajac-bytecode",
+ "rajac-classpath",
  "rajac-parser",
  "rajac-symbols",
  "rayon",
