@@ -1,3 +1,4 @@
+use crate::bytecode::CodeGenerator;
 use rajac_ast::{
     Ast, AstArena, ClassDecl, ClassDeclId, ClassKind, ClassMember, Field as AstField, Ident,
     Method as AstMethod, Modifiers, Type,
@@ -464,123 +465,19 @@ fn generate_method_bytecode(
     method: &AstMethod,
     body_id: rajac_ast::StmtId,
 ) -> RajacResult<Vec<ristretto_classfile::attributes::Attribute>> {
-    let body = arena.stmt(body_id);
+    let is_static = method.modifiers.0 & Modifiers::STATIC != 0;
 
-    // For now, implement a simple pattern matcher for the Println.java main method
-    // TODO: Implement a proper AST visitor for bytecode generation
+    let mut code_gen = CodeGenerator::new(arena);
+    let (instructions, max_stack, max_locals) =
+        code_gen.generate_method_body(is_static, body_id)?;
 
-    if let rajac_ast::Stmt::Block(stmts) = body {
-        // Check if this is the Println main method pattern
-        if stmts.len() == 1 {
-            let stmt = arena.stmt(stmts[0]);
-            if let rajac_ast::Stmt::Expr(expr_id) = stmt {
-                let expr = arena.expr(*expr_id);
-                if let rajac_ast::Expr::MethodCall {
-                    expr: target_expr_id,
-                    name: method_name,
-                    type_args: _,
-                    args,
-                } = expr
-                {
-                    // Check if this matches System.out.println("Hello, World!")
-                    if method_name.as_str() == "println"
-                        && args.len() == 1
-                        && target_expr_id.is_some()
-                        && matches_method_call_pattern(
-                            arena,
-                            target_expr_id.unwrap(),
-                            method_name,
-                            args,
-                        )
-                    {
-                        return generate_println_bytecode(constant_pool, arena.expr(args[0]));
-                    }
-                }
-            }
-        }
-    }
-
-    // For now, return empty bytecode for unsupported patterns
     let code_name = constant_pool.add_utf8("Code")?;
-    let max_locals = method.params.len() as u16 + 1; // +1 for 'this' if not static
+
     Ok(vec![ristretto_classfile::attributes::Attribute::Code {
         name_index: code_name,
-        max_stack: 0,
+        max_stack,
         max_locals,
-        code: vec![],
-        exception_table: vec![],
-        attributes: vec![],
-    }])
-}
-
-fn matches_method_call_pattern(
-    arena: &AstArena,
-    target_expr_id: rajac_ast::ExprId,
-    _method_name: &Ident,
-    _args: &[rajac_ast::ExprId],
-) -> bool {
-    let target_expr = arena.expr(target_expr_id);
-
-    // Check if target is System.out
-    if let rajac_ast::Expr::FieldAccess {
-        expr: target_expr_id,
-        name: field_name,
-    } = target_expr
-    {
-        if field_name.as_str() != "out" {
-            return false;
-        }
-
-        let target_of_target = arena.expr(*target_expr_id);
-        if let rajac_ast::Expr::Ident(system_name) = target_of_target {
-            return system_name.as_str() == "System";
-        }
-    }
-
-    false
-}
-
-fn generate_println_bytecode(
-    constant_pool: &mut ConstantPool,
-    string_expr: &rajac_ast::Expr,
-) -> RajacResult<Vec<ristretto_classfile::attributes::Attribute>> {
-    let code_name = constant_pool.add_utf8("Code")?;
-
-    // Add System.out field reference
-    let system_class = constant_pool.add_class("java/lang/System")?;
-    let printstream_class = constant_pool.add_class("java/io/PrintStream")?;
-    let system_out = constant_pool.add_field_ref(system_class, "out", "Ljava/io/PrintStream;")?;
-
-    // Add PrintStream.println method reference
-    let println_method =
-        constant_pool.add_method_ref(printstream_class, "println", "(Ljava/lang/String;)V")?;
-
-    // Add string literal to constant pool
-    let string_literal = if let rajac_ast::Expr::Literal(literal) = string_expr {
-        if matches!(literal.kind, rajac_ast::LiteralKind::String) {
-            constant_pool.add_string(literal.value.as_str())?
-        } else {
-            constant_pool.add_string("")? // Default empty string for non-string literals
-        }
-    } else {
-        constant_pool.add_string("")? // Default empty string for unsupported patterns
-    };
-
-    // Generate bytecode: getstatic, ldc, invokevirtual, return
-    let code = vec![
-        ristretto_classfile::attributes::Instruction::Getstatic(system_out),
-        ristretto_classfile::attributes::Instruction::Ldc(
-            u8::try_from(string_literal).unwrap_or(0),
-        ),
-        ristretto_classfile::attributes::Instruction::Invokevirtual(println_method),
-        ristretto_classfile::attributes::Instruction::Return,
-    ];
-
-    Ok(vec![ristretto_classfile::attributes::Attribute::Code {
-        name_index: code_name,
-        max_stack: 2,  // Need stack for getstatic result and string parameter
-        max_locals: 1, // Need local variable for args parameter
-        code,
+        code: instructions,
         exception_table: vec![],
         attributes: vec![],
     }])
