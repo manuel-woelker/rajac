@@ -4,6 +4,7 @@ use rayon::prelude::*;
 use ristretto_classfile::ClassFile;
 use std::io::{Cursor, Read};
 use std::path::Path;
+use std::sync::Arc;
 use zip::ZipArchive;
 
 pub struct Classpath {
@@ -90,9 +91,9 @@ impl Classpath {
         jar: &Path,
         symbol_table: &mut SymbolTable,
     ) -> RajacResult<()> {
-        let jar_data = std::fs::read(jar).context("Failed to read JAR file")?;
+        let jar_data = Arc::new(std::fs::read(jar).context("Failed to read JAR file")?);
 
-        let jar_cursor = Cursor::new(&jar_data);
+        let jar_cursor = Cursor::new(jar_data.as_ref());
         let mut archive = ZipArchive::new(jar_cursor).context("Failed to read JAR file")?;
 
         let class_names: Vec<String> = (0..archive.len())
@@ -113,7 +114,7 @@ impl Classpath {
             .par_iter()
             .filter_map(|name| {
                 let jar_data = jar_data.clone();
-                let jar_cursor = Cursor::new(jar_data);
+                let jar_cursor = Cursor::new(jar_data.as_ref());
                 let mut archive = ZipArchive::new(jar_cursor).ok()?;
                 let mut file = archive.by_name(name).ok()?;
                 let mut bytes = Vec::new();
