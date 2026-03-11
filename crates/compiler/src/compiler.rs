@@ -3,6 +3,7 @@ use rajac_base::qualified_name::QualifiedName as ResolvedName;
 use rajac_base::result::{RajacResult, ResultExt};
 use rajac_base::shared_string::SharedString;
 use rajac_bytecode::classfile::generate_classfiles;
+use rajac_classpath::Classpath;
 use rajac_parser::parse;
 use rajac_symbols::{Symbol, SymbolKind, SymbolTable};
 use rayon::prelude::*;
@@ -60,6 +61,14 @@ impl Compiler {
             .collect::<RajacResult<Vec<_>>>()?;
 
         let mut symbol_table = SymbolTable::new();
+
+        let rt_jar = PathBuf::from("/usr/lib/jvm/java-8-openjdk/jre/lib/rt.jar");
+        if rt_jar.exists() {
+            let mut classpath = Classpath::new();
+            classpath.add_jar(rt_jar);
+            classpath.add_to_symbol_table(&mut symbol_table)?;
+        }
+
         for unit in &compilation_units {
             populate_symbol_table(
                 &mut symbol_table,
