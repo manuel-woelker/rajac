@@ -1,7 +1,7 @@
 use rajac_base::shared_string::SharedString;
 use rajac_symbols::{Symbol, SymbolKind, SymbolTable};
+use rayon::prelude::*;
 use ristretto_classfile::ClassFile;
-use std::fs::File;
 use std::io::{Cursor, Read};
 use std::path::Path;
 use zip::ZipArchive;
@@ -90,33 +90,50 @@ impl Classpath {
         jar: &Path,
         symbol_table: &mut SymbolTable,
     ) -> RajacResult<()> {
-        let file = File::open(jar).context("Failed to open JAR file")?;
-        let mut archive = ZipArchive::new(file).context("Failed to read JAR file")?;
-        let start = Instant::now();
-        for i in 0..archive.len() {
-            let mut file = archive.by_index(i).context("Failed to read JAR entry")?;
-            let name = file.name().to_string();
+        let jar_data = std::fs::read(jar).context("Failed to read JAR file")?;
 
-            if name.ends_with(".class") && !name.contains('$') {
-                let mut bytes = Vec::new();
-                file.read_to_end(&mut bytes)
-                    .context("Failed to read class file from JAR")?;
+        let jar_cursor = Cursor::new(&jar_data);
+        let mut archive = ZipArchive::new(jar_cursor).context("Failed to read JAR file")?;
 
-                if let Ok(class_file) = ClassFile::from_bytes(&mut Cursor::new(bytes))
-                    && let Some(parsed) = parse_class_file(&class_file)
-                {
-                    let package = symbol_table.package(&parsed.package);
-                    let name = SharedString::new(parsed.class_name.clone());
-                    let kind = if parsed.is_interface {
-                        SymbolKind::Interface
-                    } else {
-                        SymbolKind::Class
-                    };
-                    package.insert(parsed.class_name, Symbol::new(name, kind));
+        let class_names: Vec<String> = (0..archive.len())
+            .filter_map(|i| {
+                let file = archive.by_index(i).ok()?;
+                let name = file.name().to_string();
+                if name.ends_with(".class") && !name.contains('$') {
+                    Some(name)
+                } else {
+                    None
                 }
-            }
+            })
+            .collect();
+
+        drop(archive);
+
+        let parsed_classes: Vec<(String, String, bool)> = class_names
+            .par_iter()
+            .filter_map(|name| {
+                let jar_data = jar_data.clone();
+                let jar_cursor = Cursor::new(jar_data);
+                let mut archive = ZipArchive::new(jar_cursor).ok()?;
+                let mut file = archive.by_name(name).ok()?;
+                let mut bytes = Vec::new();
+                file.read_to_end(&mut bytes).ok()?;
+                let class_file = ClassFile::from_bytes(&mut Cursor::new(bytes)).ok()?;
+                parse_class_file(&class_file).map(|p| (p.package, p.class_name, p.is_interface))
+            })
+            .collect();
+
+        for (package, class_name, is_interface) in parsed_classes {
+            let package = symbol_table.package(&package);
+            let name = SharedString::new(class_name.clone());
+            let kind = if is_interface {
+                SymbolKind::Interface
+            } else {
+                SymbolKind::Class
+            };
+            package.insert(class_name, Symbol::new(name, kind));
         }
-        println!("Read {:?} in {}ms", jar, start.elapsed().as_millis());
+
         Ok(())
     }
 }
@@ -152,7 +169,6 @@ fn parse_class_file(class_file: &ClassFile) -> Option<ParsedClass> {
 
 use rajac_base::result::{RajacResult, ResultExt};
 use std::path::PathBuf;
-use std::time::Instant;
 
 #[cfg(test)]
 mod tests {

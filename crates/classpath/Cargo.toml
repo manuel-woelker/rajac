@@ -9,3 +9,4 @@ rajac-symbols = { path = "../symbols" }
 ristretto_classfile = { workspace = true }
 walkdir = { workspace = true }
 zip = "2.2.2"
+rayon = "1.10"
