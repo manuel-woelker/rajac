@@ -92,7 +92,7 @@ impl Classpath {
     ) -> RajacResult<()> {
         let file = File::open(jar).context("Failed to open JAR file")?;
         let mut archive = ZipArchive::new(file).context("Failed to read JAR file")?;
-
+        let start = Instant::now();
         for i in 0..archive.len() {
             let mut file = archive.by_index(i).context("Failed to read JAR entry")?;
             let name = file.name().to_string();
@@ -116,7 +116,7 @@ impl Classpath {
                 }
             }
         }
-
+        println!("Read {:?} in {}ms", jar, start.elapsed().as_millis());
         Ok(())
     }
 }
@@ -152,6 +152,7 @@ fn parse_class_file(class_file: &ClassFile) -> Option<ParsedClass> {
 
 use rajac_base::result::{RajacResult, ResultExt};
 use std::path::PathBuf;
+use std::time::Instant;
 
 #[cfg(test)]
 mod tests {

@@ -13,7 +13,9 @@ fn main() -> RajacResult<()> {
     let rajac_base_output = Path::new("verification/output/rajac");
     let rajac_output = rajac_base_output;
 
-    fs::remove_dir_all(rajac_output).context("Failed to remove rajac output directory")?;
+    if fs::exists(rajac_output)? {
+        fs::remove_dir_all(rajac_output).context("Failed to remove rajac output directory")?;
+    }
 
     // Create output directory for rajac
     fs::create_dir_all(rajac_output).context("Failed to create rajac output directory")?;
