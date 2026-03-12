@@ -8,7 +8,7 @@
 //! The collection stage is responsible for:
 //! - Discovering all class, interface, and method declarations
 //! - Building hierarchical symbol tables for name resolution
-//! - Integrating runtime library symbols (from rt.jar)
+//! - Integrating symbols from classpath entries (JAR files and directories)
 //! - Organizing symbols by package structure
 //! - Preparing data structures for the resolution phase
 //!
@@ -18,7 +18,7 @@
 //! - Traversing AST nodes to find declarations
 //! - Creating symbol entries with proper kinds and visibility
 //! - Maintaining package hierarchy for scope resolution
-//! - Loading standard library symbols for built-in types
+//! - Loading symbols from configured classpath entries
 //!
 //! ## Output
 //!
@@ -26,7 +26,7 @@
 //! - Package-organized symbol hierarchy
 //! - Class and interface declarations
 //! - Method and field symbols (when implemented)
-//! - Runtime library symbols from Java standard library
+//! - Symbols from classpath entries (JAR files and directories)
 //!
 //! ## Usage
 //!
@@ -37,10 +37,12 @@
 //! use rajac_compiler::stages::collection;
 //! use rajac_compiler::CompilationUnit;
 //! use rajac_symbols::SymbolTable;
+//! use rajac_base::file_path::FilePath;
 //!
 //! let compilation_units = vec!/* ... */;
+//! let classpaths = vec![FilePath::new("lib/")];
 //! let mut symbol_table = SymbolTable::new();
-//! collection::collect_symbols(&mut symbol_table, &compilation_units)?;
+//! collection::collect_symbols(&mut symbol_table, &compilation_units, &classpaths)?;
 //! println!("Collected symbols for {} packages", symbol_table.package_count());
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
@@ -55,15 +57,15 @@ construction and potential optimization of symbol discovery.
 
 use crate::CompilationUnit;
 use rajac_ast::{Ast, AstArena, ClassKind};
+use rajac_base::file_path::FilePath;
 use rajac_base::result::RajacResult;
 use rajac_classpath::Classpath;
 use rajac_symbols::{Symbol, SymbolKind, SymbolTable};
-use std::path::Path;
 
-/// Populates the symbol table with symbols from compilation units and runtime library.
+/// Populates the symbol table with symbols from compilation units and classpath entries.
 ///
 /// This function performs comprehensive symbol collection by:
-/// 1. Loading runtime library symbols from the JVM's rt.jar
+/// 1. Loading symbols from configured classpath entries (jar files and directories)
 /// 2. Processing all compilation units to extract user-defined symbols
 /// 3. Organizing symbols by package hierarchy
 ///
@@ -71,21 +73,20 @@ use std::path::Path;
 ///
 /// - `symbol_table` - Mutable reference to the symbol table to populate
 /// - `compilation_units` - Slice of compilation units containing parsed ASTs
+/// - `classpaths` - List of classpath entries (jar files and directories) to load symbols from
 ///
 /// # Returns
 ///
 /// `Ok(())` if symbol collection succeeds, or an error if:
-/// - Runtime library cannot be loaded or parsed
+/// - Classpath entries cannot be loaded or parsed
 /// - Symbol table population encounters conflicts
 /// - AST structure is invalid or corrupted
 ///
-/// # Runtime Library Integration
+/// # Classpath Entries
 ///
-/// Automatically attempts to load symbols from:
-/// - `/usr/lib/jvm/java-8-openjdk/jre/lib/rt.jar` (OpenJDK 8)
-/// - Provides access to standard Java classes (java.lang.*, java.util.*, etc.)
-/// - Enables proper type resolution for built-in types
-/// - Gracefully skips if rt.jar is not found
+/// Each classpath entry can be:
+/// - A JAR file (`.jar`) - all classes are loaded into the symbol table
+/// - A directory - all `.class` files are loaded into the symbol table
 ///
 /// # Examples
 ///
@@ -93,11 +94,15 @@ use std::path::Path;
 /// use rajac_compiler::stages::collection;
 /// use rajac_compiler::CompilationUnit;
 /// use rajac_symbols::SymbolTable;
+/// use rajac_base::file_path::FilePath;
 ///
 /// let compilation_units = vec!/* parsed compilation units */;
+/// let classpaths = vec![
+///     FilePath::new("/usr/lib/jvm/java-8-openjdk/jre/lib/rt.jar"),
+/// ];
 /// let mut symbol_table = SymbolTable::new();
-/// 
-/// match collection::collect_symbols(&mut symbol_table, &compilation_units) {
+///
+/// match collection::collect_symbols(&mut symbol_table, &compilation_units, &classpaths) {
 ///     Ok(()) => {
 ///         println!("Successfully collected symbols");
 ///         // Symbol table is now ready for resolution phase
@@ -119,12 +124,21 @@ use std::path::Path;
 pub fn collect_symbols(
     symbol_table: &mut SymbolTable,
     compilation_units: &[CompilationUnit],
+    classpaths: &[FilePath],
 ) -> RajacResult<()> {
-    // Add runtime library symbols (rt.jar)
-    let rt_jar = Path::new("/usr/lib/jvm/java-8-openjdk/jre/lib/rt.jar");
-    if rt_jar.exists() {
-        let mut classpath = Classpath::new();
-        classpath.add_jar(rt_jar);
+    // Add symbols from classpath entries
+    let mut classpath = Classpath::new();
+    for classpath_entry in classpaths {
+        let path = classpath_entry.as_path();
+        if path.exists() {
+            if path.extension().is_some_and(|ext| ext == "jar") {
+                classpath.add_jar(path);
+            } else if path.is_dir() {
+                classpath.add_directory(path);
+            }
+        }
+    }
+    if !classpath.is_empty() {
         classpath.add_to_symbol_table(symbol_table)?;
     }
 

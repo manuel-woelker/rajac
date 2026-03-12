@@ -36,8 +36,8 @@
 //!
 //! Class files are written to `[source_dir]/classes/` by default.
 
-use rajac_compiler::{Compiler, CompilerConfig};
 use rajac_base::file_path::FilePath;
+use rajac_compiler::{Compiler, CompilerConfig};
 use std::path::Path;
 
 fn main() {
@@ -49,6 +49,7 @@ fn main() {
     let config = CompilerConfig {
         source_dirs: vec![FilePath::new(source_dir)],
         target_dir: FilePath::new(source_dir.join("classes")),
+        classpaths: Vec::new(),
     };
     let mut compiler = Compiler::new(config);
 

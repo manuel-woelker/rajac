@@ -51,8 +51,8 @@ responsibilities and well-defined inputs/outputs.
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-use rajac_base::result::{RajacResult, ResultExt};
 use rajac_base::file_path::FilePath;
+use rajac_base::result::{RajacResult, ResultExt};
 use rajac_symbols::SymbolTable;
 
 use crate::stages::{collection, discovery, generation, parsing, resolution};
@@ -107,6 +107,8 @@ pub struct CompilerConfig {
     pub source_dirs: Vec<FilePath>,
     /// Directory where class files will be generated
     pub target_dir: FilePath,
+    /// List of classpath entries (jar files and directories) to load symbols from
+    pub classpaths: Vec<FilePath>,
 }
 
 /// Main compiler orchestrator that manages the compilation pipeline.
@@ -288,7 +290,7 @@ impl Compiler {
     /// # };
     /// let mut compiler = Compiler::new(config);
     /// compiler.discover_files()?;
-    /// 
+    ///
     /// println!("Found {} Java files", compiler.java_files.len());
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -331,7 +333,7 @@ impl Compiler {
     /// let mut compiler = Compiler::new(config);
     /// compiler.discover_files()?;
     /// compiler.parse_files()?;
-    /// 
+    ///
     /// println!("Parsed {} compilation units", compiler.compilation_units.len());
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -371,12 +373,16 @@ impl Compiler {
     /// compiler.discover_files()?;
     /// compiler.parse_files()?;
     /// compiler.collect_symbols()?;
-    /// 
+    ///
     /// println!("Collected symbols from {} compilation units", compiler.compilation_units.len());
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     fn collect_symbols(&mut self) -> RajacResult<()> {
-        collection::collect_symbols(&mut self.symbol_table, &self.compilation_units)
+        collection::collect_symbols(
+            &mut self.symbol_table,
+            &self.compilation_units,
+            &self.config.classpaths,
+        )
     }
 
     /// Resolves identifiers and types in the compilation units.
@@ -450,7 +456,7 @@ impl Compiler {
     /// compiler.collect_symbols()?;
     /// compiler.resolve_identifiers();
     /// let class_count = compiler.generate_classfiles()?;
-    /// 
+    ///
     /// println!("Generated {} class files", class_count);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -482,6 +488,7 @@ impl Default for Compiler {
         Self::new(CompilerConfig {
             source_dirs: Vec::new(),
             target_dir: FilePath::default(),
+            classpaths: Vec::new(),
         })
     }
 }

@@ -1,6 +1,6 @@
 use colored::*;
-use rajac_base::result::{RajacResult, ResultExt};
 use rajac_base::file_path::FilePath;
+use rajac_base::result::{RajacResult, ResultExt};
 use rajac_bytecode::pretty_print::pretty_print_classfile;
 use rajac_compiler::{Compiler, CompilerConfig};
 use sha2::{Digest, Sha256};
@@ -36,6 +36,7 @@ fn compile_with_rajac(sources_dir: &Path, output_dir: &Path) -> RajacResult<()> 
     let config = CompilerConfig {
         source_dirs: vec![FilePath::new(sources_dir)],
         target_dir: FilePath::new(output_dir),
+        classpaths: Vec::new(),
     };
     let mut compiler = Compiler::new(config);
     compiler.compile_directory()?;

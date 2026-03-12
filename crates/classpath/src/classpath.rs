@@ -30,6 +30,10 @@ impl Classpath {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     pub fn add_directory(&mut self, path: impl Into<PathBuf>) {
         self.entries.push(ClasspathEntry::Directory(path.into()));
     }
