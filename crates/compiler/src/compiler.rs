@@ -15,21 +15,103 @@ use walkdir::WalkDir;
 
 pub struct CompilationUnit {
     pub source_file: PathBuf,
-    pub parse_result: ParseResult,
+    pub ast: Ast,
+    pub arena: AstArena,
 }
-
-type ParseResult = rajac_parser::ParseResult;
 
 #[allow(dead_code)]
 pub struct Compiler {
     symbol_table: SymbolTable,
+    compilation_units: Vec<CompilationUnit>,
+    target_dir: PathBuf,
 }
 
 impl Compiler {
     pub fn new() -> Self {
         Compiler {
             symbol_table: SymbolTable::new(),
+            compilation_units: Vec::new(),
+            target_dir: PathBuf::new(),
         }
+    }
+
+    pub fn compile_directory(&mut self, source_dir: &Path, target_dir: &Path) -> RajacResult<()> {
+        fs::create_dir_all(target_dir).context("Failed to create target directory")?;
+        self.target_dir = target_dir.to_path_buf();
+
+        let java_files = self.find_java_files(source_dir)?;
+        if java_files.is_empty() {
+            return Ok(());
+        }
+
+        self.parse(&java_files)?;
+        self.collect()?;
+        self.resolve()?;
+        self.generate()?;
+
+        println!(
+            "Compiled {} Java files -> {} class files",
+            java_files.len(),
+            self.compilation_units.len()
+        );
+
+        Ok(())
+    }
+
+    fn parse(&mut self, java_files: &[PathBuf]) -> RajacResult<()> {
+        self.compilation_units = java_files
+            .par_iter()
+            .map(|java_file| {
+                let source = fs::read_to_string(java_file).context("Failed to read source file")?;
+                let parse_result = parse(&source);
+                Ok(CompilationUnit {
+                    source_file: java_file.clone(),
+                    ast: parse_result.ast,
+                    arena: parse_result.arena,
+                })
+            })
+            .collect::<RajacResult<Vec<_>>>()?;
+        Ok(())
+    }
+
+    fn collect(&mut self) -> RajacResult<()> {
+        let rt_jar = PathBuf::from("/usr/lib/jvm/java-8-openjdk/jre/lib/rt.jar");
+        if rt_jar.exists() {
+            let mut classpath = Classpath::new();
+            classpath.add_jar(rt_jar);
+            classpath.add_to_symbol_table(&mut self.symbol_table)?;
+        }
+
+        for unit in &self.compilation_units {
+            populate_symbol_table(&mut self.symbol_table, &unit.ast, &unit.arena);
+        }
+        Ok(())
+    }
+
+    fn resolve(&mut self) -> RajacResult<()> {
+        self.compilation_units.par_iter_mut().for_each(|unit| {
+            resolve_identifiers(&unit.ast, &mut unit.arena, &self.symbol_table);
+        });
+        Ok(())
+    }
+
+    fn attribute(&mut self) -> RajacResult<()> {
+        Ok(())
+    }
+
+    fn flow(&mut self) -> RajacResult<()> {
+        Ok(())
+    }
+
+    fn desugar(&mut self) -> RajacResult<()> {
+        Ok(())
+    }
+
+    fn generate(&mut self) -> RajacResult<()> {
+        for unit in &self.compilation_units {
+            emit_classfiles(&unit.ast, &unit.arena, &unit.source_file, &self.target_dir)?;
+        }
+        Ok(())
     }
 }
 
@@ -40,78 +122,6 @@ impl Default for Compiler {
 }
 
 impl Compiler {
-    pub fn compile_directory(&self, source_dir: &Path, target_dir: &Path) -> RajacResult<()> {
-        fs::create_dir_all(target_dir).context("Failed to create target directory")?;
-
-        let java_files = self.find_java_files(source_dir)?;
-
-        if java_files.is_empty() {
-            return Ok(());
-        }
-
-        let mut compilation_units: Vec<CompilationUnit> = java_files
-            .par_iter()
-            .map(|java_file| {
-                let source = fs::read_to_string(java_file).context("Failed to read source file")?;
-                let parse_result = parse(&source);
-                Ok(CompilationUnit {
-                    source_file: java_file.clone(),
-                    parse_result,
-                })
-            })
-            .collect::<RajacResult<Vec<_>>>()?;
-
-        let mut symbol_table = SymbolTable::new();
-
-        let rt_jar = PathBuf::from("/usr/lib/jvm/java-8-openjdk/jre/lib/rt.jar");
-        if rt_jar.exists() {
-            let mut classpath = Classpath::new();
-            classpath.add_jar(rt_jar);
-            classpath.add_to_symbol_table(&mut symbol_table)?;
-        }
-
-        for unit in &compilation_units {
-            populate_symbol_table(
-                &mut symbol_table,
-                &unit.parse_result.ast,
-                &unit.parse_result.arena,
-            );
-        }
-
-        compilation_units.par_iter_mut().for_each(|unit| {
-            resolve_identifiers(
-                &unit.parse_result.ast,
-                &mut unit.parse_result.arena,
-                &symbol_table,
-            );
-        });
-
-        let results: Vec<RajacResult<usize>> = compilation_units
-            .par_iter()
-            .map(|unit| {
-                emit_classfiles(
-                    &unit.parse_result.ast,
-                    &unit.parse_result.arena,
-                    &unit.source_file,
-                    target_dir,
-                )
-            })
-            .collect();
-
-        let mut total_classfiles = 0;
-        for result in results {
-            total_classfiles += result?;
-        }
-
-        println!(
-            "Compiled {} Java files -> {} class files",
-            java_files.len(),
-            total_classfiles
-        );
-
-        Ok(())
-    }
-
     fn find_java_files(&self, dir: &Path) -> RajacResult<Vec<PathBuf>> {
         let mut java_files = Vec::new();
 

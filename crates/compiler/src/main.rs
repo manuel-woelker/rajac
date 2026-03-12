@@ -7,7 +7,7 @@ fn main() {
         .unwrap_or_else(|| "ballpit".to_string());
     let source_dir = Path::new(&dir);
 
-    let compiler = Compiler::new();
+    let mut compiler = Compiler::new();
 
     if let Err(e) = compiler.compile_directory(source_dir, &source_dir.join("classes")) {
         eprintln!("Compilation failed: {:?}", e);
