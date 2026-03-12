@@ -36,7 +36,7 @@ fn compile_with_rajac(sources_dir: &Path, output_dir: &Path) -> RajacResult<()> 
     let config = CompilerConfig {
         source_dirs: vec![FilePath::new(sources_dir)],
         target_dir: FilePath::new(output_dir),
-        classpaths: Vec::new(),
+        classpaths: vec!["/usr/lib/jvm/java-8-openjdk/jre/lib/rt.jar".into()]
     };
     let mut compiler = Compiler::new(config);
     compiler.compile_directory()?;

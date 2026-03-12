@@ -49,7 +49,7 @@ fn main() {
     let config = CompilerConfig {
         source_dirs: vec![FilePath::new(source_dir)],
         target_dir: FilePath::new(source_dir.join("classes")),
-        classpaths: Vec::new(),
+        classpaths: vec!["/usr/lib/jvm/java-8-openjdk/jre/lib/rt.jar".into()],
     };
     let mut compiler = Compiler::new(config);
 
