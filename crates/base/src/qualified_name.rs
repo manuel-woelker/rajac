@@ -1,4 +1,4 @@
-//! Qualified name representation for name resolution.
+//! Fully qualified class name representation for name resolution.
 
 use crate::shared_string::SharedString;
 use serde::{Deserialize, Serialize};
@@ -8,22 +8,22 @@ pub const UNRESOLVED_PACKAGE: &str = "<unresolved>";
 pub const UNRESOLVED_NAME: &str = "<unresolved>";
 
 /// # What does this represent?
-/// A package-qualified name represented by a package and a local identifier.
+/// A fully qualified class name represented by a package and a local identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Readable, Writable, Serialize, Deserialize)]
-pub struct QualifiedName {
+pub struct FullyQualifiedClassName {
     /// The package portion (empty for the default package).
     package_name: SharedString,
     /// The local identifier within the package.
     name: SharedString,
 }
 
-impl QualifiedName {
-    /// Creates a new qualified name from a package and local name.
+impl FullyQualifiedClassName {
+    /// Creates a new fully qualified class name from a package and local name.
     pub fn new(package_name: SharedString, name: SharedString) -> Self {
         Self { package_name, name }
     }
 
-    /// Creates a qualified name in the default package.
+    /// Creates a fully qualified class name in the default package.
     pub fn from_ident(name: SharedString) -> Self {
         Self {
             package_name: SharedString::empty(),
@@ -47,13 +47,13 @@ impl QualifiedName {
     }
 }
 
-impl Default for QualifiedName {
+impl Default for FullyQualifiedClassName {
     fn default() -> Self {
         Self::new(UNRESOLVED_PACKAGE.into(), UNRESOLVED_NAME.into())
     }
 }
 
-impl std::fmt::Display for QualifiedName {
+impl std::fmt::Display for FullyQualifiedClassName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.package_name.is_empty() {
             write!(f, "{}", self.name)
@@ -63,13 +63,13 @@ impl std::fmt::Display for QualifiedName {
     }
 }
 
-impl From<SharedString> for QualifiedName {
+impl From<SharedString> for FullyQualifiedClassName {
     fn from(s: SharedString) -> Self {
         Self::from_ident(s)
     }
 }
 
-impl From<&str> for QualifiedName {
+impl From<&str> for FullyQualifiedClassName {
     fn from(s: &str) -> Self {
         Self::from_ident(s.into())
     }
@@ -81,26 +81,26 @@ mod tests {
 
     #[test]
     fn from_ident_creates_default_package() {
-        let name = QualifiedName::from_ident("foo".into());
+        let name = FullyQualifiedClassName::from_ident("foo".into());
         assert!(name.is_default_package());
         assert_eq!(name.name().as_str(), "foo");
     }
 
     #[test]
     fn display_joins_package_and_name() {
-        let name = QualifiedName::new("java.util".into(), "HashMap".into());
+        let name = FullyQualifiedClassName::new("java.util".into(), "HashMap".into());
         assert_eq!(name.to_string(), "java.util.HashMap");
     }
 
     #[test]
     fn display_default_package_is_name_only() {
-        let name = QualifiedName::new(SharedString::empty(), "Bar".into());
+        let name = FullyQualifiedClassName::new(SharedString::empty(), "Bar".into());
         assert_eq!(name.to_string(), "Bar");
     }
 
     #[test]
     fn from_shared_string_uses_default_package() {
-        let name: QualifiedName = "foo".into();
+        let name: FullyQualifiedClassName = "foo".into();
         assert!(name.is_default_package());
         assert_eq!(name.name().as_str(), "foo");
     }

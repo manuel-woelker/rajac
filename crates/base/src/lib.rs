@@ -12,6 +12,7 @@ pub mod timestamp;
 pub mod value;
 
 pub use parking_lot::{Mutex, RwLock};
+pub use qualified_name::FullyQualifiedClassName;
 
 pub fn unansi(string: &str) -> String {
     anstream::adapter::strip_str(string).to_string()

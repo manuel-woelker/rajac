@@ -107,7 +107,7 @@ use rajac_ast::{
     Ast, AstArena, AstType, AstTypeId, ClassMemberId, Constructor, EnumDecl, ExprId, Field, Method,
     ParamId, StmtId,
 };
-use rajac_base::qualified_name::QualifiedName as ResolvedName;
+use rajac_base::qualified_name::FullyQualifiedClassName as ResolvedName;
 use rajac_base::shared_string::SharedString;
 use rajac_symbols::SymbolTable;
 
