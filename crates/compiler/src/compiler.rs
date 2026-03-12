@@ -19,47 +19,54 @@ pub struct CompilationUnit {
     pub arena: AstArena,
 }
 
+pub struct CompilerConfig {
+    pub source_dir: PathBuf,
+    pub target_dir: PathBuf,
+}
+
 #[allow(dead_code)]
 pub struct Compiler {
-    symbol_table: SymbolTable,
+    config: CompilerConfig,
+    java_files: Vec<PathBuf>,
     compilation_units: Vec<CompilationUnit>,
-    target_dir: PathBuf,
+    symbol_table: SymbolTable,
 }
 
 impl Compiler {
-    pub fn new() -> Self {
+    pub fn new(config: CompilerConfig) -> Self {
         Compiler {
             symbol_table: SymbolTable::new(),
             compilation_units: Vec::new(),
-            target_dir: PathBuf::new(),
+            java_files: Vec::new(),
+            config,
         }
     }
 
-    pub fn compile_directory(&mut self, source_dir: &Path, target_dir: &Path) -> RajacResult<()> {
-        fs::create_dir_all(target_dir).context("Failed to create target directory")?;
-        self.target_dir = target_dir.to_path_buf();
+    pub fn compile_directory(&mut self) -> RajacResult<()> {
+        fs::create_dir_all(&self.config.target_dir).context("Failed to create target directory")?;
 
-        let java_files = self.find_java_files(source_dir)?;
-        if java_files.is_empty() {
+        self.find_java_files()?;
+        if self.java_files.is_empty() {
             return Ok(());
         }
 
-        self.parse(&java_files)?;
+        self.parse()?;
         self.collect()?;
         self.resolve()?;
         self.generate()?;
 
         println!(
             "Compiled {} Java files -> {} class files",
-            java_files.len(),
+            self.java_files.len(),
             self.compilation_units.len()
         );
 
         Ok(())
     }
 
-    fn parse(&mut self, java_files: &[PathBuf]) -> RajacResult<()> {
-        self.compilation_units = java_files
+    fn parse(&mut self) -> RajacResult<()> {
+        self.compilation_units = self
+            .java_files
             .par_iter()
             .map(|java_file| {
                 let source = fs::read_to_string(java_file).context("Failed to read source file")?;
@@ -95,21 +102,29 @@ impl Compiler {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn attribute(&mut self) -> RajacResult<()> {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn flow(&mut self) -> RajacResult<()> {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn desugar(&mut self) -> RajacResult<()> {
         Ok(())
     }
 
     fn generate(&mut self) -> RajacResult<()> {
         for unit in &self.compilation_units {
-            emit_classfiles(&unit.ast, &unit.arena, &unit.source_file, &self.target_dir)?;
+            emit_classfiles(
+                &unit.ast,
+                &unit.arena,
+                &unit.source_file,
+                &self.config.target_dir,
+            )?;
         }
         Ok(())
     }
@@ -117,15 +132,18 @@ impl Compiler {
 
 impl Default for Compiler {
     fn default() -> Self {
-        Self::new()
+        Self::new(CompilerConfig {
+            source_dir: PathBuf::new(),
+            target_dir: PathBuf::new(),
+        })
     }
 }
 
 impl Compiler {
-    fn find_java_files(&self, dir: &Path) -> RajacResult<Vec<PathBuf>> {
+    fn find_java_files(&mut self) -> RajacResult<()> {
         let mut java_files = Vec::new();
 
-        for entry in WalkDir::new(dir)
+        for entry in WalkDir::new(&self.config.source_dir)
             .follow_links(true)
             .into_iter()
             .filter_map(|e| e.ok())
@@ -136,7 +154,8 @@ impl Compiler {
             }
         }
 
-        Ok(java_files)
+        self.java_files = java_files;
+        Ok(())
     }
 }
 
