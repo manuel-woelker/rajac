@@ -2,5 +2,9 @@
 // Contains the main Compiler struct and related functionality
 
 pub mod compiler;
+pub mod stages;
 
-pub use compiler::{Compiler, CompilerConfig};
+pub use compiler::{CompilationUnit, Compiler, CompilerConfig};
+
+// Re-export stages for external use if needed
+pub use stages::{collection, discovery, generation, parsing, resolution};
