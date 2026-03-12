@@ -57,6 +57,7 @@ use rajac_symbols::SymbolTable;
 use rayon::join;
 
 use crate::stages::{collection, discovery, generation, parsing, resolution};
+use crate::statistics::{CompilationPhase, CompilationStatistics};
 
 /// Represents a single compilation unit containing a parsed source file.
 ///
@@ -178,6 +179,8 @@ pub struct Compiler {
     pub compilation_units: Vec<CompilationUnit>,
     /// Global symbol table for all compilation units
     pub symbol_table: SymbolTable,
+    /// Compilation statistics
+    pub statistics: CompilationStatistics,
 }
 
 impl Compiler {
@@ -208,6 +211,7 @@ impl Compiler {
             compilation_units: Vec::new(),
             java_files: Vec::new(),
             config,
+            statistics: CompilationStatistics::new(),
         }
     }
 
@@ -252,30 +256,51 @@ impl Compiler {
         // Stage 1: Discovery - Find Java files
         self.discover_files()?;
         if self.java_files.is_empty() {
+            self.statistics.print_table();
             return Ok(());
         }
 
         // Stage 2: Parse source files AND collect classpath symbols in parallel
         let java_files = std::mem::take(&mut self.java_files);
         let classpaths = self.config.classpaths.clone();
+        let stats = self.statistics.clone();
 
-        let (parse_result, classpath_result) = join(
-            || parsing::parse_files(&java_files),
-            || collection::collect_classpath_symbols(&mut self.symbol_table, &classpaths),
+        let parse_result = join(
+            || {
+                stats.begin_phase(CompilationPhase::Parse);
+                let result = parsing::parse_files(&java_files);
+                stats.end_phase(CompilationPhase::Parse);
+                result
+            },
+            || {
+                stats.begin_phase(CompilationPhase::ClasspathCollect);
+                let result =
+                    collection::collect_classpath_symbols(&mut self.symbol_table, &classpaths);
+                stats.end_phase(CompilationPhase::ClasspathCollect);
+                result
+            },
         );
 
         self.java_files = java_files;
-        self.compilation_units = parse_result?;
-        classpath_result?;
+        self.compilation_units = parse_result.0?;
+        parse_result.1?;
 
         // Stage 3: Collect symbols from compilation units
+        self.statistics.begin_phase(CompilationPhase::Collection);
         self.collect_symbols()?;
+        self.statistics.end_phase(CompilationPhase::Collection);
 
         // Stage 4: Resolution - Resolve identifiers and types
+        self.statistics.begin_phase(CompilationPhase::Resolution);
         self.resolve_identifiers();
+        self.statistics.end_phase(CompilationPhase::Resolution);
 
         // Stage 5: Generation - Emit bytecode
+        self.statistics.begin_phase(CompilationPhase::Generation);
         self.generate_classfiles()?;
+        self.statistics.end_phase(CompilationPhase::Generation);
+
+        self.statistics.print_table();
 
         Ok(())
     }

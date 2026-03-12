@@ -36,5 +36,6 @@
 
 pub mod compiler;
 mod stages;
+pub mod statistics;
 
 pub use compiler::{CompilationUnit, Compiler, CompilerConfig};
