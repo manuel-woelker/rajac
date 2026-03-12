@@ -250,23 +250,16 @@ impl Compiler {
         }
 
         // Stage 2: Parsing - Convert source to ASTs
-        self.compilation_units = parsing::parse_files(&self.java_files)?;
+        self.parse_files()?;
 
         // Stage 3: Collection - Build symbol tables
-        collection::collect_symbols(&mut self.symbol_table, &self.compilation_units)?;
+        self.collect_symbols()?;
 
         // Stage 4: Resolution - Resolve identifiers and types
-        resolution::resolve_identifiers(&mut self.compilation_units, &self.symbol_table);
+        self.resolve_identifiers();
 
         // Stage 5: Generation - Emit bytecode
-        let classfile_count =
-            generation::generate_classfiles(&self.compilation_units, self.config.target_dir.as_path())?;
-
-        println!(
-            "Compiled {} Java files -> {} class files",
-            self.java_files.len(),
-            classfile_count
-        );
+        self.generate_classfiles()?;
 
         Ok(())
     }
