@@ -21,12 +21,23 @@ struct NestedClassInfo {
     kind: ClassKind,
 }
 
-pub fn generate_classfiles(ast: &Ast, arena: &AstArena) -> RajacResult<Vec<ClassFile>> {
+pub fn generate_classfiles(
+    ast: &Ast,
+    arena: &AstArena,
+    type_arena: &rajac_types::TypeArena,
+) -> RajacResult<Vec<ClassFile>> {
     let mut class_files = Vec::new();
     for class_id in &ast.classes {
         let class = arena.class_decl(*class_id);
         let internal_name = internal_class_name(ast, &class.name);
-        emit_classfiles_for_class(arena, *class_id, internal_name, None, &mut class_files)?;
+        emit_classfiles_for_class(
+            arena,
+            *class_id,
+            internal_name,
+            None,
+            &mut class_files,
+            type_arena,
+        )?;
     }
     Ok(class_files)
 }
@@ -35,10 +46,18 @@ pub fn classfile_from_class_decl(
     ast: &Ast,
     arena: &AstArena,
     class_id: ClassDeclId,
+    type_arena: &rajac_types::TypeArena,
 ) -> RajacResult<ClassFile> {
     let class = arena.class_decl(class_id);
     let this_internal_name = internal_class_name(ast, &class.name);
-    classfile_from_class_decl_with_context(arena, class_id, &this_internal_name, None, &[])
+    classfile_from_class_decl_with_context(
+        arena,
+        class_id,
+        &this_internal_name,
+        None,
+        &[],
+        type_arena,
+    )
 }
 
 fn emit_classfiles_for_class(
@@ -47,6 +66,7 @@ fn emit_classfiles_for_class(
     this_internal_name: String,
     outer_internal_name: Option<String>,
     class_files: &mut Vec<ClassFile>,
+    type_arena: &rajac_types::TypeArena,
 ) -> RajacResult<()> {
     let class = arena.class_decl(class_id);
     let nested_classes = collect_nested_class_infos(arena, class, &this_internal_name);
@@ -57,6 +77,7 @@ fn emit_classfiles_for_class(
         &this_internal_name,
         outer_internal_name.as_deref(),
         &nested_classes,
+        type_arena,
     )?;
     class_files.push(class_file);
 
@@ -67,6 +88,7 @@ fn emit_classfiles_for_class(
             nested.internal_name,
             Some(this_internal_name.clone()),
             class_files,
+            type_arena,
         )?;
     }
 
@@ -79,6 +101,7 @@ fn classfile_from_class_decl_with_context(
     this_internal_name: &str,
     outer_internal_name: Option<&str>,
     nested_classes: &[NestedClassInfo],
+    type_arena: &rajac_types::TypeArena,
 ) -> RajacResult<ClassFile> {
     let class = arena.class_decl(class_id);
 
@@ -91,7 +114,7 @@ fn classfile_from_class_decl_with_context(
         })?;
 
     let super_internal_name = match class.extends {
-        Some(type_id) => type_to_internal_class_name(arena, type_id)?,
+        Some(type_id) => type_to_internal_class_name(arena, type_id, type_arena)?,
         None => "java/lang/Object".to_string(),
     };
 
@@ -109,7 +132,9 @@ fn classfile_from_class_decl_with_context(
         let member = arena.class_member(*member_id);
         match member {
             ClassMember::Field(field) => {
-                if let Some(field_info) = field_from_ast(arena, &mut constant_pool, field)? {
+                if let Some(field_info) =
+                    field_from_ast(arena, &mut constant_pool, field, type_arena)?
+                {
                     fields.push(field_info);
                 }
             }
@@ -120,6 +145,7 @@ fn classfile_from_class_decl_with_context(
                     class.kind.clone(),
                     &class.modifiers,
                     method,
+                    type_arena,
                 )? {
                     methods.push(method_info);
                 }
@@ -371,6 +397,7 @@ fn field_from_ast(
     arena: &AstArena,
     constant_pool: &mut ConstantPool,
     field: &AstField,
+    type_arena: &rajac_types::TypeArena,
 ) -> RajacResult<Option<Field>> {
     let is_static = field.modifiers.0 & Modifiers::STATIC != 0;
     let has_initializer = field.initializer.is_some();
@@ -380,7 +407,7 @@ fn field_from_ast(
     }
 
     let name_index = constant_pool.add_utf8(field.name.as_str())?;
-    let descriptor = type_to_descriptor(arena, field.ty)?;
+    let descriptor = type_to_descriptor(arena, field.ty, type_arena)?;
     let descriptor_index = constant_pool.add_utf8(&descriptor)?;
     let field_type =
         FieldType::parse(&descriptor).context("failed to parse field descriptor for classfile")?;
@@ -424,9 +451,10 @@ fn method_from_ast(
     class_kind: ClassKind,
     class_modifiers: &Modifiers,
     method: &AstMethod,
+    type_arena: &rajac_types::TypeArena,
 ) -> RajacResult<Option<Method>> {
     let name_index = constant_pool.add_utf8(method.name.as_str())?;
-    let descriptor = method_to_descriptor(arena, method)?;
+    let descriptor = method_to_descriptor(arena, method, type_arena)?;
     let descriptor_index = constant_pool.add_utf8(&descriptor)?;
 
     let mut access_flags = method_access_flags(&method.modifiers);
@@ -509,19 +537,27 @@ fn method_access_flags(modifiers: &Modifiers) -> MethodAccessFlags {
     flags
 }
 
-fn method_to_descriptor(arena: &AstArena, method: &AstMethod) -> RajacResult<String> {
+fn method_to_descriptor(
+    arena: &AstArena,
+    method: &AstMethod,
+    type_arena: &rajac_types::TypeArena,
+) -> RajacResult<String> {
     let mut s = String::new();
     s.push('(');
     for param_id in &method.params {
         let param = arena.param(*param_id);
-        s.push_str(&type_to_descriptor(arena, param.ty)?);
+        s.push_str(&type_to_descriptor(arena, param.ty, type_arena)?);
     }
     s.push(')');
-    s.push_str(&type_to_descriptor(arena, method.return_ty)?);
+    s.push_str(&type_to_descriptor(arena, method.return_ty, type_arena)?);
     Ok(s)
 }
 
-fn type_to_descriptor(arena: &AstArena, type_id: rajac_ast::AstTypeId) -> RajacResult<String> {
+fn type_to_descriptor(
+    arena: &AstArena,
+    type_id: rajac_ast::AstTypeId,
+    type_arena: &rajac_types::TypeArena,
+) -> RajacResult<String> {
     let ty = arena.ty(type_id);
     Ok(match ty {
         AstType::Error => "Ljava/lang/Object;".to_string(),
@@ -536,7 +572,21 @@ fn type_to_descriptor(arena: &AstArena, type_id: rajac_ast::AstTypeId) -> RajacR
             PrimitiveType::Double => "D".to_string(),
             PrimitiveType::Void => "V".to_string(),
         },
-        AstType::Simple { name, .. } => format!("L{};", name),
+        AstType::Simple {
+            name,
+            ty: type_id,
+            type_args: _,
+        } => {
+            // Use the TypeId to look up the fully qualified name from TypeArena
+            if *type_id != rajac_types::TypeId::INVALID {
+                let type_entry = type_arena.get(*type_id);
+                if let rajac_types::Type::Class(class_type) = type_entry {
+                    return Ok(format!("L{};", class_type.internal_name()));
+                }
+            }
+            // Fallback to simple name if TypeId is invalid or not a class type
+            format!("L{};", name)
+        }
         AstType::Array {
             element_type,
             dimensions,
@@ -546,7 +596,7 @@ fn type_to_descriptor(arena: &AstArena, type_id: rajac_ast::AstTypeId) -> RajacR
             for _ in 0..*dimensions {
                 result.push('[');
             }
-            result.push_str(&type_to_descriptor(arena, *element_type)?);
+            result.push_str(&type_to_descriptor(arena, *element_type, type_arena)?);
             result
         }
         AstType::Wildcard { .. } => "Ljava/lang/Object;".to_string(),
@@ -556,11 +606,28 @@ fn type_to_descriptor(arena: &AstArena, type_id: rajac_ast::AstTypeId) -> RajacR
 fn type_to_internal_class_name(
     arena: &AstArena,
     type_id: rajac_ast::AstTypeId,
+    type_arena: &rajac_types::TypeArena,
 ) -> RajacResult<String> {
     let ty = arena.ty(type_id);
     Ok(match ty {
-        AstType::Simple { name, .. } => name.as_str().to_string(),
-        AstType::Array { element_type, .. } => type_to_internal_class_name(arena, *element_type)?,
+        AstType::Simple {
+            name,
+            ty: type_id,
+            type_args: _,
+        } => {
+            // Use the TypeId to look up the fully qualified name from TypeArena
+            if *type_id != rajac_types::TypeId::INVALID {
+                let type_entry = type_arena.get(*type_id);
+                if let rajac_types::Type::Class(class_type) = type_entry {
+                    return Ok(class_type.internal_name());
+                }
+            }
+            // Fallback to simple name if TypeId is invalid or not a class type
+            name.as_str().to_string()
+        }
+        AstType::Array { element_type, .. } => {
+            type_to_internal_class_name(arena, *element_type, type_arena)?
+        }
         _ => "java/lang/Object".to_string(),
     })
 }
@@ -634,6 +701,7 @@ mod tests {
     fn generates_minimal_abstract_method_without_code_attribute() -> RajacResult<()> {
         let mut arena = AstArena::new();
         let mut ast = Ast::new(SharedString::new("test"));
+        let type_arena = rajac_types::TypeArena::new();
 
         let void_ty = arena.alloc_type(AstType::Primitive {
             kind: PrimitiveType::Void,
@@ -674,7 +742,7 @@ mod tests {
 
         ast.classes.push(class_id);
 
-        let mut class_files = generate_classfiles(&ast, &arena)?;
+        let mut class_files = generate_classfiles(&ast, &arena, &type_arena)?;
         assert_eq!(class_files.len(), 1);
 
         let class_file = class_files.pop().unwrap();
@@ -690,6 +758,7 @@ mod tests {
     fn generates_bytecode_for_methods_with_bodies() -> RajacResult<()> {
         let mut arena = AstArena::new();
         let mut ast = Ast::new(SharedString::new("test"));
+        let type_arena = rajac_types::TypeArena::new();
 
         let void_ty = arena.alloc_type(AstType::Primitive {
             kind: PrimitiveType::Void,
@@ -721,7 +790,7 @@ mod tests {
 
         ast.classes.push(class_id);
 
-        let mut class_files = generate_classfiles(&ast, &arena)?;
+        let mut class_files = generate_classfiles(&ast, &arena, &type_arena)?;
         assert_eq!(class_files.len(), 1);
 
         let class_file = class_files.pop().unwrap();
@@ -756,6 +825,7 @@ mod tests {
     fn emits_inner_class_files_and_attributes() -> RajacResult<()> {
         let mut arena = AstArena::new();
         let mut ast = Ast::new(SharedString::new("test"));
+        let type_arena = rajac_types::TypeArena::new();
         ast.package = Some(PackageDecl {
             name: QualifiedName::new(vec![SharedString::new("p")]),
         });
@@ -786,7 +856,7 @@ mod tests {
 
         ast.classes.push(outer_id);
 
-        let class_files = generate_classfiles(&ast, &arena)?;
+        let class_files = generate_classfiles(&ast, &arena, &type_arena)?;
         assert_eq!(class_files.len(), 2);
 
         let mut outer = None;

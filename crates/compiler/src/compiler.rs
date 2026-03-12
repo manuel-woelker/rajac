@@ -466,7 +466,11 @@ impl Compiler {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     fn generate_classfiles(&mut self) -> RajacResult<usize> {
-        generation::generate_classfiles(&self.compilation_units, self.config.target_dir.as_path())
+        generation::generate_classfiles(
+            &self.compilation_units,
+            &self.type_arena,
+            self.config.target_dir.as_path(),
+        )
     }
 }
 

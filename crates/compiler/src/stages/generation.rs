@@ -126,12 +126,19 @@ use std::path::Path;
 /// - Interfaces and enums follow the same naming pattern
 pub fn generate_classfiles(
     compilation_units: &[CompilationUnit],
+    type_arena: &rajac_types::TypeArena,
     target_dir: &Path,
 ) -> RajacResult<usize> {
     let mut total_files = 0;
 
     for unit in compilation_units {
-        let count = emit_classfiles(&unit.ast, &unit.arena, &unit.source_file, target_dir)?;
+        let count = emit_classfiles(
+            &unit.ast,
+            &unit.arena,
+            type_arena,
+            &unit.source_file,
+            target_dir,
+        )?;
         total_files += count;
     }
 
@@ -170,10 +177,11 @@ pub fn generate_classfiles(
 fn emit_classfiles(
     ast: &rajac_ast::Ast,
     arena: &rajac_ast::AstArena,
+    type_arena: &rajac_types::TypeArena,
     source_file: &FilePath,
     target_dir: &Path,
 ) -> RajacResult<usize> {
-    let mut class_files = bytecode_generate_classfiles(ast, arena)?;
+    let mut class_files = bytecode_generate_classfiles(ast, arena, type_arena)?;
 
     for class_file in &mut class_files {
         let source_file_attribute_index = class_file.constant_pool.add_utf8("SourceFile")?;

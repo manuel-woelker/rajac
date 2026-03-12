@@ -725,6 +725,7 @@ mod tests {
     fn pretty_print_is_java_like_and_includes_details() {
         let mut arena = AstArena::new();
         let mut ast = Ast::new(SharedString::new("test"));
+        let type_arena = rajac_types::TypeArena::new();
 
         let int_ty = arena.alloc_type(AstType::Primitive {
             kind: PrimitiveType::Int,
@@ -765,7 +766,8 @@ mod tests {
         ast.classes.push(class_id);
 
         let class_file =
-            crate::classfile::classfile_from_class_decl(&ast, &arena, class_id).unwrap();
+            crate::classfile::classfile_from_class_decl(&ast, &arena, class_id, &type_arena)
+                .unwrap();
         class_file.verify().unwrap();
 
         let printed = pretty_print_classfile(&class_file);
