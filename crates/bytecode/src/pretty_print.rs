@@ -717,6 +717,7 @@ mod tests {
         Ast, AstArena, AstType, ClassDecl, ClassKind, ClassMember, Field, Method, Modifiers,
         PrimitiveType,
     };
+    use rajac_symbols::SymbolTable;
     use rajac_types::Ident;
     use ristretto_classfile::attributes::{InnerClass, NestedClassAccessFlags};
     use ristretto_classfile::{ClassAccessFlags, ConstantPool, JAVA_21};
@@ -726,6 +727,7 @@ mod tests {
         let mut arena = AstArena::new();
         let mut ast = Ast::new(SharedString::new("test"));
         let type_arena = rajac_types::TypeArena::new();
+        let symbol_table = SymbolTable::new();
 
         let int_ty = arena.alloc_type(AstType::Primitive {
             kind: PrimitiveType::Int,
@@ -765,9 +767,14 @@ mod tests {
         });
         ast.classes.push(class_id);
 
-        let class_file =
-            crate::classfile::classfile_from_class_decl(&ast, &arena, class_id, &type_arena)
-                .unwrap();
+        let class_file = crate::classfile::classfile_from_class_decl(
+            &ast,
+            &arena,
+            class_id,
+            &type_arena,
+            &symbol_table,
+        )
+        .unwrap();
         class_file.verify().unwrap();
 
         let printed = pretty_print_classfile(&class_file);

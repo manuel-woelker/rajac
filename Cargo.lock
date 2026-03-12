@@ -686,6 +686,7 @@ dependencies = [
  "expect-test",
  "rajac-ast",
  "rajac-base",
+ "rajac-symbols",
  "rajac-types",
  "ristretto_classfile",
 ]

@@ -3,8 +3,8 @@ use rajac_ast::{
     Ast, AstArena, AstType, ClassDecl, ClassDeclId, ClassKind, ClassMember, Field as AstField,
     Method as AstMethod, Modifiers, PrimitiveType,
 };
-use rajac_base::qualified_name::QualifiedName as ResolvedName;
 use rajac_base::result::{RajacResult, ResultExt};
+use rajac_symbols::SymbolTable;
 use rajac_types::Ident;
 use ristretto_classfile::attributes::{Attribute, InnerClass, NestedClassAccessFlags};
 use ristretto_classfile::{
@@ -25,11 +25,12 @@ pub fn generate_classfiles(
     ast: &Ast,
     arena: &AstArena,
     type_arena: &rajac_types::TypeArena,
+    symbol_table: &SymbolTable,
 ) -> RajacResult<Vec<ClassFile>> {
     let mut class_files = Vec::new();
     for class_id in &ast.classes {
         let class = arena.class_decl(*class_id);
-        let internal_name = internal_class_name(ast, &class.name);
+        let internal_name = internal_class_name(ast, &class.name, symbol_table);
         emit_classfiles_for_class(
             arena,
             *class_id,
@@ -37,6 +38,7 @@ pub fn generate_classfiles(
             None,
             &mut class_files,
             type_arena,
+            symbol_table,
         )?;
     }
     Ok(class_files)
@@ -47,9 +49,10 @@ pub fn classfile_from_class_decl(
     arena: &AstArena,
     class_id: ClassDeclId,
     type_arena: &rajac_types::TypeArena,
+    symbol_table: &SymbolTable,
 ) -> RajacResult<ClassFile> {
     let class = arena.class_decl(class_id);
-    let this_internal_name = internal_class_name(ast, &class.name);
+    let this_internal_name = internal_class_name(ast, &class.name, symbol_table);
     classfile_from_class_decl_with_context(
         arena,
         class_id,
@@ -67,6 +70,7 @@ fn emit_classfiles_for_class(
     outer_internal_name: Option<String>,
     class_files: &mut Vec<ClassFile>,
     type_arena: &rajac_types::TypeArena,
+    _symbol_table: &SymbolTable,
 ) -> RajacResult<()> {
     let class = arena.class_decl(class_id);
     let nested_classes = collect_nested_class_infos(arena, class, &this_internal_name);
@@ -89,6 +93,7 @@ fn emit_classfiles_for_class(
             Some(this_internal_name.clone()),
             class_files,
             type_arena,
+            _symbol_table,
         )?;
     }
 
@@ -237,21 +242,53 @@ fn collect_nested_class_infos(
     nested
 }
 
-fn internal_class_name(ast: &Ast, class_name: &Ident) -> String {
-    if class_name.qualified_name != ResolvedName::default() {
-        return qualified_name_to_internal(&class_name.qualified_name);
+fn internal_class_name(ast: &Ast, class_name: &Ident, symbol_table: &SymbolTable) -> String {
+    // Try to find the class in the symbol table first
+    let class_name_str = class_name.as_str();
+
+    // Check current package first
+    let current_package = ast
+        .package
+        .as_ref()
+        .map(|p| {
+            p.name
+                .segments
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(".")
+        })
+        .unwrap_or_default();
+
+    if let Some(pkg_table) = symbol_table.get_package(&current_package)
+        && pkg_table.contains(class_name_str)
+    {
+        let mut result = current_package.replace('.', "/");
+        if !result.is_empty() {
+            result.push('/');
+        }
+        result.push_str(class_name_str);
+        return result;
     }
 
+    // Check java.lang (implicitly imported)
+    if let Some(pkg_table) = symbol_table.get_package("java.lang")
+        && pkg_table.contains(class_name_str)
+    {
+        return format!("java/lang/{}", class_name_str);
+    }
+
+    // Fallback to package-based naming
     match &ast.package {
         Some(pkg) => {
             let mut s = pkg.name.segments.join("/");
             if !s.is_empty() {
                 s.push('/');
             }
-            s.push_str(class_name.as_str());
+            s.push_str(class_name_str);
             s
         }
-        None => class_name.as_str().to_string(),
+        None => class_name_str.to_string(),
     }
 }
 
@@ -632,14 +669,6 @@ fn type_to_internal_class_name(
     })
 }
 
-fn qualified_name_to_internal(name: &ResolvedName) -> String {
-    let package = name.package_name().as_str().replace('.', "/");
-    if package.is_empty() {
-        return name.name().as_str().to_string();
-    }
-    format!("{}/{}", package, name.name().as_str())
-}
-
 fn create_default_constructor(
     constant_pool: &mut ConstantPool,
     modifiers: &Modifiers,
@@ -702,6 +731,7 @@ mod tests {
         let mut arena = AstArena::new();
         let mut ast = Ast::new(SharedString::new("test"));
         let type_arena = rajac_types::TypeArena::new();
+        let symbol_table = SymbolTable::new();
 
         let void_ty = arena.alloc_type(AstType::Primitive {
             kind: PrimitiveType::Void,
@@ -742,7 +772,7 @@ mod tests {
 
         ast.classes.push(class_id);
 
-        let mut class_files = generate_classfiles(&ast, &arena, &type_arena)?;
+        let mut class_files = generate_classfiles(&ast, &arena, &type_arena, &symbol_table)?;
         assert_eq!(class_files.len(), 1);
 
         let class_file = class_files.pop().unwrap();
@@ -759,6 +789,7 @@ mod tests {
         let mut arena = AstArena::new();
         let mut ast = Ast::new(SharedString::new("test"));
         let type_arena = rajac_types::TypeArena::new();
+        let symbol_table = SymbolTable::new();
 
         let void_ty = arena.alloc_type(AstType::Primitive {
             kind: PrimitiveType::Void,
@@ -790,7 +821,7 @@ mod tests {
 
         ast.classes.push(class_id);
 
-        let mut class_files = generate_classfiles(&ast, &arena, &type_arena)?;
+        let mut class_files = generate_classfiles(&ast, &arena, &type_arena, &symbol_table)?;
         assert_eq!(class_files.len(), 1);
 
         let class_file = class_files.pop().unwrap();
@@ -826,6 +857,7 @@ mod tests {
         let mut arena = AstArena::new();
         let mut ast = Ast::new(SharedString::new("test"));
         let type_arena = rajac_types::TypeArena::new();
+        let symbol_table = SymbolTable::new();
         ast.package = Some(PackageDecl {
             name: QualifiedName::new(vec![SharedString::new("p")]),
         });
@@ -856,7 +888,7 @@ mod tests {
 
         ast.classes.push(outer_id);
 
-        let class_files = generate_classfiles(&ast, &arena, &type_arena)?;
+        let class_files = generate_classfiles(&ast, &arena, &type_arena, &symbol_table)?;
         assert_eq!(class_files.len(), 2);
 
         let mut outer = None;

@@ -110,7 +110,6 @@ use rajac_ast::{
 use rajac_base::qualified_name::QualifiedName as ResolvedName;
 use rajac_base::shared_string::SharedString;
 use rajac_symbols::SymbolTable;
-use rajac_types::Ident;
 
 /// Resolves identifiers and types in all compilation units.
 ///
@@ -238,7 +237,7 @@ fn resolve_class_decl(
 ) {
     let (members, extends, implements, permits) = {
         let class = &mut arena.class_decls[class_id.0 as usize];
-        resolve_ident(&mut class.name, context);
+        // Note: class names no longer need resolution since we use TypeIds for types
         for _param in &mut class.type_params {
             // TODO: Implement type parameter name resolution for SharedString
         }
@@ -305,14 +304,14 @@ fn resolve_enum_decl(
     context: &ResolveContext,
     type_arena: &mut rajac_types::TypeArena,
 ) {
-    resolve_ident(&mut enum_decl.name, context);
+    // Note: enum names no longer need resolution since we use TypeIds for types
 
     for type_id in enum_decl.implements.clone() {
         resolve_type(type_id, arena, context, type_arena);
     }
 
     for entry in &mut enum_decl.entries {
-        resolve_ident(&mut entry.name, context);
+        // Note: entry names no longer need resolution since they're just identifiers
         for expr_id in entry.args.clone() {
             resolve_expr(expr_id, arena, context, type_arena);
         }
@@ -335,7 +334,7 @@ fn resolve_field(
     context: &ResolveContext,
     type_arena: &mut rajac_types::TypeArena,
 ) {
-    resolve_ident(&mut field.name, context);
+    // Note: field names no longer need resolution since they're just identifiers
     resolve_type(field.ty, arena, context, type_arena);
     if let Some(expr_id) = field.initializer {
         resolve_expr(expr_id, arena, context, type_arena);
@@ -349,7 +348,7 @@ fn resolve_method(
     context: &ResolveContext,
     type_arena: &mut rajac_types::TypeArena,
 ) {
-    resolve_ident(&mut method.name, context);
+    // Note: method names no longer need resolution since they're just identifiers
     for param_id in method.params.clone() {
         resolve_param(param_id, arena, context, type_arena);
     }
@@ -369,7 +368,7 @@ fn resolve_constructor(
     context: &ResolveContext,
     type_arena: &mut rajac_types::TypeArena,
 ) {
-    resolve_ident(&mut constructor.name, context);
+    // Note: constructor names no longer need resolution since they're just identifiers
     for param_id in constructor.params.clone() {
         resolve_param(param_id, arena, context, type_arena);
     }
@@ -389,7 +388,7 @@ fn resolve_param(
     type_arena: &mut rajac_types::TypeArena,
 ) {
     let param = &mut arena.params[param_id.0 as usize];
-    resolve_ident(&mut param.name, context);
+    // Note: parameter names no longer need resolution since they're just identifiers
     resolve_type(param.ty, arena, context, type_arena);
 }
 
@@ -443,11 +442,11 @@ fn resolve_stmt(
                         rajac_ast::ForInit::Expr(expr_id) => exprs.push(*expr_id),
                         rajac_ast::ForInit::LocalVar {
                             ty,
-                            name,
+                            name: _,
                             initializer,
                         } => {
                             types.push(*ty);
-                            resolve_ident(name, context);
+                            // Note: local variable names no longer need resolution since they're just identifiers
                             if let Some(init) = initializer {
                                 exprs.push(*init);
                             }
@@ -480,12 +479,13 @@ fn resolve_stmt(
                 }
             }
             rajac_ast::Stmt::Break(name) | rajac_ast::Stmt::Continue(name) => {
-                if let Some(name) = name {
-                    resolve_ident(name, context);
+                if let Some(_name) = name {
+                    // Note: local variable names no longer need resolution since they're just identifiers
                 }
             }
             rajac_ast::Stmt::Label(name, body) => {
-                resolve_ident(name, context);
+                // Note: label names no longer need resolution since they're just identifiers
+                let _name = name;
                 stmts.push(*body);
             }
             rajac_ast::Stmt::Try {
@@ -511,11 +511,11 @@ fn resolve_stmt(
             }
             rajac_ast::Stmt::LocalVar {
                 ty,
-                name,
+                name: _,
                 initializer,
             } => {
                 types.push(*ty);
-                resolve_ident(name, context);
+                // Note: local variable names no longer need resolution since they're just identifiers
                 if let Some(init) = initializer {
                     exprs.push(*init);
                 }
@@ -553,7 +553,7 @@ fn resolve_expr(
 
         match expr {
             rajac_ast::Expr::Error => {}
-            rajac_ast::Expr::Ident(name) => resolve_ident(name, context),
+            rajac_ast::Expr::Ident(_name) => {} // Note: identifier names no longer need resolution
             rajac_ast::Expr::Literal(_) => {}
             rajac_ast::Expr::Unary { expr, .. } => exprs.push(*expr),
             rajac_ast::Expr::Binary { lhs, rhs, .. } => {
@@ -581,20 +581,20 @@ fn resolve_expr(
                 exprs.push(*expr);
                 types.push(*ty);
             }
-            rajac_ast::Expr::FieldAccess { expr, name } => {
+            rajac_ast::Expr::FieldAccess { expr, name: _ } => {
                 exprs.push(*expr);
-                resolve_ident(name, context);
+                // Note: local variable names no longer need resolution since they're just identifiers
             }
             rajac_ast::Expr::MethodCall {
                 expr,
-                name,
+                name: _,
                 type_args,
                 args,
             } => {
                 if let Some(expr_id) = expr {
                     exprs.push(*expr_id);
                 }
-                resolve_ident(name, context);
+                // Note: local variable names no longer need resolution since they're just identifiers
                 if let Some(type_args) = type_args {
                     types.extend(type_args.iter().copied());
                 }
@@ -620,11 +620,11 @@ fn resolve_expr(
             }
             rajac_ast::Expr::Super => {}
             rajac_ast::Expr::SuperCall {
-                name,
+                name: _,
                 type_args,
                 args,
             } => {
-                resolve_ident(name, context);
+                // Note: local variable names no longer need resolution since they're just identifiers
                 if let Some(type_args) = type_args {
                     types.extend(type_args.iter().copied());
                 }
@@ -699,17 +699,6 @@ fn resolve_type(
 
     for type_id in types {
         resolve_type(type_id, arena, context, _type_arena);
-    }
-}
-
-/// Resolves a single identifier if it maps to a known symbol.
-fn resolve_ident(ident: &mut Ident, context: &ResolveContext) {
-    if ident.qualified_name != ResolvedName::default() {
-        return;
-    }
-
-    if let Some(resolved) = resolve_class_name(&ident.name, context) {
-        ident.qualified_name = resolved;
     }
 }
 
