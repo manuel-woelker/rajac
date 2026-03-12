@@ -104,12 +104,13 @@ optimization of the resolution algorithms without affecting other phases.
 
 use crate::CompilationUnit;
 use rajac_ast::{
-    Ast, AstArena, ClassMemberId, Constructor, EnumDecl, ExprId, Field, Method, ParamId, StmtId,
+    Ast, AstArena, AstType, AstTypeId, ClassMemberId, Constructor, EnumDecl, ExprId, Field, Method,
+    ParamId, StmtId,
 };
 use rajac_base::qualified_name::QualifiedName as ResolvedName;
 use rajac_base::shared_string::SharedString;
 use rajac_symbols::SymbolTable;
-use rajac_types::{Ident, Type, TypeId, WildcardBound};
+use rajac_types::Ident;
 use rayon::prelude::*;
 
 /// Resolves identifiers and types in all compilation units.
@@ -229,8 +230,8 @@ fn resolve_class_decl(
     let (members, extends, implements, permits) = {
         let class = &mut arena.class_decls[class_id.0 as usize];
         resolve_ident(&mut class.name, context);
-        for param in &mut class.type_params {
-            resolve_ident(&mut param.name, context);
+        for _param in &mut class.type_params {
+            // TODO: Implement type parameter name resolution for SharedString
         }
         (
             class.members.clone(),
@@ -594,44 +595,25 @@ fn resolve_expr(expr_id: ExprId, arena: &mut AstArena, context: &ResolveContext)
 }
 
 /// Resolves identifiers in a type.
-fn resolve_type(type_id: TypeId, arena: &mut AstArena, context: &ResolveContext) {
+fn resolve_type(type_id: AstTypeId, arena: &mut AstArena, _context: &ResolveContext) {
     let types = {
         let ty = arena.ty_mut(type_id);
         let mut types = Vec::new();
 
         match ty {
-            Type::Error => {}
-            Type::Primitive(_) => {}
-            Type::Class(class_type) => {
-                // Note: class_type.name is now a String, not Ident
-                if !class_type.type_args.is_empty() {
-                    types.extend(class_type.type_args.iter().copied());
+            AstType::Error => {}
+            AstType::Primitive { .. } => {}
+            AstType::Simple { type_args, .. } => {
+                if !type_args.is_empty() {
+                    types.extend(type_args.iter().copied());
                 }
-                // Try to resolve the class name if it's not already qualified
-                if class_type.package.is_none()
-                    && let Some(resolved_name) =
-                        resolve_class_name(&SharedString::new(&class_type.name), context)
-                {
-                    // Update the class type with the resolved package
-                    let package = resolved_name.package_name().as_str();
-                    if !package.is_empty() {
-                        *ty = Type::Class(class_type.clone().with_package(package.to_string()));
-                    }
-                }
+                // TODO: Implement class name resolution for AstType::Simple
             }
-            Type::Array(array_type) => types.push(array_type.element_type),
-            Type::TypeVariable(_type_variable) => {
-                // Note: type_variable.name is now a String, not Ident
-                // resolve_ident(&type_variable.name, context);
+            AstType::Array { element_type, .. } => {
+                types.push(*element_type);
             }
-            Type::Wildcard(wildcard_type) => {
-                if let Some(ref bound) = wildcard_type.bound {
-                    match bound {
-                        WildcardBound::Extends(type_id) | WildcardBound::Super(type_id) => {
-                            types.push(*type_id)
-                        }
-                    }
-                }
+            AstType::Wildcard { .. } => {
+                // TODO: Handle wildcard bounds
             }
         }
 
@@ -639,7 +621,7 @@ fn resolve_type(type_id: TypeId, arena: &mut AstArena, context: &ResolveContext)
     };
 
     for type_id in types {
-        resolve_type(type_id, arena, context);
+        resolve_type(type_id, arena, _context);
     }
 }
 

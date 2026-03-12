@@ -713,8 +713,11 @@ fn format_instruction(
 mod tests {
     use super::*;
     use expect_test::expect;
-    use rajac_ast::{Ast, AstArena, ClassDecl, ClassKind, ClassMember, Field, Method, Modifiers};
-    use rajac_types::{Ident, PrimitiveType, Type};
+    use rajac_ast::{
+        Ast, AstArena, AstType, ClassDecl, ClassKind, ClassMember, Field, Method, Modifiers,
+        PrimitiveType,
+    };
+    use rajac_types::Ident;
     use ristretto_classfile::attributes::{InnerClass, NestedClassAccessFlags};
     use ristretto_classfile::{ClassAccessFlags, ConstantPool, JAVA_21};
 
@@ -723,8 +726,12 @@ mod tests {
         let mut arena = AstArena::new();
         let mut ast = Ast::new(SharedString::new("test"));
 
-        let int_ty = arena.alloc_type(Type::Primitive(PrimitiveType::Int));
-        let void_ty = arena.alloc_type(Type::Primitive(PrimitiveType::Void));
+        let int_ty = arena.alloc_type(AstType::Primitive {
+            kind: PrimitiveType::Int,
+        });
+        let void_ty = arena.alloc_type(AstType::Primitive {
+            kind: PrimitiveType::Void,
+        });
 
         let field = Field {
             name: Ident::new(SharedString::new("x")),

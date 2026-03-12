@@ -1,6 +1,8 @@
-use rajac_ast::{AstArena, Expr as AstExpr, ExprId, Literal, LiteralKind, Stmt, StmtId};
+use rajac_ast::{
+    AstArena, AstType, Expr as AstExpr, ExprId, Literal, LiteralKind, PrimitiveType, Stmt, StmtId,
+};
 use rajac_base::result::RajacResult;
-use rajac_types::{ClassType, Ident, PrimitiveType, Type, TypeId};
+use rajac_types::Ident;
 use ristretto_classfile::ConstantPool;
 use ristretto_classfile::attributes::Instruction;
 
@@ -128,15 +130,8 @@ impl<'arena> CodeGenerator<'arena> {
             }
             Stmt::Return(Some(expr_id)) => {
                 self.emit_expression(*expr_id)?;
-                let expr = self.arena.expr(*expr_id);
-                let ty = type_of_expr(expr);
-                match ty {
-                    Type::Primitive(PrimitiveType::Long) => self.emit(Instruction::Lreturn),
-                    Type::Primitive(PrimitiveType::Float) => self.emit(Instruction::Freturn),
-                    Type::Primitive(PrimitiveType::Double) => self.emit(Instruction::Dreturn),
-                    Type::Primitive(PrimitiveType::Void) => self.emit(Instruction::Return),
-                    _ => self.emit(Instruction::Areturn),
-                }
+                // For now, treat all returns as object references
+                self.emit(Instruction::Areturn);
             }
             Stmt::LocalVar {
                 ty,
@@ -152,11 +147,21 @@ impl<'arena> CodeGenerator<'arena> {
 
                     let ty = self.arena.ty(*ty);
                     match ty {
-                        Type::Primitive(PrimitiveType::Int)
-                        | Type::Primitive(PrimitiveType::Boolean)
-                        | Type::Primitive(PrimitiveType::Byte)
-                        | Type::Primitive(PrimitiveType::Short)
-                        | Type::Primitive(PrimitiveType::Char) => match slot {
+                        AstType::Primitive {
+                            kind: PrimitiveType::Int,
+                        }
+                        | AstType::Primitive {
+                            kind: PrimitiveType::Boolean,
+                        }
+                        | AstType::Primitive {
+                            kind: PrimitiveType::Byte,
+                        }
+                        | AstType::Primitive {
+                            kind: PrimitiveType::Short,
+                        }
+                        | AstType::Primitive {
+                            kind: PrimitiveType::Char,
+                        } => match slot {
                             0 => self.emit(Instruction::Istore_0),
                             1 => self.emit(Instruction::Istore_1),
                             2 => self.emit(Instruction::Istore_2),
@@ -529,25 +534,37 @@ impl<'arena> CodeGenerator<'arena> {
         Ok(())
     }
 
-    fn emit_cast(&mut self, target_ty: TypeId) -> RajacResult<()> {
+    fn emit_cast(&mut self, target_ty: rajac_ast::AstTypeId) -> RajacResult<()> {
         let target = self.arena.ty(target_ty);
         match target {
-            Type::Primitive(PrimitiveType::Byte) => {
+            AstType::Primitive {
+                kind: PrimitiveType::Byte,
+            } => {
                 self.emit(Instruction::I2b);
             }
-            Type::Primitive(PrimitiveType::Char) => {
+            AstType::Primitive {
+                kind: PrimitiveType::Char,
+            } => {
                 self.emit(Instruction::I2c);
             }
-            Type::Primitive(PrimitiveType::Short) => {
+            AstType::Primitive {
+                kind: PrimitiveType::Short,
+            } => {
                 self.emit(Instruction::I2s);
             }
-            Type::Primitive(PrimitiveType::Long) => {
+            AstType::Primitive {
+                kind: PrimitiveType::Long,
+            } => {
                 self.emit(Instruction::I2l);
             }
-            Type::Primitive(PrimitiveType::Float) => {
+            AstType::Primitive {
+                kind: PrimitiveType::Float,
+            } => {
                 self.emit(Instruction::I2f);
             }
-            Type::Primitive(PrimitiveType::Double) => {
+            AstType::Primitive {
+                kind: PrimitiveType::Double,
+            } => {
                 self.emit(Instruction::I2d);
             }
             _ => {}
@@ -647,79 +664,17 @@ impl<'arena> CodeGenerator<'arena> {
     }
 }
 
-fn type_of_expr(expr: &AstExpr) -> Type {
-    match expr {
-        AstExpr::Literal(lit) => match lit.kind {
-            LiteralKind::Int => Type::Primitive(PrimitiveType::Int),
-            LiteralKind::Long => Type::Primitive(PrimitiveType::Long),
-            LiteralKind::Float => Type::Primitive(PrimitiveType::Float),
-            LiteralKind::Double => Type::Primitive(PrimitiveType::Double),
-            LiteralKind::Bool => Type::Primitive(PrimitiveType::Boolean),
-            LiteralKind::Char => Type::Primitive(PrimitiveType::Char),
-            LiteralKind::String => {
-                let class_type = ClassType::new("String".to_string());
-                Type::class(class_type)
-            }
-            LiteralKind::Null => {
-                let class_type = ClassType::new("null".to_string());
-                Type::class(class_type)
-            }
-        },
-        AstExpr::Binary { op, .. } => match op {
-            rajac_ast::BinaryOp::Add
-            | rajac_ast::BinaryOp::Sub
-            | rajac_ast::BinaryOp::Mul
-            | rajac_ast::BinaryOp::Div
-            | rajac_ast::BinaryOp::Mod
-            | rajac_ast::BinaryOp::BitAnd
-            | rajac_ast::BinaryOp::BitOr
-            | rajac_ast::BinaryOp::BitXor
-            | rajac_ast::BinaryOp::LShift
-            | rajac_ast::BinaryOp::RShift
-            | rajac_ast::BinaryOp::ARShift => Type::Primitive(PrimitiveType::Int),
-            rajac_ast::BinaryOp::Lt
-            | rajac_ast::BinaryOp::LtEq
-            | rajac_ast::BinaryOp::Gt
-            | rajac_ast::BinaryOp::GtEq
-            | rajac_ast::BinaryOp::EqEq
-            | rajac_ast::BinaryOp::BangEq
-            | rajac_ast::BinaryOp::And
-            | rajac_ast::BinaryOp::Or => Type::Primitive(PrimitiveType::Boolean),
-        },
-        AstExpr::MethodCall { .. } => Type::Primitive(PrimitiveType::Void),
-        AstExpr::FieldAccess { .. } => Type::Primitive(PrimitiveType::Void),
-        AstExpr::This(_) => Type::Primitive(PrimitiveType::Void),
-        AstExpr::Super => Type::Primitive(PrimitiveType::Void),
-        AstExpr::New { ty: _, .. } => {
-            let class_type = ClassType::new("Object".to_string());
-            Type::class(class_type)
-        }
-        AstExpr::NewArray { ty, .. } => Type::array(*ty),
-        AstExpr::ArrayAccess { .. } => Type::Primitive(PrimitiveType::Void),
-        AstExpr::ArrayLength { .. } => Type::Primitive(PrimitiveType::Int),
-        AstExpr::Cast { ty: _, .. } => {
-            let class_type = ClassType::new("Object".to_string());
-            Type::class(class_type)
-        }
-        AstExpr::InstanceOf { .. } => Type::Primitive(PrimitiveType::Boolean),
-        AstExpr::Assign { .. } => Type::Primitive(PrimitiveType::Void),
-        AstExpr::Unary { .. } => Type::Primitive(PrimitiveType::Int),
-        AstExpr::Ternary { .. } => Type::Primitive(PrimitiveType::Void),
-        _ => Type::Primitive(PrimitiveType::Void),
-    }
-}
-
-fn type_to_internal_class_name(type_id: TypeId) -> String {
+fn type_to_internal_class_name(type_id: rajac_ast::AstTypeId) -> String {
     let _ = type_id;
     "java/lang/Object".to_string()
 }
 
-fn type_to_internal_class_name_from_type_id(type_id: TypeId) -> String {
+fn type_to_internal_class_name_from_type_id(type_id: rajac_ast::AstTypeId) -> String {
     let _ = type_id;
     "java/lang/Object".to_string()
 }
 
-fn type_to_descriptor(type_id: TypeId) -> String {
+fn type_to_descriptor(type_id: rajac_ast::AstTypeId) -> String {
     let _ = type_id;
     "Ljava/lang/Object;".to_string()
 }

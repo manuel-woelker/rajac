@@ -2,7 +2,7 @@ use rajac_ast::*;
 use rajac_base::shared_string::SharedString;
 use rajac_lexer::Lexer;
 use rajac_token::{Token, TokenKind};
-use rajac_types::{ClassType, Ident, PrimitiveType, Type, TypeId, TypeParam, WildcardBound};
+use rajac_types::Ident;
 use std::collections::VecDeque;
 
 /// Result of parsing, containing the AST and arena
@@ -323,7 +323,7 @@ impl<'a> Parser<'a> {
         Some(self.arena.alloc_class_decl(class_decl))
     }
 
-    fn parse_type_params(&mut self) -> Vec<TypeParam> {
+    fn parse_type_params(&mut self) -> Vec<AstTypeParam> {
         let mut params = Vec::new();
         if !self.consume(TokenKind::Lt) {
             return params;
@@ -346,7 +346,10 @@ impl<'a> Parser<'a> {
                     }
                 }
 
-                params.push(TypeParam { name, bounds });
+                params.push(AstTypeParam {
+                    name: name.name,
+                    bounds,
+                });
             }
 
             if !self.consume(TokenKind::Comma) {
@@ -611,7 +614,7 @@ impl<'a> Parser<'a> {
     fn parse_method(
         &mut self,
         name: Ident,
-        return_ty: TypeId,
+        return_ty: AstTypeId,
         modifiers: Modifiers,
     ) -> Option<MethodId> {
         self.expect(TokenKind::LParen);
@@ -720,51 +723,51 @@ impl<'a> Parser<'a> {
         params
     }
 
-    pub fn parse_type(&mut self) -> Option<TypeId> {
+    pub fn parse_type(&mut self) -> Option<AstTypeId> {
         let ty = match self.peek() {
             TokenKind::KwBoolean => {
                 self.bump();
-                Type::primitive(PrimitiveType::Boolean)
+                AstType::primitive(PrimitiveType::Boolean)
             }
             TokenKind::KwByte => {
                 self.bump();
-                Type::primitive(PrimitiveType::Byte)
+                AstType::primitive(PrimitiveType::Byte)
             }
             TokenKind::KwChar => {
                 self.bump();
-                Type::primitive(PrimitiveType::Char)
+                AstType::primitive(PrimitiveType::Char)
             }
             TokenKind::KwShort => {
                 self.bump();
-                Type::primitive(PrimitiveType::Short)
+                AstType::primitive(PrimitiveType::Short)
             }
             TokenKind::KwInt => {
                 self.bump();
-                Type::primitive(PrimitiveType::Int)
+                AstType::primitive(PrimitiveType::Int)
             }
             TokenKind::KwLong => {
                 self.bump();
-                Type::primitive(PrimitiveType::Long)
+                AstType::primitive(PrimitiveType::Long)
             }
             TokenKind::KwFloat => {
                 self.bump();
-                Type::primitive(PrimitiveType::Float)
+                AstType::primitive(PrimitiveType::Float)
             }
             TokenKind::KwDouble => {
                 self.bump();
-                Type::primitive(PrimitiveType::Double)
+                AstType::primitive(PrimitiveType::Double)
             }
             TokenKind::KwVoid => {
                 self.bump();
-                Type::primitive(PrimitiveType::Void)
+                AstType::primitive(PrimitiveType::Void)
             }
             TokenKind::KwVar => {
                 self.bump();
                 // var is desugared to int for now - type inference should happen in later phases
-                Type::primitive(PrimitiveType::Int)
+                AstType::primitive(PrimitiveType::Int)
             }
             TokenKind::Ident => {
-                let name = Ident::new(self.ident_text());
+                let name = self.ident_text();
                 self.bump();
 
                 let type_args = if self.is(TokenKind::Lt) {
@@ -773,9 +776,7 @@ impl<'a> Parser<'a> {
                     None
                 };
 
-                let class_type = ClassType::new(name.name.as_str().to_string())
-                    .with_type_args(type_args.unwrap_or_default());
-                Type::class(class_type)
+                AstType::simple_with_args(name, type_args.unwrap_or_default())
             }
             TokenKind::Question => {
                 self.bump();
@@ -786,24 +787,29 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
-                Type::wildcard(bound)
+                AstType::wildcard(bound)
             }
             _ => return None,
         };
 
-        let mut ty_id = self.arena.alloc_type(ty);
+        let ty_id = self.arena.alloc_type(ty);
 
         // Handle array notation
+        let mut dimensions = 0;
         while self.consume(TokenKind::LBracket) {
             self.expect(TokenKind::RBracket);
-            let array_type = Type::array(ty_id);
-            ty_id = self.arena.alloc_type(array_type);
+            dimensions += 1;
         }
 
-        Some(ty_id)
+        if dimensions > 0 {
+            let array_type = AstType::array(ty_id, dimensions);
+            Some(self.arena.alloc_type(array_type))
+        } else {
+            Some(ty_id)
+        }
     }
 
-    fn parse_type_arguments(&mut self) -> Option<Vec<TypeId>> {
+    fn parse_type_arguments(&mut self) -> Option<Vec<AstTypeId>> {
         if !self.consume(TokenKind::Lt) {
             return None;
         }
@@ -819,7 +825,7 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
-                let wildcard = Type::wildcard(bound);
+                let wildcard = AstType::wildcard(bound);
                 args.push(self.arena.alloc_type(wildcard));
             } else if let Some(ty) = self.parse_type() {
                 args.push(ty);

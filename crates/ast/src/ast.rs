@@ -1,5 +1,6 @@
+use super::ast_type::{AstTypeId, AstTypeParam};
 use rajac_base::shared_string::SharedString;
-use rajac_types::{Ident, TypeId, TypeParam};
+use rajac_types::Ident;
 use std::ops::Range;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -141,10 +142,10 @@ pub enum ClassKind {
 pub struct ClassDecl {
     pub kind: ClassKind,
     pub name: Ident,
-    pub type_params: Vec<TypeParam>,
-    pub extends: Option<TypeId>,
-    pub implements: Vec<TypeId>,
-    pub permits: Vec<TypeId>,
+    pub type_params: Vec<AstTypeParam>,
+    pub extends: Option<AstTypeId>,
+    pub implements: Vec<AstTypeId>,
+    pub permits: Vec<AstTypeId>,
     pub members: Vec<ClassMemberId>,
     pub modifiers: Modifiers,
 }
@@ -167,14 +168,14 @@ pub struct Constructor {
     pub name: Ident,
     pub params: Vec<ParamId>,
     pub body: Option<StmtId>,
-    pub throws: Vec<TypeId>,
+    pub throws: Vec<AstTypeId>,
     pub modifiers: Modifiers,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumDecl {
     pub name: Ident,
-    pub implements: Vec<TypeId>,
+    pub implements: Vec<AstTypeId>,
     pub entries: Vec<EnumEntry>,
     pub members: Vec<ClassMemberId>,
 }
@@ -229,7 +230,7 @@ pub enum Stmt {
         block: StmtId,
     },
     LocalVar {
-        ty: TypeId,
+        ty: AstTypeId,
         name: Ident,
         initializer: Option<ExprId>,
     },
@@ -239,7 +240,7 @@ pub enum Stmt {
 pub enum ForInit {
     Expr(ExprId),
     LocalVar {
-        ty: TypeId,
+        ty: AstTypeId,
         name: Ident,
         initializer: Option<ExprId>,
     },
@@ -288,12 +289,12 @@ pub enum Expr {
         else_expr: ExprId,
     },
     Cast {
-        ty: TypeId,
+        ty: AstTypeId,
         expr: ExprId,
     },
     InstanceOf {
         expr: ExprId,
-        ty: TypeId,
+        ty: AstTypeId,
     },
     FieldAccess {
         expr: ExprId,
@@ -302,15 +303,15 @@ pub enum Expr {
     MethodCall {
         expr: Option<ExprId>,
         name: Ident,
-        type_args: Option<Vec<TypeId>>,
+        type_args: Option<Vec<AstTypeId>>,
         args: Vec<ExprId>,
     },
     New {
-        ty: TypeId,
+        ty: AstTypeId,
         args: Vec<ExprId>,
     },
     NewArray {
-        ty: TypeId,
+        ty: AstTypeId,
         dimensions: Vec<ExprId>,
     },
     ArrayAccess {
@@ -324,14 +325,14 @@ pub enum Expr {
     Super,
     SuperCall {
         name: Ident,
-        type_args: Option<Vec<TypeId>>,
+        type_args: Option<Vec<AstTypeId>>,
         args: Vec<ExprId>,
     },
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
-    pub ty: TypeId,
+    pub ty: AstTypeId,
     pub name: Ident,
     pub varargs: bool,
 }
@@ -340,16 +341,16 @@ pub struct Param {
 pub struct Method {
     pub name: Ident,
     pub params: Vec<ParamId>,
-    pub return_ty: TypeId,
+    pub return_ty: AstTypeId,
     pub body: Option<StmtId>,
-    pub throws: Vec<TypeId>,
+    pub throws: Vec<AstTypeId>,
     pub modifiers: Modifiers,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Field {
     pub name: Ident,
-    pub ty: TypeId,
+    pub ty: AstTypeId,
     pub initializer: Option<ExprId>,
     pub modifiers: Modifiers,
 }

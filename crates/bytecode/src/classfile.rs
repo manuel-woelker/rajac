@@ -1,11 +1,11 @@
 use crate::bytecode::CodeGenerator;
 use rajac_ast::{
-    Ast, AstArena, ClassDecl, ClassDeclId, ClassKind, ClassMember, Field as AstField,
-    Method as AstMethod, Modifiers,
+    Ast, AstArena, AstType, ClassDecl, ClassDeclId, ClassKind, ClassMember, Field as AstField,
+    Method as AstMethod, Modifiers, PrimitiveType,
 };
 use rajac_base::qualified_name::QualifiedName as ResolvedName;
 use rajac_base::result::{RajacResult, ResultExt};
-use rajac_types::{Ident, PrimitiveType, Type};
+use rajac_types::Ident;
 use ristretto_classfile::attributes::{Attribute, InnerClass, NestedClassAccessFlags};
 use ristretto_classfile::{
     ClassAccessFlags, ClassFile, ConstantPool, Field, FieldAccessFlags, FieldType, JAVA_21, Method,
@@ -521,11 +521,11 @@ fn method_to_descriptor(arena: &AstArena, method: &AstMethod) -> RajacResult<Str
     Ok(s)
 }
 
-fn type_to_descriptor(arena: &AstArena, type_id: rajac_types::TypeId) -> RajacResult<String> {
+fn type_to_descriptor(arena: &AstArena, type_id: rajac_ast::AstTypeId) -> RajacResult<String> {
     let ty = arena.ty(type_id);
     Ok(match ty {
-        Type::Error => "Ljava/lang/Object;".to_string(),
-        Type::Primitive(p) => match p {
+        AstType::Error => "Ljava/lang/Object;".to_string(),
+        AstType::Primitive { kind: p } => match p {
             PrimitiveType::Boolean => "Z".to_string(),
             PrimitiveType::Byte => "B".to_string(),
             PrimitiveType::Char => "C".to_string(),
@@ -536,21 +536,30 @@ fn type_to_descriptor(arena: &AstArena, type_id: rajac_types::TypeId) -> RajacRe
             PrimitiveType::Double => "D".to_string(),
             PrimitiveType::Void => "V".to_string(),
         },
-        Type::Class(class_type) => format!("L{};", class_type.internal_name()),
-        Type::Array(array_type) => {
-            format!("[{}", type_to_descriptor(arena, array_type.element_type)?)
+        AstType::Simple { name, .. } => format!("L{};", name),
+        AstType::Array {
+            element_type,
+            dimensions,
+        } => {
+            let mut result = String::new();
+            for _ in 0..*dimensions {
+                result.push('[');
+            }
+            result.push_str(&type_to_descriptor(arena, *element_type)?);
+            result
         }
-        Type::TypeVariable { .. } | Type::Wildcard { .. } => "Ljava/lang/Object;".to_string(),
+        AstType::Wildcard { .. } => "Ljava/lang/Object;".to_string(),
     })
 }
 
 fn type_to_internal_class_name(
     arena: &AstArena,
-    type_id: rajac_types::TypeId,
+    type_id: rajac_ast::AstTypeId,
 ) -> RajacResult<String> {
     let ty = arena.ty(type_id);
     Ok(match ty {
-        Type::Class(class_type) => class_type.internal_name(),
+        AstType::Simple { name, .. } => name.as_str().to_string(),
+        AstType::Array { element_type, .. } => type_to_internal_class_name(arena, *element_type)?,
         _ => "java/lang/Object".to_string(),
     })
 }
@@ -614,19 +623,23 @@ fn create_default_constructor(
 mod tests {
     use super::*;
     use rajac_ast::{
-        Ast, AstArena, ClassDecl, ClassKind, ClassMember, Method, Modifiers, PackageDecl, Param,
-        QualifiedName,
+        Ast, AstArena, AstType, ClassDecl, ClassKind, ClassMember, Method, Modifiers, PackageDecl,
+        Param, PrimitiveType, QualifiedName,
     };
     use rajac_base::shared_string::SharedString;
-    use rajac_types::{Ident, PrimitiveType, Type};
+    use rajac_types::Ident;
 
     #[test]
     fn generates_minimal_abstract_method_without_code_attribute() -> RajacResult<()> {
         let mut arena = AstArena::new();
         let mut ast = Ast::new(SharedString::new("test"));
 
-        let void_ty = arena.alloc_type(Type::Primitive(PrimitiveType::Void));
-        let int_ty = arena.alloc_type(Type::Primitive(PrimitiveType::Int));
+        let void_ty = arena.alloc_type(AstType::Primitive {
+            kind: PrimitiveType::Void,
+        });
+        let int_ty = arena.alloc_type(AstType::Primitive {
+            kind: PrimitiveType::Int,
+        });
 
         let param_id = arena.alloc_param(Param {
             ty: int_ty,
@@ -675,7 +688,9 @@ mod tests {
         let mut arena = AstArena::new();
         let mut ast = Ast::new(SharedString::new("test"));
 
-        let void_ty = arena.alloc_type(Type::Primitive(PrimitiveType::Void));
+        let void_ty = arena.alloc_type(AstType::Primitive {
+            kind: PrimitiveType::Void,
+        });
         let empty_block = arena.alloc_stmt(rajac_ast::Stmt::Block(vec![]));
 
         let method = Method {
