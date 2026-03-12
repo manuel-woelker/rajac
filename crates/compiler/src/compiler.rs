@@ -179,6 +179,8 @@ pub struct Compiler {
     pub compilation_units: Vec<CompilationUnit>,
     /// Global symbol table for all compilation units
     pub symbol_table: SymbolTable,
+    /// Shared type arena for all compilation units
+    pub type_arena: rajac_types::TypeArena,
     /// Compilation statistics
     pub statistics: CompilationStatistics,
 }
@@ -211,6 +213,7 @@ impl Compiler {
             compilation_units: Vec::new(),
             java_files: Vec::new(),
             config,
+            type_arena: rajac_types::TypeArena::new(),
             statistics: CompilationStatistics::new(),
         }
     }
@@ -274,8 +277,11 @@ impl Compiler {
             },
             || {
                 stats.begin_phase(CompilationPhase::ClasspathCollect);
-                let result =
-                    collection::collect_classpath_symbols(&mut self.symbol_table, &classpaths);
+                let result = collection::collect_classpath_symbols(
+                    &mut self.symbol_table,
+                    &classpaths,
+                    &mut self.type_arena,
+                );
                 stats.end_phase(CompilationPhase::ClasspathCollect);
                 result
             },
@@ -376,6 +382,7 @@ impl Compiler {
         collection::collect_compilation_unit_symbols(
             &mut self.symbol_table,
             &self.compilation_units,
+            &mut self.type_arena,
         )
     }
 

@@ -84,6 +84,7 @@ use rajac_symbols::{Symbol, SymbolKind, SymbolTable};
 pub fn collect_classpath_symbols(
     symbol_table: &mut SymbolTable,
     classpaths: &[FilePath],
+    type_arena: &mut rajac_types::TypeArena,
 ) -> RajacResult<()> {
     let mut classpath = Classpath::new();
     for classpath_entry in classpaths {
@@ -97,7 +98,7 @@ pub fn collect_classpath_symbols(
         }
     }
     if !classpath.is_empty() {
-        classpath.add_to_symbol_table(symbol_table)?;
+        classpath.add_to_symbol_table(symbol_table, type_arena)?;
     }
     Ok(())
 }
@@ -114,9 +115,10 @@ pub fn collect_classpath_symbols(
 pub fn collect_compilation_unit_symbols(
     symbol_table: &mut SymbolTable,
     compilation_units: &[CompilationUnit],
+    type_arena: &mut rajac_types::TypeArena,
 ) -> RajacResult<()> {
     for unit in compilation_units {
-        populate_symbol_table(symbol_table, &unit.ast, &unit.arena);
+        populate_symbol_table(symbol_table, &unit.ast, &unit.arena, type_arena);
     }
     Ok(())
 }
@@ -147,7 +149,12 @@ pub fn collect_compilation_unit_symbols(
 /// - Defaults to empty package (default package) if none specified
 /// - Creates or retrieves the appropriate package in the symbol table
 /// - All symbols from the file are added to that package
-fn populate_symbol_table(symbol_table: &mut SymbolTable, ast: &Ast, arena: &AstArena) {
+fn populate_symbol_table(
+    symbol_table: &mut SymbolTable,
+    ast: &Ast,
+    arena: &AstArena,
+    type_arena: &mut rajac_types::TypeArena,
+) {
     let package_name = ast
         .package
         .as_ref()
@@ -171,6 +178,15 @@ fn populate_symbol_table(symbol_table: &mut SymbolTable, ast: &Ast, arena: &AstA
             ClassKind::Interface => SymbolKind::Interface,
             ClassKind::Enum | ClassKind::Record | ClassKind::Annotation => continue,
         };
-        package.insert(name.to_string(), Symbol::new(name, kind));
+
+        // Create the appropriate type in the TypeArena
+        let class_type = if !package_name.is_empty() {
+            rajac_types::ClassType::new(name.to_string()).with_package(package_name.clone())
+        } else {
+            rajac_types::ClassType::new(name.to_string())
+        };
+        let type_id = type_arena.alloc(rajac_types::Type::class(class_type));
+
+        package.insert(name.to_string(), Symbol::new(name, kind, type_id));
     }
 }

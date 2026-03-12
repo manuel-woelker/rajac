@@ -42,14 +42,18 @@ impl Classpath {
         self.entries.push(ClasspathEntry::Jar(path.into()));
     }
 
-    pub fn add_to_symbol_table(&self, symbol_table: &mut SymbolTable) -> RajacResult<()> {
+    pub fn add_to_symbol_table(
+        &self,
+        symbol_table: &mut SymbolTable,
+        type_arena: &mut rajac_types::TypeArena,
+    ) -> RajacResult<()> {
         for entry in &self.entries {
             match entry {
                 ClasspathEntry::Directory(dir) => {
-                    self.add_directory_to_symbol_table(dir, symbol_table)?;
+                    self.add_directory_to_symbol_table(dir, symbol_table, type_arena)?;
                 }
                 ClasspathEntry::Jar(jar) => {
-                    self.add_jar_to_symbol_table(jar, symbol_table)?;
+                    self.add_jar_to_symbol_table(jar, symbol_table, type_arena)?;
                 }
             }
         }
@@ -60,6 +64,7 @@ impl Classpath {
         &self,
         dir: &Path,
         symbol_table: &mut SymbolTable,
+        type_arena: &mut rajac_types::TypeArena,
     ) -> RajacResult<()> {
         if !dir.is_dir() {
             return Ok(());
@@ -83,7 +88,17 @@ impl Classpath {
                     } else {
                         SymbolKind::Class
                     };
-                    package.insert(parsed.class_name, Symbol::new(name, kind));
+
+                    // Create the appropriate type in the TypeArena
+                    let class_type = if !parsed.package.is_empty() {
+                        rajac_types::ClassType::new(parsed.class_name.clone())
+                            .with_package(parsed.package.clone())
+                    } else {
+                        rajac_types::ClassType::new(parsed.class_name.clone())
+                    };
+                    let type_id = type_arena.alloc(rajac_types::Type::class(class_type));
+
+                    package.insert(parsed.class_name, Symbol::new(name, kind, type_id));
                 }
             }
         }
@@ -95,6 +110,7 @@ impl Classpath {
         &self,
         jar: &Path,
         symbol_table: &mut SymbolTable,
+        type_arena: &mut rajac_types::TypeArena,
     ) -> RajacResult<()> {
         let file = File::open(jar).context("Failed to open JAR file")?;
         let mut archive = ZipArchive::new(file).context("Failed to read JAR file")?;
@@ -130,15 +146,24 @@ impl Classpath {
             parsed_classes.len()
         );
 
-        for (package, class_name, is_interface) in parsed_classes {
-            let package = symbol_table.package(&package);
+        for (package_name, class_name, is_interface) in parsed_classes {
+            let package = symbol_table.package(&package_name);
             let name = SharedString::new(class_name.clone());
             let kind = if is_interface {
                 SymbolKind::Interface
             } else {
                 SymbolKind::Class
             };
-            package.insert(class_name, Symbol::new(name, kind));
+
+            // Create the appropriate type in the TypeArena
+            let class_type = if !package_name.is_empty() {
+                rajac_types::ClassType::new(class_name.clone()).with_package(package_name.clone())
+            } else {
+                rajac_types::ClassType::new(class_name.clone())
+            };
+            let type_id = type_arena.alloc(rajac_types::Type::class(class_type));
+
+            package.insert(class_name, Symbol::new(name, kind, type_id));
         }
 
         Ok(())

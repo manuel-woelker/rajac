@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 rajac-base = { path = "../base" }
+rajac-types = { path = "../types" }
