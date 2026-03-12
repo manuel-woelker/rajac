@@ -728,9 +728,11 @@ mod tests {
 
         let int_ty = arena.alloc_type(AstType::Primitive {
             kind: PrimitiveType::Int,
+            ty: rajac_types::TypeId::INVALID,
         });
         let void_ty = arena.alloc_type(AstType::Primitive {
             kind: PrimitiveType::Void,
+            ty: rajac_types::TypeId::INVALID,
         });
 
         let field = Field {

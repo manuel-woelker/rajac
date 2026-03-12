@@ -525,7 +525,7 @@ fn type_to_descriptor(arena: &AstArena, type_id: rajac_ast::AstTypeId) -> RajacR
     let ty = arena.ty(type_id);
     Ok(match ty {
         AstType::Error => "Ljava/lang/Object;".to_string(),
-        AstType::Primitive { kind: p } => match p {
+        AstType::Primitive { kind: p, ty: _ } => match p {
             PrimitiveType::Boolean => "Z".to_string(),
             PrimitiveType::Byte => "B".to_string(),
             PrimitiveType::Char => "C".to_string(),
@@ -540,6 +540,7 @@ fn type_to_descriptor(arena: &AstArena, type_id: rajac_ast::AstTypeId) -> RajacR
         AstType::Array {
             element_type,
             dimensions,
+            ty: _,
         } => {
             let mut result = String::new();
             for _ in 0..*dimensions {
@@ -636,9 +637,11 @@ mod tests {
 
         let void_ty = arena.alloc_type(AstType::Primitive {
             kind: PrimitiveType::Void,
+            ty: rajac_types::TypeId::INVALID,
         });
         let int_ty = arena.alloc_type(AstType::Primitive {
             kind: PrimitiveType::Int,
+            ty: rajac_types::TypeId::INVALID,
         });
 
         let param_id = arena.alloc_param(Param {
@@ -690,6 +693,7 @@ mod tests {
 
         let void_ty = arena.alloc_type(AstType::Primitive {
             kind: PrimitiveType::Void,
+            ty: rajac_types::TypeId::INVALID,
         });
         let empty_block = arena.alloc_stmt(rajac_ast::Stmt::Block(vec![]));
 

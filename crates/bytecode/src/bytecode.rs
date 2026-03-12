@@ -149,18 +149,23 @@ impl<'arena> CodeGenerator<'arena> {
                     match ty {
                         AstType::Primitive {
                             kind: PrimitiveType::Int,
+                            ty: _,
                         }
                         | AstType::Primitive {
                             kind: PrimitiveType::Boolean,
+                            ty: _,
                         }
                         | AstType::Primitive {
                             kind: PrimitiveType::Byte,
+                            ty: _,
                         }
                         | AstType::Primitive {
                             kind: PrimitiveType::Short,
+                            ty: _,
                         }
                         | AstType::Primitive {
                             kind: PrimitiveType::Char,
+                            ty: _,
                         } => match slot {
                             0 => self.emit(Instruction::Istore_0),
                             1 => self.emit(Instruction::Istore_1),
@@ -539,31 +544,37 @@ impl<'arena> CodeGenerator<'arena> {
         match target {
             AstType::Primitive {
                 kind: PrimitiveType::Byte,
+                ty: _,
             } => {
                 self.emit(Instruction::I2b);
             }
             AstType::Primitive {
                 kind: PrimitiveType::Char,
+                ty: _,
             } => {
                 self.emit(Instruction::I2c);
             }
             AstType::Primitive {
                 kind: PrimitiveType::Short,
+                ty: _,
             } => {
                 self.emit(Instruction::I2s);
             }
             AstType::Primitive {
                 kind: PrimitiveType::Long,
+                ty: _,
             } => {
                 self.emit(Instruction::I2l);
             }
             AstType::Primitive {
                 kind: PrimitiveType::Float,
+                ty: _,
             } => {
                 self.emit(Instruction::I2f);
             }
             AstType::Primitive {
                 kind: PrimitiveType::Double,
+                ty: _,
             } => {
                 self.emit(Instruction::I2d);
             }

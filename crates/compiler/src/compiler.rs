@@ -418,7 +418,11 @@ impl Compiler {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     fn resolve_identifiers(&mut self) {
-        resolution::resolve_identifiers(&mut self.compilation_units, &self.symbol_table);
+        resolution::resolve_identifiers(
+            &mut self.compilation_units,
+            &self.symbol_table,
+            &mut self.type_arena,
+        );
     }
 
     /// Generates bytecode class files from the resolved compilation units.
