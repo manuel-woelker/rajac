@@ -18,11 +18,11 @@ enum ClasspathEntry {
 }
 
 struct ParsedClass {
-    package: String,
-    class_name: String,
+    package: SharedString,
+    class_name: SharedString,
     is_interface: bool,
-    super_class: Option<String>,
-    interfaces: Vec<String>,
+    super_class: Option<SharedString>,
+    interfaces: Vec<SharedString>,
 }
 
 impl Classpath {
@@ -93,7 +93,7 @@ impl Classpath {
         // Second pass: Create all classes in symbol table and type arena
         for parsed_class in &parsed_classes {
             let package = symbol_table.package(&parsed_class.package);
-            let name = SharedString::new(parsed_class.class_name.clone());
+            let name = parsed_class.class_name.clone();
             let kind = if parsed_class.is_interface {
                 SymbolKind::Interface
             } else {
@@ -102,15 +102,15 @@ impl Classpath {
 
             // Create the appropriate type in the TypeArena (without superclass/interfaces for now)
             let class_type = if !parsed_class.package.is_empty() {
-                rajac_types::ClassType::new(parsed_class.class_name.clone())
-                    .with_package(parsed_class.package.clone())
+                rajac_types::ClassType::new(parsed_class.class_name.as_str().to_string())
+                    .with_package(parsed_class.package.as_str().to_string())
             } else {
-                rajac_types::ClassType::new(parsed_class.class_name.clone())
+                rajac_types::ClassType::new(parsed_class.class_name.as_str().to_string())
             };
             let type_id = type_arena.alloc(rajac_types::Type::class(class_type));
 
             package.insert(
-                parsed_class.class_name.clone(),
+                parsed_class.class_name.to_string(),
                 Symbol::new(name, kind, type_id),
             );
         }
@@ -164,7 +164,7 @@ impl Classpath {
         // First pass: Create all classes in symbol table and type arena
         for parsed_class in &parsed_classes {
             let package = symbol_table.package(&parsed_class.package);
-            let name = SharedString::new(parsed_class.class_name.clone());
+            let name = parsed_class.class_name.clone();
             let kind = if parsed_class.is_interface {
                 SymbolKind::Interface
             } else {
@@ -173,15 +173,15 @@ impl Classpath {
 
             // Create the appropriate type in the TypeArena (without superclass/interfaces for now)
             let class_type = if !parsed_class.package.is_empty() {
-                rajac_types::ClassType::new(parsed_class.class_name.clone())
-                    .with_package(parsed_class.package.clone())
+                rajac_types::ClassType::new(parsed_class.class_name.as_str().to_string())
+                    .with_package(parsed_class.package.as_str().to_string())
             } else {
-                rajac_types::ClassType::new(parsed_class.class_name.clone())
+                rajac_types::ClassType::new(parsed_class.class_name.as_str().to_string())
             };
             let type_id = type_arena.alloc(rajac_types::Type::class(class_type));
 
             package.insert(
-                parsed_class.class_name.clone(),
+                parsed_class.class_name.to_string(),
                 Symbol::new(name, kind, type_id),
             );
         }
@@ -204,11 +204,11 @@ fn parse_class_file(class_file: &ClassFile) -> Option<ParsedClass> {
 
     let (package, class_name) = if let Some(last_slash) = internal_name.rfind('/') {
         (
-            internal_name[..last_slash].replace('/', "."),
-            internal_name[last_slash + 1..].to_string(),
+            SharedString::new(internal_name[..last_slash].replace('/', ".")),
+            SharedString::new(&internal_name[last_slash + 1..]),
         )
     } else {
-        (String::new(), internal_name.to_string())
+        (SharedString::new(""), SharedString::new(internal_name))
     };
 
     let is_interface = class_file
@@ -221,13 +221,13 @@ fn parse_class_file(class_file: &ClassFile) -> Option<ParsedClass> {
             .constant_pool
             .try_get_class(class_file.super_class)
             .ok()
-            .map(|name| name.replace('/', "."))
+            .map(|name| SharedString::new(name.replace('/', ".")))
     } else {
         None
     };
 
     // Extract interface information
-    let interfaces: Vec<String> = class_file
+    let interfaces: Vec<SharedString> = class_file
         .interfaces
         .iter()
         .filter_map(|&interface_idx| {
@@ -235,7 +235,7 @@ fn parse_class_file(class_file: &ClassFile) -> Option<ParsedClass> {
                 .constant_pool
                 .try_get_class(interface_idx)
                 .ok()
-                .map(|name| name.replace('/', "."))
+                .map(|name| SharedString::new(name.replace('/', ".")))
         })
         .collect();
 
@@ -290,18 +290,18 @@ fn resolve_class_relationships(
 }
 
 fn find_type_id_for_class(
-    class_name: &str,
+    class_name: &SharedString,
     symbol_table: &SymbolTable,
     type_arena: &rajac_types::TypeArena,
 ) -> Option<rajac_types::TypeId> {
     // Parse the class name to extract package and simple name
     let (package, simple_name) = if let Some(last_dot) = class_name.rfind('.') {
         (
-            class_name[..last_dot].to_string(),
-            class_name[last_dot + 1..].to_string(),
+            SharedString::new(&class_name[..last_dot]),
+            SharedString::new(&class_name[last_dot + 1..]),
         )
     } else {
-        (String::new(), class_name.to_string())
+        (SharedString::new(""), class_name.clone())
     };
 
     // Look up the class in the symbol table
