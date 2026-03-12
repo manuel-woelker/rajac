@@ -254,10 +254,33 @@ impl Compiler {
             return Ok(());
         }
 
-        // Stage 2: Parsing - Convert source to ASTs
-        self.parse_files()?;
+        // Stage 2: Parse source files AND collect classpath symbols in parallel
+        let java_files = std::mem::replace(&mut self.java_files, Vec::new());
+        let java_files_clone = java_files.clone();
+        let classpaths = self.config.classpaths.clone();
 
-        // Stage 3: Collection - Build symbol tables
+        let parse_result = rayon::scope(|s| {
+            let (tx, rx) = std::sync::mpsc::channel();
+
+            // Spawn parsing in parallel
+            s.spawn(move |_| {
+                let result = parsing::parse_files(&java_files_clone);
+                let _ = tx.send(result);
+            });
+
+            // Collect classpath symbols (already parallelized internally via rayon in classpath crate)
+            // Note: Errors are logged internally and won't affect compilation
+            s.spawn(|_| {
+                let _ = collection::collect_classpath_symbols(&mut self.symbol_table, &classpaths);
+            });
+
+            rx.recv().unwrap()
+        });
+
+        self.java_files = java_files;
+        self.compilation_units = parse_result?;
+
+        // Stage 3: Collect symbols from compilation units
         self.collect_symbols()?;
 
         // Stage 4: Resolution - Resolve identifiers and types
@@ -378,10 +401,9 @@ impl Compiler {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     fn collect_symbols(&mut self) -> RajacResult<()> {
-        collection::collect_symbols(
+        collection::collect_compilation_unit_symbols(
             &mut self.symbol_table,
             &self.compilation_units,
-            &self.config.classpaths,
         )
     }
 

@@ -62,71 +62,29 @@ use rajac_base::result::RajacResult;
 use rajac_classpath::Classpath;
 use rajac_symbols::{Symbol, SymbolKind, SymbolTable};
 
-/// Populates the symbol table with symbols from compilation units and classpath entries.
+/// Populates the symbol table with symbols from classpath entries.
 ///
-/// This function performs comprehensive symbol collection by:
-/// 1. Loading symbols from configured classpath entries (jar files and directories)
-/// 2. Processing all compilation units to extract user-defined symbols
-/// 3. Organizing symbols by package hierarchy
+/// This function loads symbols from JAR files and directories in parallel using rayon.
+/// It can be run concurrently with parsing since it doesn't depend on parsed ASTs.
 ///
 /// # Parameters
 ///
 /// - `symbol_table` - Mutable reference to the symbol table to populate
-/// - `compilation_units` - Slice of compilation units containing parsed ASTs
 /// - `classpaths` - List of classpath entries (jar files and directories) to load symbols from
 ///
 /// # Returns
 ///
-/// `Ok(())` if symbol collection succeeds, or an error if:
-/// - Classpath entries cannot be loaded or parsed
-/// - Symbol table population encounters conflicts
-/// - AST structure is invalid or corrupted
+/// `Ok(())` if symbol collection succeeds, or an error if classpath entries cannot be loaded.
 ///
 /// # Classpath Entries
 ///
 /// Each classpath entry can be:
 /// - A JAR file (`.jar`) - all classes are loaded into the symbol table
 /// - A directory - all `.class` files are loaded into the symbol table
-///
-/// # Examples
-///
-/// ```rust,no_run,ignore
-/// use rajac_compiler::stages::collection;
-/// use rajac_compiler::CompilationUnit;
-/// use rajac_symbols::SymbolTable;
-/// use rajac_base::file_path::FilePath;
-///
-/// let compilation_units = vec!/* parsed compilation units */;
-/// let classpaths = vec![
-///     FilePath::new("/usr/lib/jvm/java-8-openjdk/jre/lib/rt.jar"),
-/// ];
-/// let mut symbol_table = SymbolTable::new();
-///
-/// match collection::collect_symbols(&mut symbol_table, &compilation_units, &classpaths) {
-///     Ok(()) => {
-///         println!("Successfully collected symbols");
-///         // Symbol table is now ready for resolution phase
-///     }
-///     Err(e) => {
-///         eprintln!("Symbol collection failed: {:?}", e);
-///     }
-/// }
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// ```
-///
-/// # Symbol Organization
-///
-/// Symbols are organized by:
-/// - **Package** - Top-level organization (e.g., "com.example")
-/// - **Class/Interface** - Type declarations within packages
-/// - **Kind** - Distinguishes between classes and interfaces
-/// - **Name** - Simple name without package qualification
-pub fn collect_symbols(
+pub fn collect_classpath_symbols(
     symbol_table: &mut SymbolTable,
-    compilation_units: &[CompilationUnit],
     classpaths: &[FilePath],
 ) -> RajacResult<()> {
-    // Add symbols from classpath entries
     let mut classpath = Classpath::new();
     for classpath_entry in classpaths {
         let path = classpath_entry.as_path();
@@ -141,12 +99,25 @@ pub fn collect_symbols(
     if !classpath.is_empty() {
         classpath.add_to_symbol_table(symbol_table)?;
     }
+    Ok(())
+}
 
-    // Add symbols from compilation units
+/// Populates the symbol table with symbols from compilation units.
+///
+/// This function processes parsed ASTs to extract user-defined symbols.
+/// It should be called after parsing is complete.
+///
+/// # Parameters
+///
+/// - `symbol_table` - Mutable reference to the symbol table to populate
+/// - `compilation_units` - Slice of compilation units containing parsed ASTs
+pub fn collect_compilation_unit_symbols(
+    symbol_table: &mut SymbolTable,
+    compilation_units: &[CompilationUnit],
+) -> RajacResult<()> {
     for unit in compilation_units {
         populate_symbol_table(symbol_table, &unit.ast, &unit.arena);
     }
-
     Ok(())
 }
 
