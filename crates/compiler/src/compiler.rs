@@ -34,7 +34,7 @@ responsibilities and well-defined inputs/outputs.
 //! use rajac_base::file_path::FilePath;
 //!
 //! let config = CompilerConfig {
-//!     source_dir: FilePath::new("src/main/java"),
+//!     source_dirs: vec![FilePath::new("src/main/java")],
 //!     target_dir: FilePath::new("target/classes"),
 //! };
 //! let mut compiler = Compiler::new(config);
@@ -77,14 +77,14 @@ pub struct CompilationUnit {
     pub arena: rajac_ast::AstArena,
 }
 
-/// Configuration for the compiler specifying source and target directories.
+/// Configuration for the compiler specifying source directories and target directory.
 ///
 /// This struct defines where the compiler should look for Java source files
 /// and where it should output the generated class files.
 ///
 /// # Fields
 ///
-/// - `source_dir` - Directory containing Java source files to compile
+/// - `source_dirs` - List of directories containing Java source files to compile
 /// - `target_dir` - Directory where compiled class files will be written
 ///
 /// # Example
@@ -94,14 +94,17 @@ pub struct CompilationUnit {
 /// use rajac_base::file_path::FilePath;
 ///
 /// let config = CompilerConfig {
-///     source_dir: FilePath::new("src/main/java"),
+///     source_dirs: vec![
+///         FilePath::new("src/main/java"),
+///         FilePath::new("src/test/java"),
+///     ],
 ///     target_dir: FilePath::new("build/classes"),
 /// };
 /// ```
 #[derive(Debug, Clone)]
 pub struct CompilerConfig {
-    /// Directory containing Java source files
-    pub source_dir: FilePath,
+    /// List of directories containing Java source files
+    pub source_dirs: Vec<FilePath>,
     /// Directory where class files will be generated
     pub target_dir: FilePath,
 }
@@ -131,7 +134,7 @@ pub struct CompilerConfig {
 /// # use rajac_compiler::{Compiler, CompilerConfig};
 /// # use rajac_base::file_path::FilePath;
 /// # let config = CompilerConfig {
-/// #     source_dir: FilePath::new("src"),
+/// #     source_dirs: vec![FilePath::new("src")],
 /// #     target_dir: FilePath::new("target"),
 /// # };
 /// let mut compiler = Compiler::new(config);
@@ -147,7 +150,7 @@ pub struct CompilerConfig {
 /// # use rajac_compiler::{Compiler, CompilerConfig};
 /// # use rajac_base::file_path::FilePath;
 /// # let config = CompilerConfig {
-/// #     source_dir: FilePath::new("src"),
+/// #     source_dirs: vec![FilePath::new("src")],
 /// #     target_dir: FilePath::new("target"),
 /// # };
 /// let mut compiler = Compiler::new(config);
@@ -191,7 +194,7 @@ impl Compiler {
     /// # use rajac_compiler::{Compiler, CompilerConfig};
     /// # use rajac_base::file_path::FilePath;
     /// let config = CompilerConfig {
-    ///     source_dir: FilePath::new("src"),
+    ///     source_dirs: vec![FilePath::new("src")],
     ///     target_dir: FilePath::new("target"),
     /// };
     /// let compiler = Compiler::new(config);
@@ -232,7 +235,7 @@ impl Compiler {
     /// # use rajac_compiler::{Compiler, CompilerConfig};
     /// # use rajac_base::file_path::FilePath;
     /// # let config = CompilerConfig {
-    /// #     source_dir: FilePath::new("src"),
+    /// #     source_dirs: vec![FilePath::new("src")],
     /// #     target_dir: FilePath::new("target"),
     /// # };
     /// let mut compiler = Compiler::new(config);
@@ -280,7 +283,7 @@ impl Compiler {
     /// # use rajac_compiler::{Compiler, CompilerConfig};
     /// # use rajac_base::file_path::FilePath;
     /// # let config = CompilerConfig {
-    /// #     source_dir: FilePath::new("src"),
+    /// #     source_dirs: vec![FilePath::new("src")],
     /// #     target_dir: FilePath::new("target"),
     /// # };
     /// let mut compiler = Compiler::new(config);
@@ -290,7 +293,11 @@ impl Compiler {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     fn discover_files(&mut self) -> RajacResult<()> {
-        self.java_files = discovery::find_java_files(self.config.source_dir.as_path())?;
+        self.java_files.clear();
+        for source_dir in &self.config.source_dirs {
+            let mut files = discovery::find_java_files(source_dir.as_path())?;
+            self.java_files.append(&mut files);
+        }
         Ok(())
     }
 
@@ -318,7 +325,7 @@ impl Compiler {
     /// # use rajac_compiler::{Compiler, CompilerConfig};
     /// # use rajac_base::file_path::FilePath;
     /// # let config = CompilerConfig {
-    /// #     source_dir: FilePath::new("src"),
+    /// #     source_dirs: vec![FilePath::new("src")],
     /// #     target_dir: FilePath::new("target"),
     /// # };
     /// let mut compiler = Compiler::new(config);
@@ -357,7 +364,7 @@ impl Compiler {
     /// # use rajac_compiler::{Compiler, CompilerConfig};
     /// # use rajac_base::file_path::FilePath;
     /// # let config = CompilerConfig {
-    /// #     source_dir: FilePath::new("src"),
+    /// #     source_dirs: vec![FilePath::new("src")],
     /// #     target_dir: FilePath::new("target"),
     /// # };
     /// let mut compiler = Compiler::new(config);
@@ -393,7 +400,7 @@ impl Compiler {
     /// # use rajac_compiler::{Compiler, CompilerConfig};
     /// # use rajac_base::file_path::FilePath;
     /// # let config = CompilerConfig {
-    /// #     source_dir: FilePath::new("src"),
+    /// #     source_dirs: vec![FilePath::new("src")],
     /// #     target_dir: FilePath::new("target"),
     /// # };
     /// let mut compiler = Compiler::new(config);
@@ -434,7 +441,7 @@ impl Compiler {
     /// # use rajac_compiler::{Compiler, CompilerConfig};
     /// # use rajac_base::file_path::FilePath;
     /// # let config = CompilerConfig {
-    /// #     source_dir: FilePath::new("src"),
+    /// #     source_dirs: vec![FilePath::new("src")],
     /// #     target_dir: FilePath::new("target"),
     /// # };
     /// let mut compiler = Compiler::new(config);
@@ -473,7 +480,7 @@ impl Default for Compiler {
     /// ```
     fn default() -> Self {
         Self::new(CompilerConfig {
-            source_dir: FilePath::default(),
+            source_dirs: Vec::new(),
             target_dir: FilePath::default(),
         })
     }

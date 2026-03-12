@@ -34,7 +34,7 @@ fn main() -> RajacResult<()> {
 fn compile_with_rajac(sources_dir: &Path, output_dir: &Path) -> RajacResult<()> {
     // Compile sources with rajac using the Compiler struct
     let config = CompilerConfig {
-        source_dir: FilePath::new(sources_dir),
+        source_dirs: vec![FilePath::new(sources_dir)],
         target_dir: FilePath::new(output_dir),
     };
     let mut compiler = Compiler::new(config);

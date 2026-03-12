@@ -20,7 +20,7 @@
 //! use rajac_base::file_path::FilePath;
 //!
 //! let config = CompilerConfig {
-//!     source_dir: FilePath::new("src"),
+//!     source_dirs: vec![FilePath::new("src")],
 //!     target_dir: FilePath::new("target/classes"),
 //! };
 //! let mut compiler = Compiler::new(config);

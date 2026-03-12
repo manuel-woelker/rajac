@@ -11,6 +11,8 @@
 //! ```
 //!
 //! If no source directory is provided, it defaults to "ballpit".
+//! The compiler currently supports a single source directory, but the
+//! underlying configuration supports multiple source directories for future use.
 //!
 //! ## Examples
 //!
@@ -45,7 +47,7 @@ fn main() {
     let source_dir = Path::new(&dir);
 
     let config = CompilerConfig {
-        source_dir: FilePath::new(source_dir),
+        source_dirs: vec![FilePath::new(source_dir)],
         target_dir: FilePath::new(source_dir.join("classes")),
     };
     let mut compiler = Compiler::new(config);
