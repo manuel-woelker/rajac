@@ -102,15 +102,15 @@ impl Classpath {
 
             // Create the appropriate type in the TypeArena (without superclass/interfaces for now)
             let class_type = if !parsed_class.package.is_empty() {
-                rajac_types::ClassType::new(parsed_class.class_name.as_str().to_string())
-                    .with_package(parsed_class.package.as_str().to_string())
+                rajac_types::ClassType::new(parsed_class.class_name.clone())
+                    .with_package(parsed_class.package.clone())
             } else {
-                rajac_types::ClassType::new(parsed_class.class_name.as_str().to_string())
+                rajac_types::ClassType::new(parsed_class.class_name.clone())
             };
             let type_id = type_arena.alloc(rajac_types::Type::class(class_type));
 
             package.insert(
-                parsed_class.class_name.to_string(),
+                parsed_class.class_name.clone(),
                 Symbol::new(name, kind, type_id),
             );
         }
@@ -173,15 +173,15 @@ impl Classpath {
 
             // Create the appropriate type in the TypeArena (without superclass/interfaces for now)
             let class_type = if !parsed_class.package.is_empty() {
-                rajac_types::ClassType::new(parsed_class.class_name.as_str().to_string())
-                    .with_package(parsed_class.package.as_str().to_string())
+                rajac_types::ClassType::new(parsed_class.class_name.clone())
+                    .with_package(parsed_class.package.clone())
             } else {
-                rajac_types::ClassType::new(parsed_class.class_name.as_str().to_string())
+                rajac_types::ClassType::new(parsed_class.class_name.clone())
             };
             let type_id = type_arena.alloc(rajac_types::Type::class(class_type));
 
             package.insert(
-                parsed_class.class_name.to_string(),
+                parsed_class.class_name.clone(),
                 Symbol::new(name, kind, type_id),
             );
         }

@@ -1,16 +1,17 @@
 use crate::TypeId;
+use rajac_base::shared_string::SharedString;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassType {
-    pub name: String,
-    pub package: Option<String>,
+    pub name: SharedString,
+    pub package: Option<SharedString>,
     pub type_args: Vec<TypeId>,
     pub superclass: Option<TypeId>,
     pub interfaces: Vec<TypeId>,
 }
 
 impl ClassType {
-    pub fn new(name: String) -> Self {
+    pub fn new(name: SharedString) -> Self {
         Self {
             name,
             package: None,
@@ -20,7 +21,7 @@ impl ClassType {
         }
     }
 
-    pub fn with_package(mut self, package_: String) -> Self {
+    pub fn with_package(mut self, package_: SharedString) -> Self {
         self.package = Some(package_);
         self
     }
@@ -42,8 +43,8 @@ impl ClassType {
 
     pub fn internal_name(&self) -> String {
         match &self.package {
-            Some(pkg) => format!("{}/{}", pkg.replace('.', "/"), self.name),
-            None => self.name.replace('.', "/"),
+            Some(pkg) => format!("{}/{}", pkg.as_str().replace('.', "/"), self.name.as_str()),
+            None => self.name.as_str().replace('.', "/"),
         }
     }
 }

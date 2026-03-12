@@ -1,9 +1,10 @@
 use crate::Symbol;
+use rajac_base::shared_string::SharedString;
 use std::collections::HashMap;
 
 #[derive(Debug, Default)]
 pub struct PackageTable {
-    symbols: HashMap<String, Symbol>,
+    symbols: HashMap<SharedString, Symbol>,
 }
 
 impl PackageTable {
@@ -13,7 +14,7 @@ impl PackageTable {
         }
     }
 
-    pub fn insert(&mut self, name: String, symbol: Symbol) -> Option<Symbol> {
+    pub fn insert(&mut self, name: SharedString, symbol: Symbol) -> Option<Symbol> {
         self.symbols.insert(name, symbol)
     }
 
@@ -25,7 +26,7 @@ impl PackageTable {
         self.symbols.contains_key(name)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&String, &Symbol)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&SharedString, &Symbol)> {
         self.symbols.iter()
     }
 

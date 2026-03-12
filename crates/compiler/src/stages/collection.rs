@@ -59,6 +59,7 @@ use crate::CompilationUnit;
 use rajac_ast::{Ast, AstArena, ClassKind};
 use rajac_base::file_path::FilePath;
 use rajac_base::result::RajacResult;
+use rajac_base::shared_string::SharedString;
 use rajac_classpath::Classpath;
 use rajac_symbols::{Symbol, SymbolKind, SymbolTable};
 
@@ -181,12 +182,12 @@ fn populate_symbol_table(
 
         // Create the appropriate type in the TypeArena
         let class_type = if !package_name.is_empty() {
-            rajac_types::ClassType::new(name.to_string()).with_package(package_name.clone())
+            rajac_types::ClassType::new(name.clone()).with_package(SharedString::new(&package_name))
         } else {
-            rajac_types::ClassType::new(name.to_string())
+            rajac_types::ClassType::new(name.clone())
         };
         let type_id = type_arena.alloc(rajac_types::Type::class(class_type));
 
-        package.insert(name.to_string(), Symbol::new(name, kind, type_id));
+        package.insert(name.clone(), Symbol::new(name, kind, type_id));
     }
 }
