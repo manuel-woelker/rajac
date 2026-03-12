@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 ///
 /// This type provides efficient string-based path storage with cheap cloning,
 /// making it ideal for compiler internal path representation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct FilePath(pub SharedString);
 
 impl FilePath {
@@ -46,22 +46,30 @@ impl FilePath {
 
     /// Returns the parent directory of this path, if any.
     pub fn parent(&self) -> Option<Self> {
-        Path::new(self.0.as_str()).parent().map(|p| Self(SharedString::new(p.to_string_lossy())))
+        Path::new(self.0.as_str())
+            .parent()
+            .map(|p| Self(SharedString::new(p.to_string_lossy())))
     }
 
     /// Returns the file name of this path, if any.
     pub fn file_name(&self) -> Option<&str> {
-        Path::new(self.0.as_str()).file_name().and_then(|s| s.to_str())
+        Path::new(self.0.as_str())
+            .file_name()
+            .and_then(|s| s.to_str())
     }
 
     /// Returns the file stem (name without extension) of this path, if any.
     pub fn file_stem(&self) -> Option<&str> {
-        Path::new(self.0.as_str()).file_stem().and_then(|s| s.to_str())
+        Path::new(self.0.as_str())
+            .file_stem()
+            .and_then(|s| s.to_str())
     }
 
     /// Returns the extension of this path, if any.
     pub fn extension(&self) -> Option<&str> {
-        Path::new(self.0.as_str()).extension().and_then(|s| s.to_str())
+        Path::new(self.0.as_str())
+            .extension()
+            .and_then(|s| s.to_str())
     }
 
     /// Returns true if this path is absolute.
@@ -78,15 +86,15 @@ impl FilePath {
     pub fn normalize(&self) -> Self {
         let path = Path::new(self.0.as_str());
         let mut components = Vec::new();
-        
+
         for component in path.components() {
             match component {
                 std::path::Component::ParentDir => {
                     // Remove the last normal component if there is one
-                    if let Some(last) = components.last() {
-                        if matches!(last, std::path::Component::Normal(_)) {
-                            components.pop();
-                        }
+                    if let Some(last) = components.last()
+                        && matches!(last, std::path::Component::Normal(_))
+                    {
+                        components.pop();
                     }
                 }
                 std::path::Component::CurDir => {
@@ -97,15 +105,9 @@ impl FilePath {
                 }
             }
         }
-        
+
         let normalized: PathBuf = components.iter().collect();
         Self(SharedString::new(normalized.to_string_lossy()))
-    }
-}
-
-impl Default for FilePath {
-    fn default() -> Self {
-        Self(SharedString::empty())
     }
 }
 

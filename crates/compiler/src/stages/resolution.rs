@@ -113,110 +113,57 @@ use rajac_types::{Ident, Type, TypeId, WildcardBound};
 use rayon::prelude::*;
 
 /// Resolves identifiers and types in all compilation units.
-/// Resolves identifiers and types in all compilation units.
-
 ///
-
 /// This is the main entry point for the resolution phase. It processes
-
 /// all compilation units in parallel using the symbol table to resolve
-
 /// every identifier and type reference to their fully qualified names.
-
 ///
-
 /// # Parameters
-
 ///
-
 /// - `compilation_units` - Mutable slice of compilation units to resolve
-
 /// - `symbol_table` - Reference to the populated symbol table
-
 ///
-
 /// # Resolution Process
-
 ///
-
 /// For each compilation unit:
-
 /// 1. Creates a resolution context with package and imports
-
 /// 2. Traverses all AST nodes (statements, classes, members)
-
 /// 3. Resolves identifiers using symbol table lookups
-
 /// 4. Handles special cases for common Java types
-
 /// 5. Updates AST nodes with fully qualified names
-
 ///
-
 /// # Parallel Processing
-
 ///
-
 /// Uses `rayon` for parallel resolution:
-
 /// - Each compilation unit is processed independently
-
 /// - Symbol table is shared safely across threads
-
 /// - Results are collected without ordering requirements
-
 ///
-
 /// # Examples
-
 ///
-
 /// ```rust,no_run,ignore
-
 /// use rajac_compiler::stages::resolution;
-
 /// use rajac_compiler::CompilationUnit;
-
 /// use rajac_symbols::SymbolTable;
-
 ///
-
 /// let mut compilation_units = vec!/* parsed compilation units */;
-
 /// let symbol_table = SymbolTable::new();
-
-/// 
-
+///
 /// resolution::resolve_identifiers(&mut compilation_units, &symbol_table);
-
-/// 
-
+///
 /// for unit in &compilation_units {
-
 ///     println!("Resolved compilation unit: {}", unit.source_file.as_str());
-
 /// }
-
 /// ```
-
 ///
-
 /// # Resolution Rules
-
 ///
-
 /// The resolver follows Java language rules:
-
 /// - Current package has highest priority for unqualified names
-
 /// - Single-type imports take precedence over on-demand imports
-
 /// - Built-in types (String, Object) are always available
-
 /// - Fully qualified names bypass import resolution
-
 /// - Inner classes have special resolution rules
-
 pub fn resolve_identifiers(compilation_units: &mut [CompilationUnit], symbol_table: &SymbolTable) {
     compilation_units.par_iter_mut().for_each(|unit| {
         resolve_compilation_unit(&unit.ast, &mut unit.arena, symbol_table);

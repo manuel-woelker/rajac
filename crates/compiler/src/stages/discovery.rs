@@ -41,8 +41,8 @@ and allows for potential future extensions like filtering by patterns,
 excluding certain directories, or handling different source file types.
 */
 
-use rajac_base::result::RajacResult;
 use rajac_base::file_path::FilePath;
+use rajac_base::result::RajacResult;
 use std::path::Path;
 use walkdir::WalkDir;
 
@@ -77,7 +77,7 @@ use walkdir::WalkDir;
 ///
 /// let source_dir = Path::new("src");
 /// let java_files = discovery::find_java_files(source_dir)?;
-/// 
+///
 /// for file in &java_files {
 ///     println!("Found Java file: {}", file.as_str());
 /// }

@@ -256,16 +256,17 @@ impl Compiler {
         }
 
         // Stage 2: Parse source files AND collect classpath symbols in parallel
-        let java_files = std::mem::replace(&mut self.java_files, Vec::new());
+        let java_files = std::mem::take(&mut self.java_files);
         let classpaths = self.config.classpaths.clone();
 
-        let (parse_result, _) = join(
+        let (parse_result, classpath_result) = join(
             || parsing::parse_files(&java_files),
             || collection::collect_classpath_symbols(&mut self.symbol_table, &classpaths),
         );
 
         self.java_files = java_files;
         self.compilation_units = parse_result?;
+        classpath_result?;
 
         // Stage 3: Collect symbols from compilation units
         self.collect_symbols()?;
@@ -342,47 +343,6 @@ impl Compiler {
     /// # };
     /// let mut compiler = Compiler::new(config);
     /// compiler.discover_files()?;
-    /// compiler.parse_files()?;
-    ///
-    /// println!("Parsed {} compilation units", compiler.compilation_units.len());
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    fn parse_files(&mut self) -> RajacResult<()> {
-        self.compilation_units = parsing::parse_files(&self.java_files)?;
-        Ok(())
-    }
-
-    /// Collects symbols from parsed compilation units into the symbol table.
-    ///
-    /// This method executes only the collection stage of the compilation pipeline.
-    /// It analyzes the ASTs to build comprehensive symbol tables containing
-    /// classes, methods, fields, and other declarations.
-    ///
-    /// # Prerequisites
-    ///
-    /// Files must be parsed first using [`parse_files()`] or by setting
-    /// `compilation_units` directly.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if symbol collection encounters issues such as:
-    /// - Duplicate symbol definitions
-    /// - Invalid symbol declarations
-    /// - Scope resolution problems
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run,ignore
-    /// # use rajac_compiler::{Compiler, CompilerConfig};
-    /// # use rajac_base::file_path::FilePath;
-    /// # let config = CompilerConfig {
-    /// #     source_dirs: vec![FilePath::new("src")],
-    /// #     target_dir: FilePath::new("target"),
-    /// # };
-    /// let mut compiler = Compiler::new(config);
-    /// compiler.discover_files()?;
-    /// compiler.parse_files()?;
-    /// compiler.collect_symbols()?;
     ///
     /// println!("Collected symbols from {} compilation units", compiler.compilation_units.len());
     /// # Ok::<(), Box<dyn std::error::Error>>(())

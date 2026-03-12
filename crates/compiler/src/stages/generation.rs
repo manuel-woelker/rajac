@@ -54,8 +54,8 @@ output without affecting other compilation phases.
 */
 
 use crate::CompilationUnit;
-use rajac_base::result::{RajacResult, ResultExt};
 use rajac_base::file_path::FilePath;
+use rajac_base::result::{RajacResult, ResultExt};
 use rajac_bytecode::classfile::generate_classfiles as bytecode_generate_classfiles;
 use ristretto_classfile::attributes::Attribute;
 use std::fs;
@@ -104,7 +104,7 @@ use std::path::Path;
 ///
 /// let compilation_units = vec!/* compilation units with resolved ASTs */;
 /// let target_dir = Path::new("build/classes");
-/// 
+///
 /// match generation::generate_classfiles(&compilation_units, target_dir) {
 ///     Ok(count) => {
 ///         println!("Successfully generated {} class files", count);
@@ -179,7 +179,7 @@ fn emit_classfiles(
         let source_file_attribute_index = class_file.constant_pool.add_utf8("SourceFile")?;
         let source_file_index = class_file
             .constant_pool
-            .add_utf8(source_file.file_name().unwrap_or("unknown").to_string())?;
+            .add_utf8(source_file.file_name().unwrap_or("unknown"))?;
         class_file.attributes.push(Attribute::SourceFile {
             name_index: source_file_attribute_index,
             source_file_index,
