@@ -54,6 +54,7 @@ responsibilities and well-defined inputs/outputs.
 use rajac_base::file_path::FilePath;
 use rajac_base::result::{RajacResult, ResultExt};
 use rajac_symbols::SymbolTable;
+use rayon::join;
 
 use crate::stages::{collection, discovery, generation, parsing, resolution};
 
@@ -256,26 +257,12 @@ impl Compiler {
 
         // Stage 2: Parse source files AND collect classpath symbols in parallel
         let java_files = std::mem::replace(&mut self.java_files, Vec::new());
-        let java_files_clone = java_files.clone();
         let classpaths = self.config.classpaths.clone();
 
-        let parse_result = rayon::scope(|s| {
-            let (tx, rx) = std::sync::mpsc::channel();
-
-            // Spawn parsing in parallel
-            s.spawn(move |_| {
-                let result = parsing::parse_files(&java_files_clone);
-                let _ = tx.send(result);
-            });
-
-            // Collect classpath symbols (already parallelized internally via rayon in classpath crate)
-            // Note: Errors are logged internally and won't affect compilation
-            s.spawn(|_| {
-                let _ = collection::collect_classpath_symbols(&mut self.symbol_table, &classpaths);
-            });
-
-            rx.recv().unwrap()
-        });
+        let (parse_result, _) = join(
+            || parsing::parse_files(&java_files),
+            || collection::collect_classpath_symbols(&mut self.symbol_table, &classpaths),
+        );
 
         self.java_files = java_files;
         self.compilation_units = parse_result?;
