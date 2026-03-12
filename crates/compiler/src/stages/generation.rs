@@ -1,3 +1,50 @@
+//! # Bytecode Generation Stage
+//!
+//! This module handles the final stage of the compilation pipeline: generating
+//! Java bytecode class files from resolved Abstract Syntax Trees (ASTs).
+//!
+//! ## Purpose
+//!
+//! The generation stage is responsible for:
+//! - Converting resolved ASTs into Java bytecode
+//! - Creating proper class file structures with headers and metadata
+//! - Generating constant pools and method bodies
+//! - Adding debug information like source file attributes
+//! - Writing class files to the target directory structure
+//!
+//! ## Implementation Details
+//!
+//! Uses the `ristretto_classfile` crate for bytecode generation:
+//! - Follows JVM specification for class file format
+//! - Handles constant pool management automatically
+//! - Generates proper method descriptors and access flags
+//! - Maintains compatibility with Java bytecode standards
+//!
+//! ## Output
+//!
+//! Produces `.class` files that can be:
+//! - Executed by any JVM implementation
+//! - Loaded by Java classloaders
+//! - Debugged with standard Java tools
+//! - Packaged into JAR files for distribution
+//!
+//! ## Usage
+//!
+//! This stage is typically called from the main compiler pipeline but can
+//! be used independently for bytecode analysis or testing purposes.
+//!
+//! ```rust,no_run,ignore
+//! use rajac_compiler::stages::generation;
+//! use rajac_compiler::CompilationUnit;
+//! use std::path::Path;
+//!
+//! let compilation_units = vec!/* ... */;
+//! let target_dir = Path::new("target/classes");
+//! let class_count = generation::generate_classfiles(&compilation_units, target_dir)?;
+//! println!("Generated {} class files", class_count);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+
 /* 📖 # Why separate generation into its own stage?
 Code generation is the final phase where ASTs are converted to bytecode.
 This involves creating class files with proper attributes, constants,
@@ -15,6 +62,68 @@ use std::fs;
 use std::path::Path;
 
 /// Generates class files from compilation units.
+///
+/// This function takes resolved compilation units and generates Java bytecode
+/// class files for each class, interface, and enum found in the ASTs.
+/// It handles the complete class file generation process including constant
+/// pool creation, method body generation, and metadata attributes.
+///
+/// # Parameters
+///
+/// - `compilation_units` - A slice of compilation units containing resolved ASTs
+/// - `target_dir` - The directory where class files should be written
+///
+/// # Returns
+///
+/// The total number of class files that were generated. This may differ
+/// from the number of compilation units as each Java file can contain
+/// multiple classes, interfaces, or enums.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - Target directory cannot be created or accessed
+/// - Class file generation fails due to invalid AST structure
+/// - File I/O errors occur when writing class files
+/// - Constant pool overflows or other bytecode limitations are hit
+///
+/// # Directory Structure
+///
+/// Class files are written according to Java package structure:
+/// - `com/example/MyClass.java` → `com/example/MyClass.class`
+/// - Nested classes get `$` in their names: `Outer$Inner.class`
+/// - Package directories are created automatically
+/// - Existing files are overwritten
+///
+/// # Examples
+///
+/// ```rust,no_run,ignore
+/// use rajac_compiler::stages::generation;
+/// use rajac_compiler::CompilationUnit;
+/// use std::path::Path;
+///
+/// let compilation_units = vec!/* compilation units with resolved ASTs */;
+/// let target_dir = Path::new("build/classes");
+/// 
+/// match generation::generate_classfiles(&compilation_units, target_dir) {
+///     Ok(count) => {
+///         println!("Successfully generated {} class files", count);
+///     }
+///     Err(e) => {
+///         eprintln!("Bytecode generation failed: {:?}", e);
+///     }
+/// }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+///
+/// # Generated Files
+///
+/// Each compilation unit may generate multiple class files:
+/// - Top-level classes: `MyClass.class`
+/// - Nested classes: `Outer$Inner.class`
+/// - Anonymous classes: `Outer$1.class`, `Outer$2.class`
+/// - Local classes: `Method$1LocalClass.class`
+/// - Interfaces and enums follow the same naming pattern
 pub fn generate_classfiles(
     compilation_units: &[CompilationUnit],
     target_dir: &Path,
@@ -30,6 +139,34 @@ pub fn generate_classfiles(
 }
 
 /// Emits class files for a single compilation unit.
+///
+/// This internal function handles the generation of class files for one
+/// compilation unit, including all nested and anonymous classes.
+/// It also adds source file debugging information to each generated class.
+///
+/// # Parameters
+///
+/// - `ast` - The resolved Abstract Syntax Tree
+/// - `arena` - The arena containing AST node allocations
+/// - `source_file` - The original source file path for debug information
+/// - `target_dir` - Directory where class files should be written
+///
+/// # Returns
+///
+/// The number of class files generated for this compilation unit.
+///
+/// # Errors
+///
+/// Returns an error if bytecode generation or file writing fails.
+///
+/// # Source File Attribute
+///
+/// Each generated class file includes a `SourceFile` attribute containing
+/// the original source filename. This enables:
+/// - Better stack traces in debuggers
+/// - Proper error reporting at runtime
+/// - Source-level debugging support
+/// - IDE integration for debugging
 fn emit_classfiles(
     ast: &rajac_ast::Ast,
     arena: &rajac_ast::AstArena,

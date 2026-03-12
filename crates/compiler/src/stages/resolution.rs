@@ -1,3 +1,99 @@
+//! # Identifier Resolution Stage
+
+//!
+
+//! This module handles the fourth stage of the compilation pipeline: resolving
+
+//! identifiers and type references to their fully qualified declarations.
+
+//!
+
+//! ## Purpose
+
+//!
+
+//! The resolution stage is responsible for:
+
+//! - Converting simple identifiers to fully qualified names
+
+//! - Resolving type references using symbol tables and imports
+
+//! - Handling package scoping and import statements
+
+//! - Preparing ASTs for bytecode generation
+
+//! - Ensuring all references can be properly linked
+
+//!
+
+//! ## Implementation Details
+
+//!
+
+//! Resolution involves complex analysis of:
+
+//! - Import statements and their impact on name resolution
+
+//! - Package structure and current compilation context
+
+//! - Symbol table lookups for type and identifier resolution
+
+//! - Java language scoping rules and visibility
+
+//! - Common Java type handling (String, Object, etc.)
+
+//!
+
+//! ## Process
+
+//!
+
+//! The resolution algorithm:
+
+//! 1. Builds context from package, imports, and symbol table
+
+//! 2. Traverses AST nodes recursively
+
+//! 3. Resolves each identifier to its fully qualified form
+
+//! 4. Updates AST nodes with resolution information
+
+//! 5. Handles special cases for built-in Java types
+
+//!
+
+//! ## Usage
+
+//!
+
+//! This stage is typically called from the main compiler pipeline but can
+
+//! be used independently for type checking or analysis purposes.
+
+//!
+
+//! ```rust,no_run,ignore
+
+//! use rajac_compiler::stages::resolution;
+
+//! use rajac_compiler::CompilationUnit;
+
+//! use rajac_symbols::SymbolTable;
+
+//!
+
+//! let compilation_units = vec!/* ... */;
+
+//! let symbol_table = SymbolTable::new();
+
+//! resolution::resolve_identifiers(&mut compilation_units, &symbol_table);
+
+//! println!("Resolved identifiers in {} compilation units", compilation_units.len());
+
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+
+//! ```
+
 /* 📖 # Why separate resolution into its own stage?
 Resolution is a complex phase where identifiers and types are resolved
 to their fully qualified names using the symbol table. This involves
@@ -17,6 +113,110 @@ use rajac_types::{Ident, Type, TypeId, WildcardBound};
 use rayon::prelude::*;
 
 /// Resolves identifiers and types in all compilation units.
+/// Resolves identifiers and types in all compilation units.
+
+///
+
+/// This is the main entry point for the resolution phase. It processes
+
+/// all compilation units in parallel using the symbol table to resolve
+
+/// every identifier and type reference to their fully qualified names.
+
+///
+
+/// # Parameters
+
+///
+
+/// - `compilation_units` - Mutable slice of compilation units to resolve
+
+/// - `symbol_table` - Reference to the populated symbol table
+
+///
+
+/// # Resolution Process
+
+///
+
+/// For each compilation unit:
+
+/// 1. Creates a resolution context with package and imports
+
+/// 2. Traverses all AST nodes (statements, classes, members)
+
+/// 3. Resolves identifiers using symbol table lookups
+
+/// 4. Handles special cases for common Java types
+
+/// 5. Updates AST nodes with fully qualified names
+
+///
+
+/// # Parallel Processing
+
+///
+
+/// Uses `rayon` for parallel resolution:
+
+/// - Each compilation unit is processed independently
+
+/// - Symbol table is shared safely across threads
+
+/// - Results are collected without ordering requirements
+
+///
+
+/// # Examples
+
+///
+
+/// ```rust,no_run,ignore
+
+/// use rajac_compiler::stages::resolution;
+
+/// use rajac_compiler::CompilationUnit;
+
+/// use rajac_symbols::SymbolTable;
+
+///
+
+/// let mut compilation_units = vec!/* parsed compilation units */;
+
+/// let symbol_table = SymbolTable::new();
+
+/// 
+
+/// resolution::resolve_identifiers(&mut compilation_units, &symbol_table);
+
+/// 
+
+/// for unit in &compilation_units {
+
+///     println!("Resolved compilation unit: {}", unit.source_file.as_str());
+
+/// }
+
+/// ```
+
+///
+
+/// # Resolution Rules
+
+///
+
+/// The resolver follows Java language rules:
+
+/// - Current package has highest priority for unqualified names
+
+/// - Single-type imports take precedence over on-demand imports
+
+/// - Built-in types (String, Object) are always available
+
+/// - Fully qualified names bypass import resolution
+
+/// - Inner classes have special resolution rules
+
 pub fn resolve_identifiers(compilation_units: &mut [CompilationUnit], symbol_table: &SymbolTable) {
     compilation_units.par_iter_mut().for_each(|unit| {
         resolve_compilation_unit(&unit.ast, &mut unit.arena, symbol_table);

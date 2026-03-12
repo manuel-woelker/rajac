@@ -1,10 +1,40 @@
-// Compiler crate library
-// Contains the main Compiler struct and related functionality
+//! # Rajac Compiler
+//!
+//! This crate provides the main compiler implementation for the Rajac Java compiler.
+//! It orchestrates the entire compilation process from source discovery to bytecode generation.
+//!
+//! ## Architecture
+//!
+//! The compiler follows a pipeline architecture with distinct stages:
+//!
+//! 1. **Discovery** - Finding Java source files in the source directory
+//! 2. **Parsing** - Converting source code to Abstract Syntax Trees (ASTs)
+//! 3. **Collection** - Building symbol tables from ASTs
+//! 4. **Resolution** - Resolving identifiers and types
+//! 5. **Generation** - Emitting Java bytecode class files
+//!
+//! ## Usage
+//!
+//! ```rust,ignore
+//! use rajac_compiler::{Compiler, CompilerConfig};
+//! use rajac_base::file_path::FilePath;
+//!
+//! let config = CompilerConfig {
+//!     source_dir: FilePath::new("src"),
+//!     target_dir: FilePath::new("target/classes"),
+//! };
+//! let mut compiler = Compiler::new(config);
+//! compiler.compile_directory()?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! ## Key Components
+//!
+//! - [`Compiler`] - Main compiler orchestrator
+//! - [`CompilerConfig`] - Configuration for compilation settings
+//! - [`CompilationUnit`] - Represents a single compiled source file
 
 pub mod compiler;
-pub mod stages;
+mod stages;
 
 pub use compiler::{CompilationUnit, Compiler, CompilerConfig};
-
-// Re-export stages for external use if needed
-pub use stages::{collection, discovery, generation, parsing, resolution};
