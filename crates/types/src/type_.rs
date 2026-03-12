@@ -1,6 +1,7 @@
 use crate::{
     ArrayType, ClassType, PrimitiveType, TypeId, TypeVariable, WildcardBound, WildcardType,
 };
+use rajac_base::shared_string::SharedString;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
@@ -25,7 +26,7 @@ impl Type {
         Type::Array(ArrayType::new(element_type))
     }
 
-    pub fn type_variable(name: String) -> Self {
+    pub fn type_variable(name: SharedString) -> Self {
         Type::TypeVariable(TypeVariable::new(name))
     }
 

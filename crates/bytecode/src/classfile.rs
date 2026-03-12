@@ -4,6 +4,7 @@ use rajac_ast::{
     Method as AstMethod, Modifiers, PrimitiveType,
 };
 use rajac_base::result::{RajacResult, ResultExt};
+use rajac_base::shared_string::SharedString;
 use rajac_symbols::SymbolTable;
 use rajac_types::Ident;
 use ristretto_classfile::attributes::{Attribute, InnerClass, NestedClassAccessFlags};
@@ -15,8 +16,8 @@ use ristretto_classfile::{
 #[derive(Clone, Debug)]
 struct NestedClassInfo {
     class_id: ClassDeclId,
-    internal_name: String,
-    simple_name: String,
+    internal_name: SharedString,
+    simple_name: SharedString,
     modifiers: Modifiers,
     kind: ClassKind,
 }
@@ -34,7 +35,7 @@ pub fn generate_classfiles(
         emit_classfiles_for_class(
             arena,
             *class_id,
-            internal_name,
+            internal_name.into(),
             None,
             &mut class_files,
             type_arena,
@@ -66,8 +67,8 @@ pub fn classfile_from_class_decl(
 fn emit_classfiles_for_class(
     arena: &AstArena,
     class_id: ClassDeclId,
-    this_internal_name: String,
-    outer_internal_name: Option<String>,
+    this_internal_name: SharedString,
+    outer_internal_name: Option<SharedString>,
     class_files: &mut Vec<ClassFile>,
     type_arena: &rajac_types::TypeArena,
     _symbol_table: &SymbolTable,
@@ -227,8 +228,8 @@ fn collect_nested_class_infos(
         };
 
         let nested_decl = arena.class_decl(class_id);
-        let simple_name = nested_decl.name.as_str().to_string();
-        let internal_name = format!("{this_internal_name}${simple_name}");
+        let simple_name = SharedString::new(nested_decl.name.as_str());
+        let internal_name = SharedString::new(format!("{this_internal_name}${simple_name}"));
 
         nested.push(NestedClassInfo {
             class_id,

@@ -1,11 +1,13 @@
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 
+use crate::shared_string::SharedString;
+
 pub struct MessageError {
-    message: String,
+    message: SharedString,
 }
 
-impl<T: Into<String>> From<T> for MessageError {
+impl<T: Into<SharedString>> From<T> for MessageError {
     fn from(value: T) -> Self {
         Self {
             message: value.into(),

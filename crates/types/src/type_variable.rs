@@ -1,13 +1,14 @@
 use crate::TypeId;
+use rajac_base::shared_string::SharedString;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeVariable {
-    pub name: String,
+    pub name: SharedString,
     pub bound: Option<TypeId>,
 }
 
 impl TypeVariable {
-    pub fn new(name: String) -> Self {
+    pub fn new(name: SharedString) -> Self {
         Self { name, bound: None }
     }
 

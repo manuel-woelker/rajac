@@ -194,9 +194,9 @@ fn resolve_compilation_unit(
 /// Context for resolving identifiers using the symbol table, package, and imports.
 struct ResolveContext<'a> {
     symbol_table: &'a SymbolTable,
-    current_package: String,
-    single_type_imports: Vec<(String, String)>,
-    on_demand_imports: Vec<String>,
+    current_package: SharedString,
+    single_type_imports: Vec<(SharedString, SharedString)>,
+    on_demand_imports: Vec<SharedString>,
 }
 
 impl<'a> ResolveContext<'a> {
@@ -206,7 +206,7 @@ impl<'a> ResolveContext<'a> {
             .package
             .as_ref()
             .map(|p| package_name_from_segments(&p.name.segments))
-            .unwrap_or_default();
+            .unwrap_or_else(|| SharedString::new(""));
 
         let mut single_type_imports = Vec::new();
         let mut on_demand_imports = Vec::new();
@@ -707,14 +707,14 @@ fn resolve_class_name(name: &SharedString, context: &ResolveContext) -> Option<R
     let name_str = name.as_str();
 
     for (package, import_name) in &context.single_type_imports {
-        if import_name == name_str && package_has_symbol(context.symbol_table, package, name_str) {
-            return Some(ResolvedName::new(SharedString::new(package), name.clone()));
+        if import_name == name && package_has_symbol(context.symbol_table, package, name_str) {
+            return Some(ResolvedName::new(package.clone(), name.clone()));
         }
     }
 
     if package_has_symbol(context.symbol_table, &context.current_package, name_str) {
         return Some(ResolvedName::new(
-            SharedString::new(&context.current_package),
+            context.current_package.clone(),
             name.clone(),
         ));
     }
@@ -729,7 +729,7 @@ fn resolve_class_name(name: &SharedString, context: &ResolveContext) -> Option<R
 
     for package in &context.on_demand_imports {
         if package_has_symbol(context.symbol_table, package, name_str) {
-            return Some(ResolvedName::new(SharedString::new(package), name.clone()));
+            return Some(ResolvedName::new(package.clone(), name.clone()));
         }
     }
 
@@ -744,17 +744,19 @@ fn package_has_symbol(symbol_table: &SymbolTable, package: &str, name: &str) -> 
 }
 
 /// Joins qualified name segments into a Java-style package name.
-fn package_name_from_segments(segments: &[SharedString]) -> String {
-    segments
-        .iter()
-        .map(|segment| segment.as_str())
-        .collect::<Vec<_>>()
-        .join(".")
+fn package_name_from_segments(segments: &[SharedString]) -> SharedString {
+    SharedString::new(
+        segments
+            .iter()
+            .map(|segment| segment.as_str())
+            .collect::<Vec<_>>()
+            .join("."),
+    )
 }
 
 /// Splits import segments into (package, name).
-fn split_import_name(segments: &[SharedString]) -> Option<(String, String)> {
+fn split_import_name(segments: &[SharedString]) -> Option<(SharedString, SharedString)> {
     let (name, package) = segments.split_last()?;
     let package = package_name_from_segments(package);
-    Some((package, name.as_str().to_string()))
+    Some((package, name.clone()))
 }
