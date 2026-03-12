@@ -1,25 +1,25 @@
-//! File path wrapper type for relative path handling.
+//! File path wrapper type for efficient path handling.
 
-use relative_path::RelativePathBuf;
+use crate::shared_string::SharedString;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::path::{Path, PathBuf};
 
-/// A wrapper around RelativePathBuf for file path handling.
+/// A wrapper around SharedString for file path handling.
 ///
-/// This type provides a platform-independent way to represent file paths
-/// relative to a project root or workspace, making it ideal for compiler
-/// internal path representation.
+/// This type provides efficient string-based path storage with cheap cloning,
+/// making it ideal for compiler internal path representation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct FilePath(pub RelativePathBuf);
+pub struct FilePath(pub SharedString);
 
 impl FilePath {
     /// Creates a new FilePath from the given path string.
     pub fn new<P: AsRef<std::path::Path>>(path: P) -> Self {
-        Self(RelativePathBuf::from_path(path).expect("Invalid relative path"))
+        Self(SharedString::new(path.as_ref().to_string_lossy()))
     }
 
     /// Creates a new FilePath from a string.
     pub fn from_string(s: impl Into<String>) -> Self {
-        Self(RelativePathBuf::from(s.into()))
+        Self(SharedString::new(s.into()))
     }
 
     /// Returns the path as a string.
@@ -27,84 +27,103 @@ impl FilePath {
         self.0.as_str()
     }
 
-    /// Returns the path as a relative_path::RelativePath.
-    pub fn as_relative_path(&self) -> &relative_path::RelativePath {
-        &self.0
+    /// Returns the path as a Path.
+    pub fn as_path(&self) -> &Path {
+        Path::new(self.0.as_str())
     }
 
-    /// Returns the underlying RelativePathBuf.
-    pub fn into_relative_path_buf(self) -> RelativePathBuf {
+    /// Returns the underlying SharedString.
+    pub fn into_shared_string(self) -> SharedString {
         self.0
     }
 
     /// Joins this path with another path component.
     pub fn join<P: AsRef<std::path::Path>>(&self, path: P) -> Self {
-        let path_str = path.as_ref().to_string_lossy();
-        Self(
-            self.0
-                .join(relative_path::RelativePath::from_path(&*path_str).unwrap()),
-        )
+        let mut path_buf = PathBuf::from(self.0.as_str());
+        path_buf.push(path);
+        Self(SharedString::new(path_buf.to_string_lossy()))
     }
 
     /// Returns the parent directory of this path, if any.
     pub fn parent(&self) -> Option<Self> {
-        self.0
-            .parent()
-            .map(|p| Self(RelativePathBuf::from(p.as_str())))
+        Path::new(self.0.as_str()).parent().map(|p| Self(SharedString::new(p.to_string_lossy())))
     }
 
     /// Returns the file name of this path, if any.
     pub fn file_name(&self) -> Option<&str> {
-        self.0.file_name()
+        Path::new(self.0.as_str()).file_name().and_then(|s| s.to_str())
     }
 
     /// Returns the file stem (name without extension) of this path, if any.
     pub fn file_stem(&self) -> Option<&str> {
-        self.0.file_stem()
+        Path::new(self.0.as_str()).file_stem().and_then(|s| s.to_str())
     }
 
     /// Returns the extension of this path, if any.
     pub fn extension(&self) -> Option<&str> {
-        self.0.extension()
+        Path::new(self.0.as_str()).extension().and_then(|s| s.to_str())
     }
 
     /// Returns true if this path is absolute.
     pub fn is_absolute(&self) -> bool {
-        self.0.as_str().starts_with('/') || self.0.as_str().starts_with(std::path::is_separator)
+        Path::new(self.0.as_str()).is_absolute()
     }
 
     /// Returns true if this path is relative.
     pub fn is_relative(&self) -> bool {
-        !self.is_absolute()
+        Path::new(self.0.as_str()).is_relative()
     }
 
     /// Normalizes the path by removing redundant components.
     pub fn normalize(&self) -> Self {
-        Self(self.0.normalize())
+        let path = Path::new(self.0.as_str());
+        let mut components = Vec::new();
+        
+        for component in path.components() {
+            match component {
+                std::path::Component::ParentDir => {
+                    // Remove the last normal component if there is one
+                    if let Some(last) = components.last() {
+                        if matches!(last, std::path::Component::Normal(_)) {
+                            components.pop();
+                        }
+                    }
+                }
+                std::path::Component::CurDir => {
+                    // Skip current directory components
+                }
+                _ => {
+                    components.push(component);
+                }
+            }
+        }
+        
+        let normalized: PathBuf = components.iter().collect();
+        Self(SharedString::new(normalized.to_string_lossy()))
     }
 }
 
 impl Default for FilePath {
     fn default() -> Self {
-        Self(RelativePathBuf::new())
+        Self(SharedString::empty())
     }
 }
 
 impl From<String> for FilePath {
     fn from(s: String) -> Self {
-        Self(RelativePathBuf::from(s))
+        Self(SharedString::new(s))
     }
 }
 
 impl From<&str> for FilePath {
     fn from(s: &str) -> Self {
-        Self(RelativePathBuf::from(s))
+        Self(SharedString::new(s))
     }
 }
 
-impl From<RelativePathBuf> for FilePath {
-    fn from(path: RelativePathBuf) -> Self {
-        Self(path)
+impl From<SharedString> for FilePath {
+    fn from(s: SharedString) -> Self {
+        Self(s)
     }
 }
 
@@ -114,15 +133,9 @@ impl From<&FilePath> for FilePath {
     }
 }
 
-impl AsRef<relative_path::RelativePath> for FilePath {
-    fn as_ref(&self) -> &relative_path::RelativePath {
-        &self.0
-    }
-}
-
-impl AsRef<std::path::Path> for FilePath {
-    fn as_ref(&self) -> &std::path::Path {
-        std::path::Path::new(self.0.as_str())
+impl AsRef<Path> for FilePath {
+    fn as_ref(&self) -> &Path {
+        Path::new(self.0.as_str())
     }
 }
 
@@ -133,7 +146,7 @@ impl std::fmt::Display for FilePath {
 }
 
 impl std::ops::Deref for FilePath {
-    type Target = RelativePathBuf;
+    type Target = SharedString;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -145,8 +158,8 @@ where
     C: speedy::Context,
 {
     fn read_from<R: speedy::Reader<'a, C>>(reader: &mut R) -> Result<Self, C::Error> {
-        let string = String::read_from(reader)?;
-        Ok(FilePath::from(string))
+        let shared_string = SharedString::read_from(reader)?;
+        Ok(FilePath(shared_string))
     }
 }
 
@@ -158,7 +171,7 @@ where
     where
         W: speedy::Writer<C> + ?Sized,
     {
-        self.as_str().write_to(writer)
+        self.0.write_to(writer)
     }
 }
 

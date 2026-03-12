@@ -7,11 +7,12 @@ excluding certain directories, or handling different source file types.
 */
 
 use rajac_base::result::RajacResult;
-use std::path::{Path, PathBuf};
+use rajac_base::file_path::FilePath;
+use std::path::Path;
 use walkdir::WalkDir;
 
 /// Discovers all Java source files in the given directory.
-pub fn find_java_files(dir: &Path) -> RajacResult<Vec<PathBuf>> {
+pub fn find_java_files(dir: &Path) -> RajacResult<Vec<FilePath>> {
     let mut java_files = Vec::new();
 
     for entry in WalkDir::new(dir)
@@ -21,7 +22,7 @@ pub fn find_java_files(dir: &Path) -> RajacResult<Vec<PathBuf>> {
     {
         let path = entry.path();
         if path.is_file() && path.extension().is_some_and(|ext| ext == "java") {
-            java_files.push(path.to_path_buf());
+            java_files.push(FilePath::new(path));
         }
     }
 

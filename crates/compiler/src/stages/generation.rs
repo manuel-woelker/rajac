@@ -8,6 +8,7 @@ output without affecting other compilation phases.
 
 use crate::CompilationUnit;
 use rajac_base::result::{RajacResult, ResultExt};
+use rajac_base::file_path::FilePath;
 use rajac_bytecode::classfile::generate_classfiles as bytecode_generate_classfiles;
 use ristretto_classfile::attributes::Attribute;
 use std::fs;
@@ -32,7 +33,7 @@ pub fn generate_classfiles(
 fn emit_classfiles(
     ast: &rajac_ast::Ast,
     arena: &rajac_ast::AstArena,
-    source_file: &Path,
+    source_file: &FilePath,
     target_dir: &Path,
 ) -> RajacResult<usize> {
     let mut class_files = bytecode_generate_classfiles(ast, arena)?;
@@ -41,7 +42,7 @@ fn emit_classfiles(
         let source_file_attribute_index = class_file.constant_pool.add_utf8("SourceFile")?;
         let source_file_index = class_file
             .constant_pool
-            .add_utf8(source_file.file_name().unwrap().display().to_string())?;
+            .add_utf8(source_file.file_name().unwrap_or("unknown").to_string())?;
         class_file.attributes.push(Attribute::SourceFile {
             name_index: source_file_attribute_index,
             source_file_index,

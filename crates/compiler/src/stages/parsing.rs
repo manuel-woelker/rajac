@@ -8,17 +8,17 @@ without affecting other compilation phases.
 
 use crate::CompilationUnit;
 use rajac_base::result::{RajacResult, ResultExt};
+use rajac_base::file_path::FilePath;
 use rajac_parser::parse;
 use rayon::prelude::*;
 use std::fs;
-use std::path::PathBuf;
 
 /// Parses Java source files into compilation units containing ASTs.
-pub fn parse_files(java_files: &[PathBuf]) -> RajacResult<Vec<CompilationUnit>> {
+pub fn parse_files(java_files: &[FilePath]) -> RajacResult<Vec<CompilationUnit>> {
     java_files
         .par_iter()
         .map(|java_file| {
-            let source = fs::read_to_string(java_file).context("Failed to read source file")?;
+            let source = fs::read_to_string(java_file.as_path()).context("Failed to read source file")?;
             let parse_result = parse(&source);
             Ok(CompilationUnit {
                 source_file: java_file.clone(),

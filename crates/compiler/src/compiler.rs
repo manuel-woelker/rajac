@@ -12,26 +12,26 @@ responsibilities and well-defined inputs/outputs.
 */
 
 use rajac_base::result::{RajacResult, ResultExt};
+use rajac_base::file_path::FilePath;
 use rajac_symbols::SymbolTable;
-use std::path::PathBuf;
 
 pub use crate::stages::{collection, discovery, generation, parsing, resolution};
 
 pub struct CompilationUnit {
-    pub source_file: PathBuf,
+    pub source_file: FilePath,
     pub ast: rajac_ast::Ast,
     pub arena: rajac_ast::AstArena,
 }
 
 pub struct CompilerConfig {
-    pub source_dir: PathBuf,
-    pub target_dir: PathBuf,
+    pub source_dir: FilePath,
+    pub target_dir: FilePath,
 }
 
 #[allow(dead_code)]
 pub struct Compiler {
     pub config: CompilerConfig,
-    pub java_files: Vec<PathBuf>,
+    pub java_files: Vec<FilePath>,
     pub compilation_units: Vec<CompilationUnit>,
     pub symbol_table: SymbolTable,
 }
@@ -47,11 +47,11 @@ impl Compiler {
     }
 
     pub fn compile_directory(&mut self) -> RajacResult<()> {
-        std::fs::create_dir_all(&self.config.target_dir)
+        std::fs::create_dir_all(self.config.target_dir.as_path())
             .context("Failed to create target directory")?;
 
         // Stage 1: Discovery - Find Java files
-        self.java_files = discovery::find_java_files(&self.config.source_dir)?;
+        self.java_files = discovery::find_java_files(self.config.source_dir.as_path())?;
         if self.java_files.is_empty() {
             return Ok(());
         }
@@ -67,7 +67,7 @@ impl Compiler {
 
         // Stage 5: Generation - Emit bytecode
         let classfile_count =
-            generation::generate_classfiles(&self.compilation_units, &self.config.target_dir)?;
+            generation::generate_classfiles(&self.compilation_units, self.config.target_dir.as_path())?;
 
         println!(
             "Compiled {} Java files -> {} class files",
@@ -80,7 +80,7 @@ impl Compiler {
 
     // Individual stage methods for testing and fine-grained control
     pub fn discover_files(&mut self) -> RajacResult<()> {
-        self.java_files = discovery::find_java_files(&self.config.source_dir)?;
+        self.java_files = discovery::find_java_files(self.config.source_dir.as_path())?;
         Ok(())
     }
 
@@ -98,15 +98,15 @@ impl Compiler {
     }
 
     pub fn generate_classfiles(&mut self) -> RajacResult<usize> {
-        generation::generate_classfiles(&self.compilation_units, &self.config.target_dir)
+        generation::generate_classfiles(&self.compilation_units, self.config.target_dir.as_path())
     }
 }
 
 impl Default for Compiler {
     fn default() -> Self {
         Self::new(CompilerConfig {
-            source_dir: PathBuf::new(),
-            target_dir: PathBuf::new(),
+            source_dir: FilePath::default(),
+            target_dir: FilePath::default(),
         })
     }
 }

@@ -1,4 +1,5 @@
 use rajac_compiler::{Compiler, CompilerConfig};
+use rajac_base::file_path::FilePath;
 use std::path::Path;
 
 fn main() {
@@ -8,8 +9,8 @@ fn main() {
     let source_dir = Path::new(&dir);
 
     let config = CompilerConfig {
-        source_dir: source_dir.to_path_buf(),
-        target_dir: source_dir.join("classes"),
+        source_dir: FilePath::new(source_dir),
+        target_dir: FilePath::new(source_dir.join("classes")),
     };
     let mut compiler = Compiler::new(config);
 
