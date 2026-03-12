@@ -41,17 +41,6 @@ impl ClassType {
     }
 
     pub fn internal_name(&self) -> String {
-        // Special case for common Java types that should be fully qualified
-        if self.package.is_none() {
-            match self.name.as_str() {
-                "String" => return "java/lang/String".to_string(),
-                "Object" => return "java/lang/Object".to_string(),
-                "System" => return "java/lang/System".to_string(),
-                "PrintStream" => return "java/io/PrintStream".to_string(),
-                _ => {}
-            }
-        }
-
         match &self.package {
             Some(pkg) => format!("{}/{}", pkg.replace('.', "/"), self.name),
             None => self.name.replace('.', "/"),

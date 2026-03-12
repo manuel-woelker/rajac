@@ -679,6 +679,9 @@ fn resolve_type(
                     {
                         *ty = symbol.ty;
                     }
+                    // Note: If the type is not found in the symbol table, it means
+                    // it's not available in the classpath, which is an error condition
+                    // that should be handled elsewhere. We don't create fallback entries.
                 }
 
                 // TODO: Handle primitive types (int, String, etc.)
@@ -714,11 +717,6 @@ fn resolve_ident(ident: &mut Ident, context: &ResolveContext) {
 fn resolve_class_name(name: &SharedString, context: &ResolveContext) -> Option<ResolvedName> {
     let name_str = name.as_str();
 
-    // Special case for common Java types that should be fully qualified
-    if let Some(qualified_name) = resolve_common_java_type(name_str) {
-        return Some(qualified_name);
-    }
-
     for (package, import_name) in &context.single_type_imports {
         if import_name == name_str && package_has_symbol(context.symbol_table, package, name_str) {
             return Some(ResolvedName::new(SharedString::new(package), name.clone()));
@@ -732,6 +730,14 @@ fn resolve_class_name(name: &SharedString, context: &ResolveContext) -> Option<R
         ));
     }
 
+    // Check java.lang package first (implicitly imported in Java)
+    if package_has_symbol(context.symbol_table, "java.lang", name_str) {
+        return Some(ResolvedName::new(
+            SharedString::new("java.lang"),
+            name.clone(),
+        ));
+    }
+
     for package in &context.on_demand_imports {
         if package_has_symbol(context.symbol_table, package, name_str) {
             return Some(ResolvedName::new(SharedString::new(package), name.clone()));
@@ -739,29 +745,6 @@ fn resolve_class_name(name: &SharedString, context: &ResolveContext) -> Option<R
     }
 
     None
-}
-
-/// Resolves common Java types to their fully qualified names.
-fn resolve_common_java_type(name_str: &str) -> Option<ResolvedName> {
-    match name_str {
-        "String" => Some(ResolvedName::new(
-            SharedString::new("java/lang"),
-            SharedString::new("String"),
-        )),
-        "Object" => Some(ResolvedName::new(
-            SharedString::new("java/lang"),
-            SharedString::new("Object"),
-        )),
-        "System" => Some(ResolvedName::new(
-            SharedString::new("java/lang"),
-            SharedString::new("System"),
-        )),
-        "PrintStream" => Some(ResolvedName::new(
-            SharedString::new("java/io"),
-            SharedString::new("PrintStream"),
-        )),
-        _ => None,
-    }
 }
 
 /// Returns true if the symbol table contains a class in the given package.
