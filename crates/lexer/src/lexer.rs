@@ -31,14 +31,20 @@ impl<'a> Lexer<'a> {
     }
 
     #[allow(dead_code)]
-    fn add_error(&mut self, message: impl Into<SharedString>, span: Range<usize>) {
-        let message: SharedString = message.into();
+    fn add_error(
+        &mut self,
+        error_msg: impl Into<SharedString>,
+        annotation_msg: impl Into<SharedString>,
+        span: Range<usize>,
+    ) {
+        let error_msg: SharedString = error_msg.into();
+        let annotation_msg: SharedString = annotation_msg.into();
         let line_fragment = self.get_current_line();
         let line_offset = span.start - self.line_start;
 
         self.diagnostics.add(Diagnostic {
             severity: Severity::Error,
-            message: message.clone(),
+            message: error_msg,
             chunks: vec![SourceChunk {
                 path: self.path.clone(),
                 fragment: line_fragment,
@@ -46,7 +52,7 @@ impl<'a> Lexer<'a> {
                 line: self.line,
                 annotations: vec![Annotation {
                     span: Span(line_offset..line_offset + 1),
-                    message,
+                    message: annotation_msg,
                 }],
             }],
         });
@@ -224,12 +230,20 @@ impl<'a> Lexer<'a> {
                 continue;
             }
             if c == '\n' {
-                self.add_error("unclosed string literal", start..self.pos);
+                self.add_error(
+                    "unclosed string literal",
+                    "unclosed string literal",
+                    start..self.pos,
+                );
                 return TokenKind::Error;
             }
             self.bump();
         }
-        self.add_error("unclosed string literal", start..self.pos);
+        self.add_error(
+            "unclosed string literal",
+            "unclosed string literal",
+            start..self.pos,
+        );
         TokenKind::Error
     }
 
@@ -245,12 +259,20 @@ impl<'a> Lexer<'a> {
                 continue;
             }
             if c == '\n' {
-                self.add_error("unclosed character literal", start..self.pos);
+                self.add_error(
+                    "unclosed character literal",
+                    "unclosed character literal",
+                    start..self.pos,
+                );
                 return TokenKind::Error;
             }
             self.bump();
         }
-        self.add_error("unclosed character literal", start..self.pos);
+        self.add_error(
+            "unclosed character literal",
+            "unclosed character literal",
+            start..self.pos,
+        );
         TokenKind::Error
     }
 
