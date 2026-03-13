@@ -6,7 +6,9 @@ use rajac_base::shared_string::SharedString;
 use crate::source_chunk::SourceChunk;
 
 pub fn render_diagnostic(diagnostic: &Diagnostic) -> SharedString {
-    use annotate_snippets::{AnnotationKind, Group, Level, Renderer, Snippet};
+    use annotate_snippets::{
+        AnnotationKind, Group, Level, Renderer, Snippet, renderer::DecorStyle,
+    };
 
     let level = match diagnostic.severity {
         Severity::Error => Level::ERROR,
@@ -37,7 +39,7 @@ pub fn render_diagnostic(diagnostic: &Diagnostic) -> SharedString {
         group = group.element(snippet);
     }
 
-    let renderer = Renderer::styled();
+    let renderer = Renderer::styled().decor_style(DecorStyle::Unicode);
     SharedString::from(renderer.render(&[group]).to_string())
 }
 
@@ -69,8 +71,8 @@ mod tests {
 
         let expected = expect![[r#"
             error: expected type, found `i32`
-             --> test.java
-              |"#]];
+              ╭▸ test.java
+              │"#]];
         expected.assert_eq(&stripped);
     }
 
@@ -94,8 +96,8 @@ mod tests {
 
         let expected = expect![[r#"
             warning: unused variable `x`
-             --> test.java
-              |"#]];
+              ╭▸ test.java
+              │"#]];
         expected.assert_eq(&stripped);
     }
 
@@ -122,10 +124,10 @@ mod tests {
 
         let expected = expect![[r#"
             error: mismatched types
-             --> test.java:1:10
-              |
-            1 | let x: String = 42;
-              |          ^^^^^^ expected `String` but found `i32`"#]];
+              ╭▸ test.java:1:10
+              │
+            1 │ let x: String = 42;
+              ╰╴         ━━━━━━ expected `String` but found `i32`"#]];
         expected.assert_eq(&stripped);
     }
 
@@ -158,11 +160,11 @@ mod tests {
 
         let expected = expect![[r#"
             error: undefined variable
-             --> main.java
-              |
-              |
-             ::: main.java
-              |"#]];
+              ╭▸ main.java
+              │
+              │
+              ⸬  main.java
+              │"#]];
         expected.assert_eq(&stripped);
     }
 }
