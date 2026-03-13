@@ -39,3 +39,12 @@ impl IntoIterator for Diagnostics {
         self.diagnostics.into_iter()
     }
 }
+
+impl<'a> IntoIterator for &'a Diagnostics {
+    type Item = &'a Diagnostic;
+    type IntoIter = std::slice::Iter<'a, Diagnostic>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.diagnostics.iter()
+    }
+}

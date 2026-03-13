@@ -466,9 +466,12 @@ mod tests {
         assert!(tokens.iter().any(|t| t.kind == TokenKind::Error));
         assert!(!lexer.diagnostics().is_empty());
 
-        let output = render_diagnostics(lexer.diagnostics().iter());
+        let output = render_diagnostics(lexer.diagnostics());
         let stripped = strip_ansi(&output);
 
-        expect!["error: unclosed string literal\n  ╭▸ test.java\n  │"].assert_eq(&stripped);
+        expect![[r#"error: unclosed string literal
+  ╭▸ test.java
+  │"#]]
+        .assert_eq(&stripped);
     }
 }
