@@ -17,14 +17,14 @@ pub fn render_diagnostic(diagnostic: &Diagnostic) -> SharedString {
         Severity::Help => Level::HELP,
     };
 
-    let title = level.primary_title(&diagnostic.message);
+    let title = level.primary_title(&*diagnostic.message);
 
     let mut group = Group::with_title(title);
 
     for chunk in &diagnostic.chunks {
         let path = chunk.path.to_string_lossy().into_owned();
         let mut snippet: Snippet<'static, annotate_snippets::Annotation<'static>> =
-            Snippet::source(chunk.fragment.clone())
+            Snippet::source(chunk.fragment.as_str().to_string())
                 .line_start(chunk.line)
                 .path(path);
 
@@ -32,7 +32,7 @@ pub fn render_diagnostic(diagnostic: &Diagnostic) -> SharedString {
             snippet = snippet.annotation(
                 AnnotationKind::Primary
                     .span(annotation.span.0.clone())
-                    .label(annotation.message.to_string()),
+                    .label(annotation.message.as_str().to_string()),
             );
         }
 
@@ -56,10 +56,10 @@ mod tests {
     fn test_render_error() {
         let diagnostic = Diagnostic {
             severity: Severity::Error,
-            message: "expected type, found `i32`".to_string(),
+            message: "expected type, found `i32`".into(),
             chunks: vec![SourceChunk {
                 path: std::path::PathBuf::from("test.java"),
-                fragment: "let x: String = 42;".to_string(),
+                fragment: "let x: String = 42;".into(),
                 offset: 0,
                 line: 1,
                 annotations: vec![],
@@ -81,10 +81,10 @@ mod tests {
     fn test_render_warning() {
         let diagnostic = Diagnostic {
             severity: Severity::Warning,
-            message: "unused variable `x`".to_string(),
+            message: "unused variable `x`".into(),
             chunks: vec![SourceChunk {
                 path: std::path::PathBuf::from("test.java"),
-                fragment: "let x = 42;".to_string(),
+                fragment: "let x = 42;".into(),
                 offset: 0,
                 line: 5,
                 annotations: vec![],
@@ -106,10 +106,10 @@ mod tests {
     fn test_render_with_annotation() {
         let diagnostic = Diagnostic {
             severity: Severity::Error,
-            message: "mismatched types".to_string(),
+            message: "mismatched types".into(),
             chunks: vec![SourceChunk {
                 path: std::path::PathBuf::from("test.java"),
-                fragment: "let x: String = 42;".to_string(),
+                fragment: "let x: String = 42;".into(),
                 offset: 0,
                 line: 1,
                 annotations: vec![Annotation {
@@ -136,18 +136,18 @@ mod tests {
     fn test_render_multiple_chunks() {
         let diagnostic = Diagnostic {
             severity: Severity::Error,
-            message: "undefined variable".to_string(),
+            message: "undefined variable".into(),
             chunks: vec![
                 SourceChunk {
                     path: std::path::PathBuf::from("main.java"),
-                    fragment: "fn main() {}".to_string(),
+                    fragment: "fn main() {}".into(),
                     offset: 0,
                     line: 1,
                     annotations: vec![],
                 },
                 SourceChunk {
                     path: std::path::PathBuf::from("main.java"),
-                    fragment: "    x;".to_string(),
+                    fragment: "    x;".into(),
                     offset: 12,
                     line: 2,
                     annotations: vec![],
