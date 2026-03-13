@@ -1,0 +1,4 @@
+/data/projects/rajac/verification/sources_invalid/lexer/UnterminatedString.java:5: error: unclosed string literal
+        System.out.println( "Hello, World! );
+                            ^
+1 error
