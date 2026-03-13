@@ -6,41 +6,53 @@ use rajac_base::shared_string::SharedString;
 use crate::source_chunk::SourceChunk;
 
 pub fn render_diagnostic(diagnostic: &Diagnostic) -> SharedString {
+    render_diagnostics(std::iter::once(diagnostic))
+}
+
+pub fn render_diagnostics<'a>(
+    diagnostics: impl IntoIterator<Item = &'a Diagnostic>,
+) -> SharedString {
     use annotate_snippets::{
         AnnotationKind, Group, Level, Renderer, Snippet, renderer::DecorStyle,
     };
 
-    let level = match diagnostic.severity {
-        Severity::Error => Level::ERROR,
-        Severity::Warning => Level::WARNING,
-        Severity::Note => Level::NOTE,
-        Severity::Help => Level::HELP,
-    };
+    let mut groups = Vec::new();
 
-    let title = level.primary_title(&*diagnostic.message);
+    for diagnostic in diagnostics {
+        let level = match diagnostic.severity {
+            Severity::Error => Level::ERROR,
+            Severity::Warning => Level::WARNING,
+            Severity::Note => Level::NOTE,
+            Severity::Help => Level::HELP,
+        };
 
-    let mut group = Group::with_title(title);
+        let title = level.primary_title(&*diagnostic.message);
 
-    for chunk in &diagnostic.chunks {
-        let path = chunk.path.as_str().to_string();
-        let mut snippet: Snippet<'static, annotate_snippets::Annotation<'static>> =
-            Snippet::source(chunk.fragment.as_str().to_string())
-                .line_start(chunk.line)
-                .path(path);
+        let mut group = Group::with_title(title);
 
-        for annotation in &chunk.annotations {
-            snippet = snippet.annotation(
-                AnnotationKind::Primary
-                    .span(annotation.span.0.clone())
-                    .label(annotation.message.as_str().to_string()),
-            );
+        for chunk in &diagnostic.chunks {
+            let path = chunk.path.as_str().to_string();
+            let mut snippet: Snippet<'static, annotate_snippets::Annotation<'static>> =
+                Snippet::source(chunk.fragment.as_str().to_string())
+                    .line_start(chunk.line)
+                    .path(path);
+
+            for annotation in &chunk.annotations {
+                snippet = snippet.annotation(
+                    AnnotationKind::Primary
+                        .span(annotation.span.0.clone())
+                        .label(annotation.message.as_str().to_string()),
+                );
+            }
+
+            group = group.element(snippet);
         }
 
-        group = group.element(snippet);
+        groups.push(group);
     }
 
     let renderer = Renderer::styled().decor_style(DecorStyle::Unicode);
-    SharedString::from(renderer.render(&[group]).to_string())
+    SharedString::from(renderer.render(&groups).to_string())
 }
 
 #[cfg(test)]

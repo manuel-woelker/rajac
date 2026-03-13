@@ -758,6 +758,7 @@ dependencies = [
  "rajac-base",
  "rajac-diagnostics",
  "rajac-token",
+ "strip-ansi",
 ]
 
 [[package]]

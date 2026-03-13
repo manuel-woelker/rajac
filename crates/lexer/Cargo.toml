@@ -10,3 +10,4 @@ rajac-base = { path = "../base" }
 
 [dev-dependencies]
 expect-test = "1.5"
+strip-ansi = "0.1"

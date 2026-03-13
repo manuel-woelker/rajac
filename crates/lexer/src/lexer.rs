@@ -454,6 +454,8 @@ impl<'a> Iterator for Lexer<'a> {
 mod tests {
     use super::*;
     use expect_test::expect;
+    use rajac_diagnostics::render_diagnostics;
+    use strip_ansi::strip_ansi;
 
     #[test]
     fn test_unterminated_string() {
@@ -464,7 +466,9 @@ mod tests {
         assert!(tokens.iter().any(|t| t.kind == TokenKind::Error));
         assert!(!lexer.diagnostics().is_empty());
 
-        let diagnostic = lexer.diagnostics().iter().next().unwrap();
-        expect!["unclosed string literal"].assert_eq(diagnostic.message.as_str());
+        let output = render_diagnostics(lexer.diagnostics().iter());
+        let stripped = strip_ansi(&output);
+
+        expect!["error: unclosed string literal\n  ╭▸ test.java\n  │"].assert_eq(&stripped);
     }
 }
