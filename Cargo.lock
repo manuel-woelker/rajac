@@ -1178,6 +1178,7 @@ dependencies = [
  "rajac-base",
  "rajac-bytecode",
  "rajac-compiler",
+ "rajac-diagnostics",
  "regex",
  "ristretto_classfile",
  "sha2",

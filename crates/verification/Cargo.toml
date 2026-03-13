@@ -10,6 +10,7 @@ hex = "0.4"
 rajac-compiler = { path = "../../crates/compiler" }
 rajac-base = { path = "../../crates/base" }
 rajac-bytecode = { path = "../../crates/bytecode" }
+rajac-diagnostics = { path = "../../crates/diagnostics" }
 colored = "2.0"
 diff = "0.1"
 ristretto_classfile = "0.29.0"

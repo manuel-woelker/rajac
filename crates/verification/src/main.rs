@@ -7,7 +7,6 @@ use regex::Regex;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use walkdir::WalkDir;
 
 fn main() -> RajacResult<()> {
@@ -246,7 +245,6 @@ fn get_class_files(dir: &Path) -> RajacResult<Vec<PathBuf>> {
 
 fn verify_invalid_sources(invalid_dir: &Path, reference_output: &Path) -> RajacResult<()> {
     let invalid_output_dir = reference_output.join("invalid");
-    let rajac_bin = Path::new("target/release/rajac-compiler");
 
     let java_files = get_java_files(invalid_dir)?;
     let mut failures = 0;
@@ -272,22 +270,18 @@ fn verify_invalid_sources(invalid_dir: &Path, reference_output: &Path) -> RajacR
 
         let (ref_line, ref_error) = parse_reference_error(&ref_content)?;
 
-        let output = Command::new(rajac_bin).arg(invalid_dir).output();
-
-        let output = match output {
-            Ok(o) => o,
-            Err(e) => {
-                println!("{} Failed to run rajac: {}", "Error:".red(), e);
-                failures += 1;
-                continue;
-            }
+        let config = CompilerConfig {
+            source_dirs: vec![FilePath::new(invalid_dir)],
+            target_dir: FilePath::new(invalid_dir.join("classes")),
+            classpaths: vec!["/usr/lib/jvm/java-8-openjdk/jre/lib/rt.jar".into()],
         };
 
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let rajac_output = format!("{}{}", stdout, stderr);
+        let mut compiler = Compiler::new(config);
+        compiler.compile_directory().ok();
 
-        if output.status.success() {
+        let diagnostics = &compiler.diagnostics;
+
+        if diagnostics.is_empty() {
             println!(
                 "{} {} should have failed but compiled successfully",
                 "Error:".red(),
@@ -301,13 +295,14 @@ fn verify_invalid_sources(invalid_dir: &Path, reference_output: &Path) -> RajacR
             continue;
         }
 
-        let rajac_line = extract_line_number(&rajac_output);
-        let rajac_error = extract_error_message(&rajac_output);
+        let diagnostic = diagnostics.iter().next().unwrap();
+        let rajac_line = diagnostic.chunks.first().map(|c| c.line);
+        let rajac_error = diagnostic.message.as_str();
 
         let line_match = rajac_line.is_some_and(|l| l == ref_line);
         let error_match = rajac_error
-            .as_ref()
-            .is_some_and(|e| e.to_lowercase().contains(&ref_error.to_lowercase()));
+            .to_lowercase()
+            .contains(&ref_error.to_lowercase());
 
         if !line_match || !error_match {
             println!(
@@ -319,9 +314,9 @@ fn verify_invalid_sources(invalid_dir: &Path, reference_output: &Path) -> RajacR
             println!(
                 "  Rajac:     line {}, error '{}'",
                 rajac_line
-                    .map(|l| l.to_string())
+                    .map(|l: usize| l.to_string())
                     .unwrap_or_else(|| "N/A".to_string()),
-                rajac_error.unwrap_or_else(|| "N/A".to_string())
+                rajac_error
             );
             failures += 1;
         } else {
@@ -380,39 +375,4 @@ fn parse_reference_error(content: &str) -> RajacResult<(usize, String)> {
     }
 
     Err(rajac_base::err!("Failed to parse reference error output"))
-}
-
-fn extract_line_number(output: &str) -> Option<usize> {
-    let line_regex = Regex::new(r"(\d+)\s*│").ok()?;
-    for line in output.lines() {
-        if let Some(caps) = line_regex.captures(line) {
-            if let Ok(num) = caps.get(1).unwrap().as_str().parse::<usize>() {
-                return Some(num);
-            }
-        }
-    }
-
-    let simple_regex = Regex::new(r"line\s*(\d+)").ok()?;
-    for line in output.lines() {
-        let lowercase_line = line.to_lowercase();
-        if let Some(caps) = simple_regex.captures(&lowercase_line) {
-            if let Ok(num) = caps.get(1).unwrap().as_str().parse::<usize>() {
-                return Some(num);
-            }
-        }
-    }
-
-    None
-}
-
-fn extract_error_message(output: &str) -> Option<String> {
-    let error_regex = Regex::new(r"error:\s*(.+)").ok()?;
-
-    for line in output.lines() {
-        if let Some(caps) = error_regex.captures(line) {
-            return Some(caps.get(1).unwrap().as_str().to_string());
-        }
-    }
-
-    None
 }
