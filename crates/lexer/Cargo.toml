@@ -7,3 +7,6 @@ edition = "2024"
 rajac-token = { path = "../token" }
 rajac-diagnostics = { path = "../diagnostics" }
 rajac-base = { path = "../base" }
+
+[dev-dependencies]
+expect-test = "1.5"

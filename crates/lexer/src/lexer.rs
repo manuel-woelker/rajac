@@ -453,6 +453,7 @@ impl<'a> Iterator for Lexer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use expect_test::expect;
 
     #[test]
     fn test_unterminated_string() {
@@ -462,5 +463,8 @@ mod tests {
 
         assert!(tokens.iter().any(|t| t.kind == TokenKind::Error));
         assert!(!lexer.diagnostics().is_empty());
+
+        let diagnostic = lexer.diagnostics().iter().next().unwrap();
+        expect!["unclosed string literal"].assert_eq(diagnostic.message.as_str());
     }
 }

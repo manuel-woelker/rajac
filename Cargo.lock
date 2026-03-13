@@ -754,6 +754,7 @@ dependencies = [
 name = "rajac-lexer"
 version = "0.1.0"
 dependencies = [
+ "expect-test",
  "rajac-base",
  "rajac-diagnostics",
  "rajac-token",
