@@ -1,5 +1,6 @@
 use crate::PackageTable;
-use rajac_types::TypeArena;
+use rajac_base::shared_string::SharedString;
+use rajac_types::{Type, TypeArena, TypeId};
 use std::collections::HashMap;
 
 #[derive(Debug, Default)]
@@ -46,5 +47,19 @@ impl SymbolTable {
 
     pub fn is_empty(&self) -> bool {
         self.packages.is_empty()
+    }
+
+    pub fn add_class(
+        &mut self,
+        package_name: &str,
+        class_name: &str,
+        ty: Type,
+        kind: crate::SymbolKind,
+    ) -> TypeId {
+        let type_id = self.type_arena.alloc(ty);
+        let package = self.package(package_name);
+        let name = SharedString::new(class_name);
+        package.insert(name.clone(), crate::Symbol::new(name, kind, type_id));
+        type_id
     }
 }

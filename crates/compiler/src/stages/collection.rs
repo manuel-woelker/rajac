@@ -61,7 +61,7 @@ use rajac_base::file_path::FilePath;
 use rajac_base::result::RajacResult;
 use rajac_base::shared_string::SharedString;
 use rajac_classpath::Classpath;
-use rajac_symbols::{Symbol, SymbolKind, SymbolTable};
+use rajac_symbols::{SymbolKind, SymbolTable};
 
 /// Populates the symbol table with symbols from classpath entries.
 ///
@@ -115,10 +115,10 @@ pub fn collect_classpath_symbols(
 pub fn collect_compilation_unit_symbols(
     symbol_table: &mut SymbolTable,
     compilation_units: &[CompilationUnit],
-    type_arena: &mut rajac_types::TypeArena,
+    _type_arena: &mut rajac_types::TypeArena,
 ) -> RajacResult<()> {
     for unit in compilation_units {
-        populate_symbol_table(symbol_table, &unit.ast, &unit.arena, type_arena);
+        populate_symbol_table(symbol_table, &unit.ast, &unit.arena);
     }
     Ok(())
 }
@@ -149,12 +149,7 @@ pub fn collect_compilation_unit_symbols(
 /// - Defaults to empty package (default package) if none specified
 /// - Creates or retrieves the appropriate package in the symbol table
 /// - All symbols from the file are added to that package
-fn populate_symbol_table(
-    symbol_table: &mut SymbolTable,
-    ast: &Ast,
-    arena: &AstArena,
-    type_arena: &mut rajac_types::TypeArena,
-) {
+fn populate_symbol_table(symbol_table: &mut SymbolTable, ast: &Ast, arena: &AstArena) {
     let package_name = ast
         .package
         .as_ref()
@@ -168,39 +163,27 @@ fn populate_symbol_table(
         })
         .unwrap_or_default();
 
-    // First collect all class info (no borrows)
-    let class_data: Vec<_> = ast
-        .classes
-        .iter()
-        .filter_map(|class_id| {
-            let class = arena.class_decl(*class_id);
-            let name = class.name.name.clone();
-            let kind = match class.kind {
-                ClassKind::Class => SymbolKind::Class,
-                ClassKind::Interface => SymbolKind::Interface,
-                ClassKind::Enum | ClassKind::Record | ClassKind::Annotation => return None,
-            };
-            Some((name, kind))
-        })
-        .collect();
+    for class_id in &ast.classes {
+        let class = arena.class_decl(*class_id);
+        let name = class.name.name.clone();
 
-    // Second: allocate all type IDs
-    let type_ids: Vec<_> = class_data
-        .iter()
-        .map(|(name, _)| {
-            let class_type = if !package_name.is_empty() {
-                rajac_types::ClassType::new(name.clone())
-                    .with_package(SharedString::new(&package_name))
-            } else {
-                rajac_types::ClassType::new(name.clone())
-            };
-            type_arena.alloc(rajac_types::Type::class(class_type))
-        })
-        .collect();
+        let kind = match class.kind {
+            ClassKind::Class => SymbolKind::Class,
+            ClassKind::Interface => SymbolKind::Interface,
+            ClassKind::Enum | ClassKind::Record | ClassKind::Annotation => continue,
+        };
 
-    // Third: insert into symbol table
-    let package = symbol_table.package(&package_name);
-    for ((name, kind), type_id) in class_data.into_iter().zip(type_ids) {
-        package.insert(name.clone(), Symbol::new(name, kind, type_id));
+        let class_type = if !package_name.is_empty() {
+            rajac_types::ClassType::new(name.clone()).with_package(SharedString::new(&package_name))
+        } else {
+            rajac_types::ClassType::new(name.clone())
+        };
+
+        let _type_id = symbol_table.add_class(
+            &package_name,
+            &name,
+            rajac_types::Type::class(class_type),
+            kind,
+        );
     }
 }
