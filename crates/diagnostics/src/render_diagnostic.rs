@@ -7,7 +7,7 @@ use crate::source_chunk::SourceChunk;
 
 pub fn render_diagnostic(diagnostic: &Diagnostic) -> SharedString {
     use annotate_snippets::{
-        renderer::DecorStyle, AnnotationKind, Group, Level, Renderer, Snippet,
+        AnnotationKind, Group, Level, Renderer, Snippet, renderer::DecorStyle,
     };
 
     let level = match diagnostic.severity {
@@ -22,7 +22,7 @@ pub fn render_diagnostic(diagnostic: &Diagnostic) -> SharedString {
     let mut group = Group::with_title(title);
 
     for chunk in &diagnostic.chunks {
-        let path = chunk.path.to_string_lossy().into_owned();
+        let path = chunk.path.as_str().to_string();
         let mut snippet: Snippet<'static, annotate_snippets::Annotation<'static>> =
             Snippet::source(chunk.fragment.as_str().to_string())
                 .line_start(chunk.line)
@@ -49,6 +49,7 @@ mod tests {
     use crate::annotation::Annotation;
     use crate::span::Span;
     use expect_test::expect;
+    use rajac_base::file_path::FilePath;
     use strip_ansi::strip_ansi;
 
     #[test]
@@ -58,7 +59,7 @@ mod tests {
             severity: Severity::Error,
             message: "expected type, found `i32`".into(),
             chunks: vec![SourceChunk {
-                path: std::path::PathBuf::from("test.java"),
+                path: FilePath::new("test.java"),
                 fragment: "let x: String = 42;".into(),
                 offset: 0,
                 line: 1,
@@ -83,7 +84,7 @@ mod tests {
             severity: Severity::Warning,
             message: "unused variable `x`".into(),
             chunks: vec![SourceChunk {
-                path: std::path::PathBuf::from("test.java"),
+                path: FilePath::new("test.java"),
                 fragment: "let x = 42;".into(),
                 offset: 0,
                 line: 5,
@@ -108,7 +109,7 @@ mod tests {
             severity: Severity::Error,
             message: "mismatched types".into(),
             chunks: vec![SourceChunk {
-                path: std::path::PathBuf::from("test.java"),
+                path: FilePath::new("test.java"),
                 fragment: "let x: String = 42;".into(),
                 offset: 0,
                 line: 1,
@@ -139,14 +140,14 @@ mod tests {
             message: "undefined variable".into(),
             chunks: vec![
                 SourceChunk {
-                    path: std::path::PathBuf::from("main.java"),
+                    path: FilePath::new("main.java"),
                     fragment: "fn main() {}".into(),
                     offset: 0,
                     line: 1,
                     annotations: vec![],
                 },
                 SourceChunk {
-                    path: std::path::PathBuf::from("main.java"),
+                    path: FilePath::new("main.java"),
                     fragment: "    x;".into(),
                     offset: 12,
                     line: 2,

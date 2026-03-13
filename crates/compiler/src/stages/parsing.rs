@@ -128,7 +128,7 @@ pub fn parse_files(java_files: &[FilePath]) -> RajacResult<Vec<CompilationUnit>>
         .map(|java_file| {
             let source =
                 fs::read_to_string(java_file.as_path()).context("Failed to read source file")?;
-            let parse_result = parse(&source);
+            let parse_result = parse(&source, java_file.clone());
             Ok(CompilationUnit {
                 source_file: java_file.clone(),
                 ast: parse_result.ast,

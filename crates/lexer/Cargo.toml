@@ -5,3 +5,5 @@ edition = "2024"
 
 [dependencies]
 rajac-token = { path = "../token" }
+rajac-diagnostics = { path = "../diagnostics" }
+rajac-base = { path = "../base" }

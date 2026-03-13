@@ -1,18 +1,59 @@
+use rajac_base::file_path::FilePath;
+use rajac_base::shared_string::SharedString;
+use rajac_diagnostics::{Diagnostic, Diagnostics, Severity, SourceChunk, Span};
 use rajac_token::{Token, TokenKind};
+use std::ops::Range;
 
+#[allow(dead_code)]
 pub struct Lexer<'a> {
     source: &'a str,
+    path: FilePath,
     pos: usize,
+    line: usize,
+    diagnostics: Diagnostics,
 }
 
 impl<'a> Lexer<'a> {
-    pub fn new(source: &'a str) -> Self {
-        Self { source, pos: 0 }
+    pub fn new(source: &'a str, path: FilePath) -> Self {
+        Self {
+            source,
+            path,
+            pos: 0,
+            line: 1,
+            diagnostics: Diagnostics::new(),
+        }
+    }
+
+    pub fn diagnostics(&self) -> &Diagnostics {
+        &self.diagnostics
+    }
+
+    #[allow(dead_code)]
+    fn add_error(&mut self, message: impl Into<SharedString>, span: Range<usize>) {
+        self.diagnostics.add(Diagnostic {
+            severity: Severity::Error,
+            message: message.into(),
+            chunks: vec![SourceChunk {
+                path: self.path.clone(),
+                fragment: self.source.into(),
+                offset: span.start,
+                line: self.line,
+                annotations: vec![],
+            }],
+        });
+    }
+
+    #[allow(dead_code)]
+    fn current_span(&self, start: usize) -> Span {
+        Span(start..self.pos)
     }
 
     fn bump(&mut self) -> Option<char> {
         let ch = self.source[self.pos..].chars().next()?;
         self.pos += ch.len_utf8();
+        if ch == '\n' {
+            self.line += 1;
+        }
         Some(ch)
     }
 

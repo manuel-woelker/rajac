@@ -1,4 +1,6 @@
 use rajac_ast::*;
+#[allow(unused_imports)]
+use rajac_base::file_path::FilePath;
 use rajac_base::shared_string::SharedString;
 use rajac_lexer::Lexer;
 use rajac_token::{Token, TokenKind};
@@ -846,7 +848,7 @@ mod tests {
     use super::*;
 
     fn parse_src(source: &str) -> ParseResult {
-        let lexer = Lexer::new(source);
+        let lexer = Lexer::new(source, FilePath::new("test.java"));
         let parser = Parser::new(lexer, source);
         parser.parse_compilation_unit()
     }
