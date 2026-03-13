@@ -55,6 +55,16 @@ impl SharedString {
     }
 }
 
+/// Creates a new SharedString from a format string.
+///
+/// This macro delegates to `eco_format` from the ecow crate.
+#[macro_export]
+macro_rules! shared_format {
+    ($($arg:tt)*) => {
+        $crate::shared_string::SharedString(ecow::eco_format!($($arg)*))
+    };
+}
+
 impl Default for SharedString {
     fn default() -> Self {
         Self::empty()
@@ -271,5 +281,18 @@ mod tests {
 
         assert_eq!(original, deserialized);
         assert_eq!(deserialized.as_str(), "Hello 🌍 世界");
+    }
+
+    #[test]
+    fn test_shared_string_format_macro() {
+        let name = "world";
+        let s = shared_format!("Hello, {}!", name);
+        assert_eq!(s.as_str(), "Hello, world!");
+    }
+
+    #[test]
+    fn test_shared_string_format_macro_multiple_args() {
+        let s = shared_format!("{} + {} = {}", 1, 2, 3);
+        assert_eq!(s.as_str(), "1 + 2 = 3");
     }
 }
