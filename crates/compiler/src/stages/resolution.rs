@@ -163,31 +163,22 @@ use rajac_symbols::SymbolTable;
 /// - Built-in types (String, Object) are always available
 /// - Fully qualified names bypass import resolution
 /// - Inner classes have special resolution rules
-pub fn resolve_identifiers(
-    compilation_units: &mut [CompilationUnit],
-    symbol_table: &SymbolTable,
-    type_arena: &mut rajac_types::TypeArena,
-) {
+pub fn resolve_identifiers(compilation_units: &mut [CompilationUnit], symbol_table: &SymbolTable) {
     for unit in compilation_units.iter_mut() {
-        resolve_compilation_unit(&unit.ast, &mut unit.arena, symbol_table, type_arena);
+        resolve_compilation_unit(&unit.ast, &mut unit.arena, symbol_table);
     }
 }
 
 /// Resolves identifiers in a single compilation unit.
-fn resolve_compilation_unit(
-    ast: &Ast,
-    arena: &mut AstArena,
-    symbol_table: &SymbolTable,
-    type_arena: &mut rajac_types::TypeArena,
-) {
+fn resolve_compilation_unit(ast: &Ast, arena: &mut AstArena, symbol_table: &SymbolTable) {
     let context = ResolveContext::new(ast, symbol_table);
 
     for stmt_id in &ast.statements {
-        resolve_stmt(*stmt_id, arena, &context, type_arena);
+        resolve_stmt(*stmt_id, arena, &context);
     }
 
     for class_id in &ast.classes {
-        resolve_class_decl(*class_id, arena, &context, type_arena);
+        resolve_class_decl(*class_id, arena, &context);
     }
 }
 
@@ -233,7 +224,6 @@ fn resolve_class_decl(
     class_id: rajac_ast::ClassDeclId,
     arena: &mut AstArena,
     context: &ResolveContext,
-    type_arena: &mut rajac_types::TypeArena,
 ) {
     let (members, extends, implements, permits) = {
         let class = &mut arena.class_decls[class_id.0 as usize];
@@ -250,47 +240,38 @@ fn resolve_class_decl(
     };
 
     if let Some(type_id) = extends {
-        resolve_type(type_id, arena, context, type_arena);
+        resolve_type(type_id, arena, context);
     }
     for type_id in implements {
-        resolve_type(type_id, arena, context, type_arena);
+        resolve_type(type_id, arena, context);
     }
     for type_id in permits {
-        resolve_type(type_id, arena, context, type_arena);
+        resolve_type(type_id, arena, context);
     }
     for member_id in members {
-        resolve_class_member(member_id, arena, context, type_arena);
+        resolve_class_member(member_id, arena, context);
     }
 }
 
 /// Resolves identifiers in a class member.
-fn resolve_class_member(
-    member_id: ClassMemberId,
-    arena: &mut AstArena,
-    context: &ResolveContext,
-    type_arena: &mut rajac_types::TypeArena,
-) {
+fn resolve_class_member(member_id: ClassMemberId, arena: &mut AstArena, context: &ResolveContext) {
     let mut member = arena.class_members[member_id.0 as usize].clone();
 
     match &mut member {
-        rajac_ast::ClassMember::Field(field) => resolve_field(field, arena, context, type_arena),
-        rajac_ast::ClassMember::Method(method) => {
-            resolve_method(method, arena, context, type_arena)
-        }
+        rajac_ast::ClassMember::Field(field) => resolve_field(field, arena, context),
+        rajac_ast::ClassMember::Method(method) => resolve_method(method, arena, context),
         rajac_ast::ClassMember::Constructor(constructor) => {
-            resolve_constructor(constructor, arena, context, type_arena)
+            resolve_constructor(constructor, arena, context)
         }
-        rajac_ast::ClassMember::StaticBlock(stmt_id) => {
-            resolve_stmt(*stmt_id, arena, context, type_arena)
-        }
+        rajac_ast::ClassMember::StaticBlock(stmt_id) => resolve_stmt(*stmt_id, arena, context),
         rajac_ast::ClassMember::NestedClass(class_id)
         | rajac_ast::ClassMember::NestedInterface(class_id)
         | rajac_ast::ClassMember::NestedRecord(class_id)
         | rajac_ast::ClassMember::NestedAnnotation(class_id) => {
-            resolve_class_decl(*class_id, arena, context, type_arena)
+            resolve_class_decl(*class_id, arena, context)
         }
         rajac_ast::ClassMember::NestedEnum(enum_decl) => {
-            resolve_enum_decl(enum_decl, arena, context, type_arena)
+            resolve_enum_decl(enum_decl, arena, context)
         }
     }
 
@@ -298,66 +279,51 @@ fn resolve_class_member(
 }
 
 /// Resolves identifiers in an enum declaration.
-fn resolve_enum_decl(
-    enum_decl: &mut EnumDecl,
-    arena: &mut AstArena,
-    context: &ResolveContext,
-    type_arena: &mut rajac_types::TypeArena,
-) {
+fn resolve_enum_decl(enum_decl: &mut EnumDecl, arena: &mut AstArena, context: &ResolveContext) {
     // Note: enum names no longer need resolution since we use TypeIds for types
 
     for type_id in enum_decl.implements.clone() {
-        resolve_type(type_id, arena, context, type_arena);
+        resolve_type(type_id, arena, context);
     }
 
     for entry in &mut enum_decl.entries {
         // Note: entry names no longer need resolution since they're just identifiers
         for expr_id in entry.args.clone() {
-            resolve_expr(expr_id, arena, context, type_arena);
+            resolve_expr(expr_id, arena, context);
         }
         if let Some(members) = &entry.body {
             for member_id in members.clone() {
-                resolve_class_member(member_id, arena, context, type_arena);
+                resolve_class_member(member_id, arena, context);
             }
         }
     }
 
     for member_id in enum_decl.members.clone() {
-        resolve_class_member(member_id, arena, context, type_arena);
+        resolve_class_member(member_id, arena, context);
     }
 }
 
 /// Resolves identifiers in a field declaration.
-fn resolve_field(
-    field: &mut Field,
-    arena: &mut AstArena,
-    context: &ResolveContext,
-    type_arena: &mut rajac_types::TypeArena,
-) {
+fn resolve_field(field: &mut Field, arena: &mut AstArena, context: &ResolveContext) {
     // Note: field names no longer need resolution since they're just identifiers
-    resolve_type(field.ty, arena, context, type_arena);
+    resolve_type(field.ty, arena, context);
     if let Some(expr_id) = field.initializer {
-        resolve_expr(expr_id, arena, context, type_arena);
+        resolve_expr(expr_id, arena, context);
     }
 }
 
 /// Resolves identifiers in a method declaration.
-fn resolve_method(
-    method: &mut Method,
-    arena: &mut AstArena,
-    context: &ResolveContext,
-    type_arena: &mut rajac_types::TypeArena,
-) {
+fn resolve_method(method: &mut Method, arena: &mut AstArena, context: &ResolveContext) {
     // Note: method names no longer need resolution since they're just identifiers
     for param_id in method.params.clone() {
-        resolve_param(param_id, arena, context, type_arena);
+        resolve_param(param_id, arena, context);
     }
-    resolve_type(method.return_ty, arena, context, type_arena);
+    resolve_type(method.return_ty, arena, context);
     for throws_id in method.throws.clone() {
-        resolve_type(throws_id, arena, context, type_arena);
+        resolve_type(throws_id, arena, context);
     }
     if let Some(body) = method.body {
-        resolve_stmt(body, arena, context, type_arena);
+        resolve_stmt(body, arena, context);
     }
 }
 
@@ -366,39 +332,28 @@ fn resolve_constructor(
     constructor: &mut Constructor,
     arena: &mut AstArena,
     context: &ResolveContext,
-    type_arena: &mut rajac_types::TypeArena,
 ) {
     // Note: constructor names no longer need resolution since they're just identifiers
     for param_id in constructor.params.clone() {
-        resolve_param(param_id, arena, context, type_arena);
+        resolve_param(param_id, arena, context);
     }
     for throws_id in constructor.throws.clone() {
-        resolve_type(throws_id, arena, context, type_arena);
+        resolve_type(throws_id, arena, context);
     }
     if let Some(body) = constructor.body {
-        resolve_stmt(body, arena, context, type_arena);
+        resolve_stmt(body, arena, context);
     }
 }
 
 /// Resolves identifiers in a parameter.
-fn resolve_param(
-    param_id: ParamId,
-    arena: &mut AstArena,
-    context: &ResolveContext,
-    type_arena: &mut rajac_types::TypeArena,
-) {
+fn resolve_param(param_id: ParamId, arena: &mut AstArena, context: &ResolveContext) {
     let param = &mut arena.params[param_id.0 as usize];
     // Note: parameter names no longer need resolution since they're just identifiers
-    resolve_type(param.ty, arena, context, type_arena);
+    resolve_type(param.ty, arena, context);
 }
 
 /// Resolves identifiers in a statement.
-fn resolve_stmt(
-    stmt_id: StmtId,
-    arena: &mut AstArena,
-    context: &ResolveContext,
-    type_arena: &mut rajac_types::TypeArena,
-) {
+fn resolve_stmt(stmt_id: StmtId, arena: &mut AstArena, context: &ResolveContext) {
     let (exprs, stmts, types, params) = {
         let stmt = &mut arena.stmts[stmt_id.0 as usize];
         let mut exprs = Vec::new();
@@ -526,26 +481,21 @@ fn resolve_stmt(
     };
 
     for type_id in types {
-        resolve_type(type_id, arena, context, type_arena);
+        resolve_type(type_id, arena, context);
     }
     for param_id in params {
-        resolve_param(param_id, arena, context, type_arena);
+        resolve_param(param_id, arena, context);
     }
     for expr_id in exprs {
-        resolve_expr(expr_id, arena, context, type_arena);
+        resolve_expr(expr_id, arena, context);
     }
     for stmt_id in stmts {
-        resolve_stmt(stmt_id, arena, context, type_arena);
+        resolve_stmt(stmt_id, arena, context);
     }
 }
 
 /// Resolves identifiers in an expression.
-fn resolve_expr(
-    expr_id: ExprId,
-    arena: &mut AstArena,
-    context: &ResolveContext,
-    type_arena: &mut rajac_types::TypeArena,
-) {
+fn resolve_expr(expr_id: ExprId, arena: &mut AstArena, context: &ResolveContext) {
     let (exprs, types) = {
         let expr = &mut arena.exprs[expr_id.0 as usize];
         let mut exprs = Vec::new();
@@ -636,20 +586,15 @@ fn resolve_expr(
     };
 
     for type_id in types {
-        resolve_type(type_id, arena, context, type_arena);
+        resolve_type(type_id, arena, context);
     }
     for expr_id in exprs {
-        resolve_expr(expr_id, arena, context, type_arena);
+        resolve_expr(expr_id, arena, context);
     }
 }
 
 /// Resolves identifiers in a type.
-fn resolve_type(
-    type_id: AstTypeId,
-    arena: &mut AstArena,
-    context: &ResolveContext,
-    _type_arena: &mut rajac_types::TypeArena,
-) {
+fn resolve_type(type_id: AstTypeId, arena: &mut AstArena, context: &ResolveContext) {
     let types = {
         let ty = arena.ty_mut(type_id);
         let mut types = Vec::new();
@@ -698,7 +643,7 @@ fn resolve_type(
     };
 
     for type_id in types {
-        resolve_type(type_id, arena, context, _type_arena);
+        resolve_type(type_id, arena, context);
     }
 }
 

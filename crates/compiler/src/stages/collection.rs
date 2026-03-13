@@ -115,7 +115,6 @@ pub fn collect_classpath_symbols(
 pub fn collect_compilation_unit_symbols(
     symbol_table: &mut SymbolTable,
     compilation_units: &[CompilationUnit],
-    _type_arena: &mut rajac_types::TypeArena,
 ) -> RajacResult<()> {
     for unit in compilation_units {
         populate_symbol_table(symbol_table, &unit.ast, &unit.arena);

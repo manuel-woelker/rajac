@@ -182,8 +182,6 @@ pub struct Compiler {
     pub compilation_units: Vec<CompilationUnit>,
     /// Global symbol table for all compilation units
     pub symbol_table: SymbolTable,
-    /// Shared type arena for all compilation units
-    pub type_arena: rajac_types::TypeArena,
     /// Compilation statistics
     pub statistics: CompilationStatistics,
     /// Diagnostics collected during compilation
@@ -218,7 +216,6 @@ impl Compiler {
             compilation_units: Vec::new(),
             java_files: Vec::new(),
             config,
-            type_arena: rajac_types::TypeArena::new(),
             statistics: CompilationStatistics::new(),
             diagnostics: Diagnostics::new(),
         }
@@ -381,7 +378,6 @@ impl Compiler {
         collection::collect_compilation_unit_symbols(
             &mut self.symbol_table,
             &self.compilation_units,
-            &mut self.type_arena,
         )
     }
 
@@ -417,11 +413,7 @@ impl Compiler {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     fn resolve_identifiers(&mut self) {
-        resolution::resolve_identifiers(
-            &mut self.compilation_units,
-            &self.symbol_table,
-            &mut self.type_arena,
-        );
+        resolution::resolve_identifiers(&mut self.compilation_units, &self.symbol_table);
     }
 
     /// Generates bytecode class files from the resolved compilation units.
@@ -467,7 +459,7 @@ impl Compiler {
     fn generate_classfiles(&mut self) -> RajacResult<usize> {
         generation::generate_classfiles(
             &self.compilation_units,
-            &self.type_arena,
+            self.symbol_table.type_arena(),
             &self.symbol_table,
             self.config.target_dir.as_path(),
         )
