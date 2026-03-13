@@ -1172,6 +1172,7 @@ dependencies = [
  "rajac-base",
  "rajac-bytecode",
  "rajac-compiler",
+ "regex",
  "ristretto_classfile",
  "sha2",
  "walkdir",

@@ -3,13 +3,16 @@ use rajac_base::file_path::FilePath;
 use rajac_base::result::{RajacResult, ResultExt};
 use rajac_bytecode::pretty_print::pretty_print_classfile;
 use rajac_compiler::{Compiler, CompilerConfig};
+use regex::Regex;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use walkdir::WalkDir;
 
 fn main() -> RajacResult<()> {
     let sources_dir = Path::new("verification/sources");
+    let sources_invalid_dir = Path::new("verification/sources_invalid");
     let reference_output = Path::new("verification/output/openjdk_21");
     let rajac_base_output = Path::new("verification/output/rajac");
     let rajac_output = rajac_base_output;
@@ -27,6 +30,10 @@ fn main() -> RajacResult<()> {
 
     // Compare outputs
     compare_outputs(reference_output, rajac_output)?;
+
+    // Verify invalid sources produce errors
+    println!("\nVerifying invalid sources...");
+    verify_invalid_sources(sources_invalid_dir, reference_output)?;
 
     Ok(())
 }
@@ -235,4 +242,177 @@ fn get_class_files(dir: &Path) -> RajacResult<Vec<PathBuf>> {
 
     class_files.sort();
     Ok(class_files)
+}
+
+fn verify_invalid_sources(invalid_dir: &Path, reference_output: &Path) -> RajacResult<()> {
+    let invalid_output_dir = reference_output.join("invalid");
+    let rajac_bin = Path::new("target/release/rajac-compiler");
+
+    let java_files = get_java_files(invalid_dir)?;
+    let mut failures = 0;
+
+    for java_file in &java_files {
+        let file_stem = java_file.file_stem().unwrap().to_string_lossy();
+        let ref_output_file = invalid_output_dir.join(format!("{}.txt", file_stem));
+
+        if !ref_output_file.exists() {
+            println!(
+                "{} Missing reference output for: {}",
+                "Error:".red(),
+                file_stem
+            );
+            failures += 1;
+            continue;
+        }
+
+        let ref_content = fs::read_to_string(&ref_output_file).context(format!(
+            "Failed to read reference output: {}",
+            ref_output_file.display()
+        ))?;
+
+        let (ref_line, ref_error) = parse_reference_error(&ref_content)?;
+
+        let output = Command::new(rajac_bin).arg(invalid_dir).output();
+
+        let output = match output {
+            Ok(o) => o,
+            Err(e) => {
+                println!("{} Failed to run rajac: {}", "Error:".red(), e);
+                failures += 1;
+                continue;
+            }
+        };
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let rajac_output = format!("{}{}", stdout, stderr);
+
+        if output.status.success() {
+            println!(
+                "{} {} should have failed but compiled successfully",
+                "Error:".red(),
+                file_stem
+            );
+            println!(
+                "  Reference expected error at line {}: {}",
+                ref_line, ref_error
+            );
+            failures += 1;
+            continue;
+        }
+
+        let rajac_line = extract_line_number(&rajac_output);
+        let rajac_error = extract_error_message(&rajac_output);
+
+        let line_match = rajac_line.is_some_and(|l| l == ref_line);
+        let error_match = rajac_error
+            .as_ref()
+            .is_some_and(|e| e.to_lowercase().contains(&ref_error.to_lowercase()));
+
+        if !line_match || !error_match {
+            println!(
+                "{} {} - line number or error message mismatch",
+                "Error:".red(),
+                file_stem
+            );
+            println!("  Reference: line {}, error '{}'", ref_line, ref_error);
+            println!(
+                "  Rajac:     line {}, error '{}'",
+                rajac_line
+                    .map(|l| l.to_string())
+                    .unwrap_or_else(|| "N/A".to_string()),
+                rajac_error.unwrap_or_else(|| "N/A".to_string())
+            );
+            failures += 1;
+        } else {
+            println!("{} {} - passed", "OK:".green(), file_stem);
+        }
+    }
+
+    if failures > 0 {
+        println!(
+            "\n{} {} invalid source files failed verification",
+            "Error:".red(),
+            failures
+        );
+    } else {
+        println!(
+            "\n{} All invalid source files verified successfully",
+            "OK:".green()
+        );
+    }
+
+    Ok(())
+}
+
+fn get_java_files(dir: &Path) -> RajacResult<Vec<PathBuf>> {
+    let mut java_files = Vec::new();
+
+    for entry in WalkDir::new(dir)
+        .follow_links(true)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        if path.is_file() && path.extension().is_some_and(|ext| ext == "java") {
+            java_files.push(path.to_path_buf());
+        }
+    }
+
+    java_files.sort();
+    Ok(java_files)
+}
+
+fn parse_reference_error(content: &str) -> RajacResult<(usize, String)> {
+    let line_regex = Regex::new(r"(.+\.java):(\d+): error: (.+)")?;
+
+    for line in content.lines() {
+        if let Some(caps) = line_regex.captures(line) {
+            let line_num: usize = caps
+                .get(2)
+                .unwrap()
+                .as_str()
+                .parse()
+                .context("Failed to parse line number")?;
+            let error_msg = caps.get(3).unwrap().as_str().to_string();
+            return Ok((line_num, error_msg));
+        }
+    }
+
+    Err(rajac_base::err!("Failed to parse reference error output"))
+}
+
+fn extract_line_number(output: &str) -> Option<usize> {
+    let line_regex = Regex::new(r"(\d+)\s*│").ok()?;
+    for line in output.lines() {
+        if let Some(caps) = line_regex.captures(line) {
+            if let Ok(num) = caps.get(1).unwrap().as_str().parse::<usize>() {
+                return Some(num);
+            }
+        }
+    }
+
+    let simple_regex = Regex::new(r"line\s*(\d+)").ok()?;
+    for line in output.lines() {
+        let lowercase_line = line.to_lowercase();
+        if let Some(caps) = simple_regex.captures(&lowercase_line) {
+            if let Ok(num) = caps.get(1).unwrap().as_str().parse::<usize>() {
+                return Some(num);
+            }
+        }
+    }
+
+    None
+}
+
+fn extract_error_message(output: &str) -> Option<String> {
+    let error_regex = Regex::new(r"error:\s*(.+)").ok()?;
+
+    for line in output.lines() {
+        if let Some(caps) = error_regex.captures(line) {
+            return Some(caps.get(1).unwrap().as_str().to_string());
+        }
+    }
+
+    None
 }
