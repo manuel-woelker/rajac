@@ -2,7 +2,7 @@
 resolver = "3"
 
 members = [
-    "crates/base", "crates/bytecode", "crates/ballpit", "crates/token", "crates/lexer", "crates/compiler", "crates/ast", "crates/parser", "crates/verification", "crates/symbols", "crates/classpath"
+    "crates/base", "crates/bytecode", "crates/ballpit", "crates/token", "crates/lexer", "crates/compiler", "crates/ast", "crates/parser", "crates/verification", "crates/symbols", "crates/classpath", "crates/diagnostics"
 ]
 
 [workspace.dependencies]

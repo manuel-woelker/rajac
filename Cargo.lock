@@ -721,6 +721,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rajac-diagnostics"
+version = "0.1.0"
+
+[[package]]
 name = "rajac-lexer"
 version = "0.1.0"
 dependencies = [
