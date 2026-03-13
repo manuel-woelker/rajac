@@ -7,7 +7,7 @@ use crate::source_chunk::SourceChunk;
 
 pub fn render_diagnostic(diagnostic: &Diagnostic) -> SharedString {
     use annotate_snippets::{
-        AnnotationKind, Group, Level, Renderer, Snippet, renderer::DecorStyle,
+        renderer::DecorStyle, AnnotationKind, Group, Level, Renderer, Snippet,
     };
 
     let level = match diagnostic.severity {
