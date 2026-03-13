@@ -1,0 +1,4 @@
+/data/projects/rajac/verification/sources_invalid/lexer/InvalidEscapeSequence.java:3: error: illegal escape character
+        String s = "\q";
+                     ^
+1 error

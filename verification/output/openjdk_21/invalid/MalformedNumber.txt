@@ -1,0 +1,4 @@
+/data/projects/rajac/verification/sources_invalid/lexer/MalformedNumber.java:3: error: ';' expected
+        double d = 1.2.3;
+                      ^
+1 error

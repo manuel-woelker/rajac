@@ -1,0 +1,10 @@
+/data/projects/rajac/verification/sources_invalid/lexer/BadUnicodeEscape.java:3: error: illegal unicode escape
+        char c = '\u00G1';
+                      ^
+/data/projects/rajac/verification/sources_invalid/lexer/BadUnicodeEscape.java:3: error: unclosed character literal
+        char c = '\u00G1';
+                 ^
+/data/projects/rajac/verification/sources_invalid/lexer/BadUnicodeEscape.java:3: error: unclosed character literal
+        char c = '\u00G1';
+                        ^
+3 errors
