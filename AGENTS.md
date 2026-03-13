@@ -13,6 +13,7 @@ Note: All developer documentation should be written in English.
 ## Tech Stack
 
 - Implementation Language: Rust
+- Use `rajac_base::SharedString` instead of plain `String` for string fields in structs
 
 ## Documentation Strategy
 

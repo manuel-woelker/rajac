@@ -2,3 +2,12 @@
 name = "rajac-diagnostics"
 version = "0.1.0"
 edition = "2024"
+
+[dependencies]
+annotate-snippets = "0.12"
+rajac-base = { path = "../base" }
+
+[dev-dependencies]
+annotate-snippets = { version = "0.12", features = ["testing-colors"] }
+expect-test = "1.5"
+strip-ansi = "0.1"
