@@ -1,16 +1,9 @@
-use std::ops::Range;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Severity {
-    Error,
-    Warning,
-    Note,
-    Help,
-}
+use crate::severity::Severity;
+use crate::source_chunk::SourceChunk;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
     pub severity: Severity,
     pub message: String,
-    pub span: Option<Range<usize>>,
+    pub chunks: Vec<SourceChunk>,
 }

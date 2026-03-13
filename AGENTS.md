@@ -101,5 +101,7 @@ Prefer small source files.
 
 Only use lib.rs files to declare modules, do not put any structs, traits or functions there.
 
+Each struct, enum, trait, and their associated impl blocks should be in its own file.
+
 Choose descriptive names for files. Avoid names like "index.ts" or "types.ts".
 Do not bulk export items using "export * from 'submodule'".
