@@ -194,7 +194,7 @@ impl<'a> Lexer<'a> {
         TokenKind::IntLiteral
     }
 
-    fn read_string(&mut self, _start: usize) -> TokenKind {
+    fn read_string(&mut self, start: usize) -> TokenKind {
         while let Some(c) = self.peek() {
             if c == '"' {
                 self.bump();
@@ -206,14 +206,16 @@ impl<'a> Lexer<'a> {
                 continue;
             }
             if c == '\n' {
-                break;
+                self.add_error("unclosed string literal", start..self.pos);
+                return TokenKind::Error;
             }
             self.bump();
         }
-        TokenKind::StringLiteral
+        self.add_error("unclosed string literal", start..self.pos);
+        TokenKind::Error
     }
 
-    fn read_char(&mut self, _start: usize) -> TokenKind {
+    fn read_char(&mut self, start: usize) -> TokenKind {
         while let Some(c) = self.peek() {
             if c == '\'' {
                 self.bump();
@@ -225,11 +227,13 @@ impl<'a> Lexer<'a> {
                 continue;
             }
             if c == '\n' {
-                break;
+                self.add_error("unclosed character literal", start..self.pos);
+                return TokenKind::Error;
             }
             self.bump();
         }
-        TokenKind::CharLiteral
+        self.add_error("unclosed character literal", start..self.pos);
+        TokenKind::Error
     }
 
     fn single_char_token(&self, c: char) -> Option<TokenKind> {
@@ -417,14 +421,8 @@ impl<'a> Lexer<'a> {
                 }
                 _ => TokenKind::Caret,
             },
-            '"' => {
-                self.read_string(self.pos - 1);
-                TokenKind::StringLiteral
-            }
-            '\'' => {
-                self.read_char(self.pos - 1);
-                TokenKind::CharLiteral
-            }
+            '"' => self.read_string(self.pos - 1),
+            '\'' => self.read_char(self.pos - 1),
             _ if c.is_ascii_digit() => {
                 self.read_number(self.pos - 1);
                 TokenKind::IntLiteral
@@ -449,5 +447,20 @@ impl<'a> Iterator for Lexer<'a> {
             kind,
             span: start..self.pos,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_unterminated_string() {
+        let source = r#" "Hello, World! "#;
+        let mut lexer = Lexer::new(source, FilePath::new("test.java"));
+        let tokens: Vec<_> = lexer.by_ref().collect();
+
+        assert!(tokens.iter().any(|t| t.kind == TokenKind::Error));
+        assert!(!lexer.diagnostics().is_empty());
     }
 }
