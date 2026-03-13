@@ -133,6 +133,7 @@ pub fn parse_files(java_files: &[FilePath]) -> RajacResult<Vec<CompilationUnit>>
                 source_file: java_file.clone(),
                 ast: parse_result.ast,
                 arena: parse_result.arena,
+                diagnostics: parse_result.diagnostics,
             })
         })
         .collect::<RajacResult<Vec<_>>>()

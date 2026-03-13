@@ -30,6 +30,10 @@ impl<'a> Lexer<'a> {
         &self.diagnostics
     }
 
+    pub fn take_diagnostics(&mut self) -> Diagnostics {
+        std::mem::take(&mut self.diagnostics)
+    }
+
     #[allow(dead_code)]
     fn add_error(
         &mut self,

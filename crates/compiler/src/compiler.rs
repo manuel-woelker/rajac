@@ -53,6 +53,7 @@ responsibilities and well-defined inputs/outputs.
 
 use rajac_base::file_path::FilePath;
 use rajac_base::result::{RajacResult, ResultExt};
+use rajac_diagnostics::Diagnostics;
 use rajac_symbols::SymbolTable;
 use rayon::join;
 
@@ -63,8 +64,9 @@ use crate::statistics::{CompilationPhase, CompilationStatistics};
 ///
 /// A compilation unit is created for each Java source file and contains:
 /// - The source file path for reference and error reporting
-/// - The Abstract Syntax Tree (AST) representing the parsed code
-/// - The arena containing all AST nodes and their allocations
+/// - The parsed Abstract Syntax Tree (AST) representing the code structure
+/// - The arena containing all AST node allocations
+/// - Diagnostics collected during parsing
 ///
 /// This structure allows the compiler to maintain context about which
 /// file each AST originated from, which is essential for error reporting
@@ -77,6 +79,8 @@ pub struct CompilationUnit {
     pub ast: rajac_ast::Ast,
     /// Arena containing all AST node allocations
     pub arena: rajac_ast::AstArena,
+    /// Diagnostics collected during parsing
+    pub diagnostics: Diagnostics,
 }
 
 /// Configuration for the compiler specifying source directories and target directory.
@@ -183,6 +187,8 @@ pub struct Compiler {
     pub type_arena: rajac_types::TypeArena,
     /// Compilation statistics
     pub statistics: CompilationStatistics,
+    /// Diagnostics collected during compilation
+    pub diagnostics: Diagnostics,
 }
 
 impl Compiler {
@@ -215,6 +221,7 @@ impl Compiler {
             config,
             type_arena: rajac_types::TypeArena::new(),
             statistics: CompilationStatistics::new(),
+            diagnostics: Diagnostics::new(),
         }
     }
 
@@ -290,6 +297,11 @@ impl Compiler {
         self.java_files = java_files;
         self.compilation_units = parse_result.0?;
         parse_result.1?;
+
+        // Collect diagnostics from compilation units
+        for unit in &self.compilation_units {
+            self.diagnostics.extend(unit.diagnostics.iter().cloned());
+        }
 
         // Stage 3: Collect symbols from compilation units
         self.statistics.begin_phase(CompilationPhase::Collection);

@@ -732,6 +732,7 @@ dependencies = [
  "rajac-base",
  "rajac-bytecode",
  "rajac-classpath",
+ "rajac-diagnostics",
  "rajac-parser",
  "rajac-symbols",
  "rajac-types",
@@ -767,6 +768,7 @@ version = "0.1.0"
 dependencies = [
  "rajac-ast",
  "rajac-base",
+ "rajac-diagnostics",
  "rajac-lexer",
  "rajac-token",
  "rajac-types",

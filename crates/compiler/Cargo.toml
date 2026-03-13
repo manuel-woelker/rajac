@@ -13,4 +13,5 @@ walkdir = "2.5"
 rayon = "1.10"
 rajac-base = { path = "../base" }
 rajac-bytecode = { path = "../bytecode" }
+rajac-diagnostics = { path = "../diagnostics" }
 ristretto_classfile = {workspace = true}

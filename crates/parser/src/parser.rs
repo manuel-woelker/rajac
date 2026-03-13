@@ -2,6 +2,7 @@ use rajac_ast::*;
 #[allow(unused_imports)]
 use rajac_base::file_path::FilePath;
 use rajac_base::shared_string::SharedString;
+use rajac_diagnostics::Diagnostics;
 use rajac_lexer::Lexer;
 use rajac_token::{Token, TokenKind};
 use rajac_types::Ident;
@@ -11,6 +12,7 @@ use std::collections::VecDeque;
 pub struct ParseResult {
     pub ast: Ast,
     pub arena: AstArena,
+    pub diagnostics: Diagnostics,
 }
 
 pub struct Parser<'a> {
@@ -128,6 +130,7 @@ impl<'a> Parser<'a> {
         ParseResult {
             ast,
             arena: self.arena,
+            diagnostics: self.lexer.take_diagnostics(),
         }
     }
 
