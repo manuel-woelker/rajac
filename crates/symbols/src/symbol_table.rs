@@ -1,16 +1,27 @@
 use crate::PackageTable;
+use rajac_types::TypeArena;
 use std::collections::HashMap;
 
 #[derive(Debug, Default)]
 pub struct SymbolTable {
     packages: HashMap<String, PackageTable>,
+    pub(crate) type_arena: TypeArena,
 }
 
 impl SymbolTable {
     pub fn new() -> Self {
         Self {
             packages: HashMap::new(),
+            type_arena: TypeArena::new(),
         }
+    }
+
+    pub fn type_arena_mut(&mut self) -> &mut TypeArena {
+        &mut self.type_arena
+    }
+
+    pub fn type_arena(&self) -> &TypeArena {
+        &self.type_arena
     }
 
     pub fn package(&mut self, name: &str) -> &mut PackageTable {

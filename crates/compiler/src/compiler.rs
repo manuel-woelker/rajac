@@ -55,7 +55,6 @@ use rajac_base::file_path::FilePath;
 use rajac_base::result::{RajacResult, ResultExt};
 use rajac_diagnostics::Diagnostics;
 use rajac_symbols::SymbolTable;
-use rayon::join;
 
 use crate::stages::{collection, discovery, generation, parsing, resolution};
 use crate::statistics::{CompilationPhase, CompilationStatistics};
@@ -270,38 +269,26 @@ impl Compiler {
             return Ok(());
         }
 
-        // Stage 2: Parse source files AND collect classpath symbols in parallel
+        // Stage 2: Parse source files
         let java_files = std::mem::take(&mut self.java_files);
-        let classpaths = self.config.classpaths.clone();
-        let stats = self.statistics.clone();
 
-        let parse_result = join(
-            || {
-                stats.begin_phase(CompilationPhase::Parse);
-                let result = parsing::parse_files(&java_files);
-                stats.end_phase(CompilationPhase::Parse);
-                result
-            },
-            || {
-                stats.begin_phase(CompilationPhase::ClasspathCollect);
-                let result = collection::collect_classpath_symbols(
-                    &mut self.symbol_table,
-                    &classpaths,
-                    &mut self.type_arena,
-                );
-                stats.end_phase(CompilationPhase::ClasspathCollect);
-                result
-            },
-        );
+        self.statistics.begin_phase(CompilationPhase::Parse);
+        self.compilation_units = parsing::parse_files(&java_files)?;
+        self.statistics.end_phase(CompilationPhase::Parse);
 
         self.java_files = java_files;
-        self.compilation_units = parse_result.0?;
-        parse_result.1?;
 
         // Collect diagnostics from compilation units
         for unit in &self.compilation_units {
             self.diagnostics.extend(unit.diagnostics.iter().cloned());
         }
+
+        // Stage 2b: Collect classpath symbols
+        self.statistics
+            .begin_phase(CompilationPhase::ClasspathCollect);
+        collection::collect_classpath_symbols(&mut self.symbol_table, &self.config.classpaths)?;
+        self.statistics
+            .end_phase(CompilationPhase::ClasspathCollect);
 
         // Stage 3: Collect symbols from compilation units
         self.statistics.begin_phase(CompilationPhase::Collection);

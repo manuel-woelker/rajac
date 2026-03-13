@@ -168,9 +168,9 @@ pub fn resolve_identifiers(
     symbol_table: &SymbolTable,
     type_arena: &mut rajac_types::TypeArena,
 ) {
-    compilation_units.iter_mut().for_each(|unit| {
+    for unit in compilation_units.iter_mut() {
         resolve_compilation_unit(&unit.ast, &mut unit.arena, symbol_table, type_arena);
-    });
+    }
 }
 
 /// Resolves identifiers in a single compilation unit.

@@ -85,7 +85,6 @@ use rajac_symbols::{Symbol, SymbolKind, SymbolTable};
 pub fn collect_classpath_symbols(
     symbol_table: &mut SymbolTable,
     classpaths: &[FilePath],
-    type_arena: &mut rajac_types::TypeArena,
 ) -> RajacResult<()> {
     let mut classpath = Classpath::new();
     for classpath_entry in classpaths {
@@ -99,7 +98,7 @@ pub fn collect_classpath_symbols(
         }
     }
     if !classpath.is_empty() {
-        classpath.add_to_symbol_table(symbol_table, type_arena)?;
+        classpath.add_to_symbol_table(symbol_table)?;
     }
     Ok(())
 }
@@ -169,25 +168,39 @@ fn populate_symbol_table(
         })
         .unwrap_or_default();
 
+    // First collect all class info (no borrows)
+    let class_data: Vec<_> = ast
+        .classes
+        .iter()
+        .filter_map(|class_id| {
+            let class = arena.class_decl(*class_id);
+            let name = class.name.name.clone();
+            let kind = match class.kind {
+                ClassKind::Class => SymbolKind::Class,
+                ClassKind::Interface => SymbolKind::Interface,
+                ClassKind::Enum | ClassKind::Record | ClassKind::Annotation => return None,
+            };
+            Some((name, kind))
+        })
+        .collect();
+
+    // Second: allocate all type IDs
+    let type_ids: Vec<_> = class_data
+        .iter()
+        .map(|(name, _)| {
+            let class_type = if !package_name.is_empty() {
+                rajac_types::ClassType::new(name.clone())
+                    .with_package(SharedString::new(&package_name))
+            } else {
+                rajac_types::ClassType::new(name.clone())
+            };
+            type_arena.alloc(rajac_types::Type::class(class_type))
+        })
+        .collect();
+
+    // Third: insert into symbol table
     let package = symbol_table.package(&package_name);
-
-    for class_id in &ast.classes {
-        let class = arena.class_decl(*class_id);
-        let name = class.name.name.clone();
-        let kind = match class.kind {
-            ClassKind::Class => SymbolKind::Class,
-            ClassKind::Interface => SymbolKind::Interface,
-            ClassKind::Enum | ClassKind::Record | ClassKind::Annotation => continue,
-        };
-
-        // Create the appropriate type in the TypeArena
-        let class_type = if !package_name.is_empty() {
-            rajac_types::ClassType::new(name.clone()).with_package(SharedString::new(&package_name))
-        } else {
-            rajac_types::ClassType::new(name.clone())
-        };
-        let type_id = type_arena.alloc(rajac_types::Type::class(class_type));
-
+    for ((name, kind), type_id) in class_data.into_iter().zip(type_ids) {
         package.insert(name.clone(), Symbol::new(name, kind, type_id));
     }
 }
