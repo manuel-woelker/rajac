@@ -61,6 +61,7 @@ fn compile_with_rajac(
         source_dirs: vec![FilePath::new(sources_dir)],
         target_dir: FilePath::new(output_dir),
         classpaths: classpaths.to_vec(),
+        emit_timing_statistics: false,
     };
     let mut compiler = Compiler::new_with_symbol_table(config, prepopulated_symbol_table.clone());
     compiler.compile_directory()?;
@@ -297,6 +298,7 @@ fn verify_invalid_sources(
             source_dirs: vec![FilePath::new(invalid_dir)],
             target_dir: FilePath::new(invalid_dir.join("classes")),
             classpaths: classpaths.to_vec(),
+            emit_timing_statistics: false,
         };
 
         let mut compiler =

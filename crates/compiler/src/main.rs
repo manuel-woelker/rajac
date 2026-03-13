@@ -50,6 +50,7 @@ fn main() {
         source_dirs: vec![FilePath::new(source_dir)],
         target_dir: FilePath::new(source_dir.join("classes")),
         classpaths: vec!["/usr/lib/jvm/java-8-openjdk/jre/lib/rt.jar".into()],
+        emit_timing_statistics: false,
     };
     let mut compiler = Compiler::new(config);
 

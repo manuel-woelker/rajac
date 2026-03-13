@@ -104,6 +104,8 @@ pub struct CompilationUnit {
 ///         FilePath::new("src/test/java"),
 ///     ],
 ///     target_dir: FilePath::new("build/classes"),
+///     classpaths: Vec::new(),
+///     emit_timing_statistics: false,
 /// };
 /// ```
 #[derive(Debug, Clone)]
@@ -114,6 +116,9 @@ pub struct CompilerConfig {
     pub target_dir: FilePath,
     /// List of classpath entries (jar files and directories) to load symbols from
     pub classpaths: Vec<FilePath>,
+    /// Whether to emit compilation timing statistics
+    /// Defaults to false for production use
+    pub emit_timing_statistics: bool,
 }
 
 /// Main compiler orchestrator that manages the compilation pipeline.
@@ -143,6 +148,8 @@ pub struct CompilerConfig {
 /// # let config = CompilerConfig {
 /// #     source_dirs: vec![FilePath::new("src")],
 /// #     target_dir: FilePath::new("target"),
+/// #     classpaths: Vec::new(),
+/// #     emit_timing_statistics: false,
 /// # };
 /// let mut compiler = Compiler::new(config);
 /// compiler.compile_directory()?;
@@ -159,6 +166,8 @@ pub struct CompilerConfig {
 /// # let config = CompilerConfig {
 /// #     source_dirs: vec![FilePath::new("src")],
 /// #     target_dir: FilePath::new("target"),
+/// #     classpaths: Vec::new(),
+/// #     emit_timing_statistics: false,
 /// # };
 /// let mut compiler = Compiler::new(config);
 ///
@@ -209,6 +218,8 @@ impl Compiler {
     /// let config = CompilerConfig {
     ///     source_dirs: vec![FilePath::new("src")],
     ///     target_dir: FilePath::new("target"),
+    ///     classpaths: Vec::new(),
+    ///     emit_timing_statistics: false,
     /// };
     /// let compiler = Compiler::new(config);
     /// ```
@@ -296,6 +307,8 @@ impl Compiler {
     /// # let config = CompilerConfig {
     /// #     source_dirs: vec![FilePath::new("src")],
     /// #     target_dir: FilePath::new("target"),
+    /// #     classpaths: Vec::new(),
+    /// #     emit_timing_statistics: false,
     /// # };
     /// let mut compiler = Compiler::new(config);
     /// compiler.compile_directory()?;
@@ -308,7 +321,9 @@ impl Compiler {
         // Stage 1: Discovery - Find Java files
         self.discover_files()?;
         if self.java_files.is_empty() {
-            self.statistics.print_table();
+            if self.config.emit_timing_statistics {
+                self.statistics.print_table();
+            }
             return Ok(());
         }
 
@@ -351,7 +366,9 @@ impl Compiler {
         self.generate_classfiles()?;
         self.statistics.end_phase(CompilationPhase::Generation);
 
-        self.statistics.print_table();
+        if self.config.emit_timing_statistics {
+            self.statistics.print_table();
+        }
 
         Ok(())
     }
@@ -374,6 +391,8 @@ impl Compiler {
     /// # let config = CompilerConfig {
     /// #     source_dirs: vec![FilePath::new("src")],
     /// #     target_dir: FilePath::new("target"),
+    /// #     classpaths: Vec::new(),
+    /// #     emit_timing_statistics: false,
     /// # };
     /// let mut compiler = Compiler::new(config);
     /// compiler.discover_files()?;
@@ -416,6 +435,8 @@ impl Compiler {
     /// # let config = CompilerConfig {
     /// #     source_dirs: vec![FilePath::new("src")],
     /// #     target_dir: FilePath::new("target"),
+    /// #     classpaths: Vec::new(),
+    /// #     emit_timing_statistics: false,
     /// # };
     /// let mut compiler = Compiler::new(config);
     /// compiler.discover_files()?;
@@ -453,6 +474,8 @@ impl Compiler {
     /// # let config = CompilerConfig {
     /// #     source_dirs: vec![FilePath::new("src")],
     /// #     target_dir: FilePath::new("target"),
+    /// #     classpaths: Vec::new(),
+    /// #     emit_timing_statistics: false,
     /// # };
     /// let mut compiler = Compiler::new(config);
     /// compiler.discover_files()?;
@@ -494,6 +517,8 @@ impl Compiler {
     /// # let config = CompilerConfig {
     /// #     source_dirs: vec![FilePath::new("src")],
     /// #     target_dir: FilePath::new("target"),
+    /// #     classpaths: Vec::new(),
+    /// #     emit_timing_statistics: false,
     /// # };
     /// let mut compiler = Compiler::new(config);
     /// compiler.discover_files()?;
@@ -539,6 +564,7 @@ impl Default for Compiler {
             source_dirs: Vec::new(),
             target_dir: FilePath::default(),
             classpaths: Vec::new(),
+            emit_timing_statistics: false,
         })
     }
 }
