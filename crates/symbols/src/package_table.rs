@@ -2,7 +2,7 @@ use crate::Symbol;
 use rajac_base::shared_string::SharedString;
 use std::collections::HashMap;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct PackageTable {
     symbols: HashMap<SharedString, Symbol>,
 }

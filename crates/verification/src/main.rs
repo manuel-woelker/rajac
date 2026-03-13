@@ -3,6 +3,7 @@ use rajac_base::file_path::FilePath;
 use rajac_base::result::{RajacResult, ResultExt};
 use rajac_bytecode::pretty_print::pretty_print_classfile;
 use rajac_compiler::{Compiler, CompilerConfig};
+use rajac_symbols::SymbolTable;
 use regex::Regex;
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -15,6 +16,8 @@ fn main() -> RajacResult<()> {
     let reference_output = Path::new("verification/output/openjdk_21");
     let rajac_base_output = Path::new("verification/output/rajac");
     let rajac_output = rajac_base_output;
+    let classpaths = vec![FilePath::new("/usr/lib/jvm/java-8-openjdk/jre/lib/rt.jar")];
+    let prepopulated_symbol_table = Compiler::symbol_table_from_classpaths(&classpaths)?;
 
     if fs::exists(rajac_output)? {
         fs::remove_dir_all(rajac_output).context("Failed to remove rajac output directory")?;
@@ -25,26 +28,41 @@ fn main() -> RajacResult<()> {
 
     // Compile sources with rajac
     println!("Compiling sources with rajac...");
-    compile_with_rajac(sources_dir, rajac_base_output)?;
+    compile_with_rajac(
+        sources_dir,
+        rajac_base_output,
+        &classpaths,
+        &prepopulated_symbol_table,
+    )?;
 
     // Compare outputs
     compare_outputs(reference_output, rajac_output)?;
 
     // Verify invalid sources produce errors
     println!("\nVerifying invalid sources...");
-    verify_invalid_sources(sources_invalid_dir, reference_output)?;
+    verify_invalid_sources(
+        sources_invalid_dir,
+        reference_output,
+        &classpaths,
+        &prepopulated_symbol_table,
+    )?;
 
     Ok(())
 }
 
-fn compile_with_rajac(sources_dir: &Path, output_dir: &Path) -> RajacResult<()> {
+fn compile_with_rajac(
+    sources_dir: &Path,
+    output_dir: &Path,
+    classpaths: &[FilePath],
+    prepopulated_symbol_table: &SymbolTable,
+) -> RajacResult<()> {
     // Compile sources with rajac using the Compiler struct
     let config = CompilerConfig {
         source_dirs: vec![FilePath::new(sources_dir)],
         target_dir: FilePath::new(output_dir),
-        classpaths: vec!["/usr/lib/jvm/java-8-openjdk/jre/lib/rt.jar".into()],
+        classpaths: classpaths.to_vec(),
     };
-    let mut compiler = Compiler::new(config);
+    let mut compiler = Compiler::new_with_symbol_table(config, prepopulated_symbol_table.clone());
     compiler.compile_directory()?;
 
     Ok(())
@@ -243,7 +261,12 @@ fn get_class_files(dir: &Path) -> RajacResult<Vec<PathBuf>> {
     Ok(class_files)
 }
 
-fn verify_invalid_sources(invalid_dir: &Path, reference_output: &Path) -> RajacResult<()> {
+fn verify_invalid_sources(
+    invalid_dir: &Path,
+    reference_output: &Path,
+    classpaths: &[FilePath],
+    prepopulated_symbol_table: &SymbolTable,
+) -> RajacResult<()> {
     let invalid_output_dir = reference_output.join("invalid");
 
     let java_files = get_java_files(invalid_dir)?;
@@ -273,10 +296,11 @@ fn verify_invalid_sources(invalid_dir: &Path, reference_output: &Path) -> RajacR
         let config = CompilerConfig {
             source_dirs: vec![FilePath::new(invalid_dir)],
             target_dir: FilePath::new(invalid_dir.join("classes")),
-            classpaths: vec!["/usr/lib/jvm/java-8-openjdk/jre/lib/rt.jar".into()],
+            classpaths: classpaths.to_vec(),
         };
 
-        let mut compiler = Compiler::new(config);
+        let mut compiler =
+            Compiler::new_with_symbol_table(config, prepopulated_symbol_table.clone());
         compiler.compile_directory().ok();
 
         let diagnostics = &compiler.diagnostics;

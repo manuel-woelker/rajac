@@ -3,7 +3,7 @@ use rajac_base::shared_string::SharedString;
 use rajac_types::{Type, TypeArena, TypeId};
 use std::collections::HashMap;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct SymbolTable {
     packages: HashMap<String, PackageTable>,
     pub(crate) type_arena: TypeArena,

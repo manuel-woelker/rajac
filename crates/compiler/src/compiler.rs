@@ -182,6 +182,8 @@ pub struct Compiler {
     pub compilation_units: Vec<CompilationUnit>,
     /// Global symbol table for all compilation units
     pub symbol_table: SymbolTable,
+    /// Whether classpath symbols have already been loaded into the symbol table
+    pub classpath_symbols_loaded: bool,
     /// Compilation statistics
     pub statistics: CompilationStatistics,
     /// Diagnostics collected during compilation
@@ -216,9 +218,53 @@ impl Compiler {
             compilation_units: Vec::new(),
             java_files: Vec::new(),
             config,
+            classpath_symbols_loaded: false,
             statistics: CompilationStatistics::new(),
             diagnostics: Diagnostics::new(),
         }
+    }
+
+    /// Creates a new compiler instance with a prepopulated symbol table.
+    ///
+    /// This skips classpath symbol collection during compilation, which is useful
+    /// when the classpath has already been parsed and should be reused.
+    ///
+    /// # Parameters
+    ///
+    /// - `config` - Compiler configuration specifying source and target directories
+    /// - `symbol_table` - Prepopulated symbol table (typically with classpath symbols)
+    ///
+    /// # Returns
+    ///
+    /// A new `Compiler` instance ready for compilation operations.
+    pub fn new_with_symbol_table(config: CompilerConfig, symbol_table: SymbolTable) -> Self {
+        Compiler {
+            symbol_table,
+            compilation_units: Vec::new(),
+            java_files: Vec::new(),
+            config,
+            classpath_symbols_loaded: true,
+            statistics: CompilationStatistics::new(),
+            diagnostics: Diagnostics::new(),
+        }
+    }
+
+    /// Builds a symbol table from classpath entries.
+    ///
+    /// This is useful for reusing classpath symbols across multiple compiler
+    /// invocations without re-reading the classpath each time.
+    ///
+    /// # Parameters
+    ///
+    /// - `classpaths` - List of classpath entries (jar files and directories)
+    ///
+    /// # Returns
+    ///
+    /// A populated `SymbolTable` containing classpath symbols.
+    pub fn symbol_table_from_classpaths(classpaths: &[FilePath]) -> RajacResult<SymbolTable> {
+        let mut symbol_table = SymbolTable::new();
+        collection::collect_classpath_symbols(&mut symbol_table, classpaths)?;
+        Ok(symbol_table)
     }
 
     /// Compiles all Java files in the configured source directory.
@@ -280,12 +326,15 @@ impl Compiler {
             self.diagnostics.extend(unit.diagnostics.iter().cloned());
         }
 
-        // Stage 2b: Collect classpath symbols
-        self.statistics
-            .begin_phase(CompilationPhase::ClasspathCollect);
-        collection::collect_classpath_symbols(&mut self.symbol_table, &self.config.classpaths)?;
-        self.statistics
-            .end_phase(CompilationPhase::ClasspathCollect);
+        if !self.classpath_symbols_loaded {
+            // Stage 2b: Collect classpath symbols
+            self.statistics
+                .begin_phase(CompilationPhase::ClasspathCollect);
+            collection::collect_classpath_symbols(&mut self.symbol_table, &self.config.classpaths)?;
+            self.statistics
+                .end_phase(CompilationPhase::ClasspathCollect);
+            self.classpath_symbols_loaded = true;
+        }
 
         // Stage 3: Collect symbols from compilation units
         self.statistics.begin_phase(CompilationPhase::Collection);

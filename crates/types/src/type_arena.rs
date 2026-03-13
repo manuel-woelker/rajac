@@ -1,6 +1,6 @@
 use crate::{Type, TypeId};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TypeArena {
     types: Vec<Type>,
 }
