@@ -232,7 +232,7 @@ impl<'a> Lexer<'a> {
             if c == '\n' {
                 self.add_error(
                     "unclosed string literal",
-                    "unclosed string literal",
+                    "string literal starts here",
                     start..self.pos,
                 );
                 return TokenKind::Error;
@@ -241,7 +241,7 @@ impl<'a> Lexer<'a> {
         }
         self.add_error(
             "unclosed string literal",
-            "unclosed string literal",
+            "string literal starts here",
             start..self.pos,
         );
         TokenKind::Error
@@ -513,7 +513,7 @@ mod tests {
   ╭▸ test.java:1:2
   │
 1 │  "Hello, World! 
-  ╰╴ ━ unclosed string literal"#]]
+  ╰╴ ━ string literal starts here"#]]
         .assert_eq(&stripped);
     }
 }
