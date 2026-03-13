@@ -1,6 +1,6 @@
 use rajac_base::file_path::FilePath;
 use rajac_base::shared_string::SharedString;
-use rajac_diagnostics::{Diagnostic, Diagnostics, Severity, SourceChunk, Span};
+use rajac_diagnostics::{Annotation, Diagnostic, Diagnostics, Severity, SourceChunk, Span};
 use rajac_token::{Token, TokenKind};
 use std::ops::Range;
 
@@ -10,6 +10,7 @@ pub struct Lexer<'a> {
     path: FilePath,
     pos: usize,
     line: usize,
+    line_start: usize,
     diagnostics: Diagnostics,
 }
 
@@ -20,6 +21,7 @@ impl<'a> Lexer<'a> {
             path,
             pos: 0,
             line: 1,
+            line_start: 0,
             diagnostics: Diagnostics::new(),
         }
     }
@@ -30,17 +32,32 @@ impl<'a> Lexer<'a> {
 
     #[allow(dead_code)]
     fn add_error(&mut self, message: impl Into<SharedString>, span: Range<usize>) {
+        let message: SharedString = message.into();
+        let line_fragment = self.get_current_line();
+        let line_offset = span.start - self.line_start;
+
         self.diagnostics.add(Diagnostic {
             severity: Severity::Error,
-            message: message.into(),
+            message: message.clone(),
             chunks: vec![SourceChunk {
                 path: self.path.clone(),
-                fragment: self.source.into(),
-                offset: span.start,
+                fragment: line_fragment,
+                offset: self.line_start,
                 line: self.line,
-                annotations: vec![],
+                annotations: vec![Annotation {
+                    span: Span(line_offset..line_offset + 1),
+                    message,
+                }],
             }],
         });
+    }
+
+    fn get_current_line(&self) -> SharedString {
+        let line_end = self.source[self.pos..]
+            .find('\n')
+            .map(|i| self.pos + i)
+            .unwrap_or(self.source.len());
+        self.source[self.line_start..line_end].into()
     }
 
     #[allow(dead_code)]
@@ -53,6 +70,7 @@ impl<'a> Lexer<'a> {
         self.pos += ch.len_utf8();
         if ch == '\n' {
             self.line += 1;
+            self.line_start = self.pos;
         }
         Some(ch)
     }
@@ -470,8 +488,10 @@ mod tests {
         let stripped = strip_ansi(&output);
 
         expect![[r#"error: unclosed string literal
-  ╭▸ test.java
-  │"#]]
+  ╭▸ test.java:1:2
+  │
+1 │  "Hello, World! 
+  ╰╴ ━ unclosed string literal"#]]
         .assert_eq(&stripped);
     }
 }
