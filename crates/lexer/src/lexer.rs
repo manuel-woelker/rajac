@@ -70,6 +70,34 @@ impl<'a> Lexer<'a> {
         self.source[self.line_start..line_end].into()
     }
 
+    fn is_valid_escape_char(&self, c: char) -> bool {
+        match c {
+            'b' | 't' | 'n' | 'f' | 'r' | '"' | '\'' | '\\' => true,
+            '0'..='7' => true,  // Octal escape
+            'u' => true,         // Unicode escape (handled separately)
+            _ => false,
+        }
+    }
+
+    fn validate_unicode_escape(&mut self) -> bool {
+        // Check for one or more 'u' characters (e.g., \u, \uu)
+        while self.peek() == Some('u') {
+            self.bump();
+        }
+
+        // Expect exactly 4 hex digits
+        for _ in 0..4 {
+            match self.peek() {
+                Some(c) if c.is_ascii_hexdigit() => {
+                    self.bump();
+                }
+                _ => return false,
+            }
+        }
+
+        true
+    }
+
     #[allow(dead_code)]
     fn current_span(&self, start: usize) -> Span {
         Span(start..self.pos)
@@ -109,19 +137,27 @@ impl<'a> Lexer<'a> {
     }
 
     fn skip_block_comment(&mut self) {
+        let start = self.pos - 2; // position of the '/*'
         loop {
             match self.peek() {
                 Some('*') => {
                     self.bump();
                     if self.peek() == Some('/') {
                         self.bump();
-                        break;
+                        return;
                     }
                 }
                 Some(_) => {
                     self.bump();
                 }
-                None => break,
+                None => {
+                    self.add_error(
+                        "unclosed block comment",
+                        "unclosed block comment",
+                        start..self.pos,
+                    );
+                    return;
+                }
             }
         }
     }
@@ -199,21 +235,47 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn read_number(&mut self, _start: usize) -> TokenKind {
+    fn read_number(&mut self, start: usize) -> TokenKind {
+        let mut has_decimal_point = false;
+        let mut has_exponent = false;
+        
         while let Some(c) = self.peek() {
-            if c.is_ascii_digit()
-                || c == '.'
-                || c == 'e'
-                || c == 'E'
-                || c == 'f'
-                || c == 'F'
-                || c == 'l'
-                || c == 'L'
-                || c == 'x'
-                || c == 'X'
-                || c == 'b'
-                || c == 'B'
-            {
+            if c.is_ascii_digit() {
+                self.bump();
+            } else if c == '.' && !has_decimal_point && !has_exponent {
+                self.bump();
+                has_decimal_point = true;
+                
+                // Check if there's another decimal point after this one
+                if let Some(next_char) = self.peek() {
+                    if next_char == '.' {
+                        self.add_error(
+                            "malformed number",
+                            "malformed number format",
+                            start..self.pos,
+                        );
+                        // Continue consuming to avoid getting stuck
+                        self.bump();
+                        while let Some(c) = self.peek() {
+                            if c.is_ascii_digit() || c == '.' || c == 'e' || c == 'E' || c == 'f' || c == 'F' || c == 'l' || c == 'L' || c == 'x' || c == 'X' || c == 'b' || c == 'B' {
+                                self.bump();
+                            } else {
+                                break;
+                            }
+                        }
+                        return TokenKind::Error;
+                    }
+                }
+            } else if (c == 'e' || c == 'E') && !has_exponent {
+                self.bump();
+                has_exponent = true;
+                // Allow optional sign after exponent
+                if let Some(sign_char) = self.peek() {
+                    if sign_char == '+' || sign_char == '-' {
+                        self.bump();
+                    }
+                }
+            } else if c == 'f' || c == 'F' || c == 'l' || c == 'L' || c == 'x' || c == 'X' || c == 'b' || c == 'B' {
                 self.bump();
             } else {
                 break;
@@ -230,7 +292,35 @@ impl<'a> Lexer<'a> {
             }
             if c == '\\' {
                 self.bump();
-                self.bump();
+                if let Some(escape_char) = self.peek() {
+                    let escape_start = self.pos - 1;
+                    if escape_char == 'u' {
+                        self.bump(); // consume 'u'
+                        if !self.validate_unicode_escape() {
+                            self.add_error(
+                                "invalid unicode escape sequence",
+                                "invalid unicode escape sequence",
+                                escape_start..self.pos,
+                            );
+                        }
+                    } else if !self.is_valid_escape_char(escape_char) {
+                        self.add_error(
+                            "invalid escape sequence",
+                            &format!("invalid escape sequence '\\{}'", escape_char),
+                            escape_start..self.pos + 1,
+                        );
+                        self.bump();
+                    } else {
+                        self.bump();
+                    }
+                } else {
+                    self.add_error(
+                        "incomplete escape sequence",
+                        "incomplete escape sequence",
+                        self.pos - 1..self.pos,
+                    );
+                    break;
+                }
                 continue;
             }
             if c == '\n' {
@@ -252,6 +342,17 @@ impl<'a> Lexer<'a> {
     }
 
     fn read_char(&mut self, start: usize) -> TokenKind {
+        // Check for empty character literal
+        if self.peek() == Some('\'') {
+            self.add_error(
+                "empty character literal",
+                "empty character literal",
+                start..self.pos + 1,
+            );
+            self.bump(); // consume closing quote
+            return TokenKind::Error;
+        }
+
         while let Some(c) = self.peek() {
             if c == '\'' {
                 self.bump();
@@ -259,7 +360,35 @@ impl<'a> Lexer<'a> {
             }
             if c == '\\' {
                 self.bump();
-                self.bump();
+                if let Some(escape_char) = self.peek() {
+                    let escape_start = self.pos - 1;
+                    if escape_char == 'u' {
+                        self.bump(); // consume 'u'
+                        if !self.validate_unicode_escape() {
+                            self.add_error(
+                                "invalid unicode escape sequence",
+                                "invalid unicode escape sequence",
+                                escape_start..self.pos,
+                            );
+                        }
+                    } else if !self.is_valid_escape_char(escape_char) {
+                        self.add_error(
+                            "invalid escape sequence",
+                            &format!("invalid escape sequence '\\{}'", escape_char),
+                            escape_start..self.pos + 1,
+                        );
+                        self.bump();
+                    } else {
+                        self.bump();
+                    }
+                } else {
+                    self.add_error(
+                        "incomplete escape sequence",
+                        "incomplete escape sequence",
+                        self.pos - 1..self.pos,
+                    );
+                    break;
+                }
                 continue;
             }
             if c == '\n' {
@@ -468,11 +597,36 @@ impl<'a> Lexer<'a> {
             '"' => self.read_string(self.pos - 1),
             '\'' => self.read_char(self.pos - 1),
             _ if c.is_ascii_digit() => {
-                self.read_number(self.pos - 1);
-                TokenKind::IntLiteral
+                let start_pos = self.pos - 1;
+                self.read_number(start_pos);
+                
+                // Check if this is actually an invalid identifier (digit followed by identifier chars)
+                if let Some(next_char) = self.peek() {
+                    if next_char.is_alphabetic() || next_char == '_' || next_char == '$' {
+                        self.add_error(
+                            "invalid identifier start",
+                            "identifier cannot start with a digit",
+                            start_pos..self.pos,
+                        );
+                        // Continue reading as identifier to consume the rest
+                        self.read_ident(start_pos);
+                        TokenKind::Error
+                    } else {
+                        TokenKind::IntLiteral
+                    }
+                } else {
+                    TokenKind::IntLiteral
+                }
             }
             _ if c.is_alphabetic() || c == '_' || c == '$' => self.read_ident(self.pos - 1),
-            _ => TokenKind::Eof,
+            _ => {
+                self.add_error(
+                    "illegal character",
+                    &format!("illegal character '{}'", c),
+                    self.pos - c.len_utf8()..self.pos,
+                );
+                TokenKind::Error
+            }
         }
     }
 }
@@ -519,5 +673,206 @@ mod tests {
 1 │  "Hello, World! 
   ╰╴ ━ string literal starts here"#]]
         .assert_eq(&stripped);
+    }
+
+    #[test]
+    fn test_illegal_character() {
+        let source = "int price = 20£;";
+        let mut lexer = Lexer::new(source, FilePath::new("test.java"));
+        let tokens: Vec<_> = lexer.by_ref().collect();
+
+        assert!(tokens.iter().any(|t| t.kind == TokenKind::Error));
+        assert!(!lexer.diagnostics().is_empty());
+
+        let output = render_diagnostics(lexer.diagnostics());
+        let stripped = strip_ansi(&output);
+
+        expect![[r#"error: illegal character
+  ╭▸ test.java:1:14
+  │
+1 │ int price = 20£;
+  ╰╴ ━ illegal character '£'"#]]
+        .assert_eq(&stripped);
+    }
+
+    #[test]
+    fn test_invalid_escape_sequence() {
+        let source = r#"String s = "\q";"#;
+        let mut lexer = Lexer::new(source, FilePath::new("test.java"));
+        let tokens: Vec<_> = lexer.by_ref().collect();
+
+        assert!(tokens.iter().any(|t| t.kind == TokenKind::Error));
+        assert!(!lexer.diagnostics().is_empty());
+
+        let output = render_diagnostics(lexer.diagnostics());
+        let stripped = strip_ansi(&output);
+
+        expect![[r#"error: invalid escape sequence
+  ╭▸ test.java:1:13
+  │
+1 │ String s = "\q";
+  ╰╴ ━ invalid escape sequence '\q'"#]]
+        .assert_eq(&stripped);
+    }
+
+    #[test]
+    fn test_bad_unicode_escape() {
+        let source = "char c = '\\u00G1';";
+        let mut lexer = Lexer::new(source, FilePath::new("test.java"));
+        let tokens: Vec<_> = lexer.by_ref().collect();
+
+        assert!(tokens.iter().any(|t| t.kind == TokenKind::Error));
+        assert!(!lexer.diagnostics().is_empty());
+
+        let output = render_diagnostics(lexer.diagnostics());
+        let stripped = strip_ansi(&output);
+
+        expect![[r#"error: invalid unicode escape sequence
+  ╭▸ test.java:1:10
+  │
+1 │ char c = '\u00G1';
+  ╰╴ ━ invalid unicode escape sequence"#]]
+        .assert_eq(&stripped);
+    }
+
+    #[test]
+    fn test_empty_char_literal() {
+        let source = "char c = '';";
+        let mut lexer = Lexer::new(source, FilePath::new("test.java"));
+        let tokens: Vec<_> = lexer.by_ref().collect();
+
+        assert!(tokens.iter().any(|t| t.kind == TokenKind::Error));
+        assert!(!lexer.diagnostics().is_empty());
+
+        let output = render_diagnostics(lexer.diagnostics());
+        let stripped = strip_ansi(&output);
+
+        expect![[r#"error: empty character literal
+  ╭▸ test.java:1:10
+  │
+1 │ char c = '';
+  ╰╴ ━ empty character literal"#]]
+        .assert_eq(&stripped);
+    }
+
+    #[test]
+    fn test_invalid_identifier_start() {
+        let source = "int 2value = 42;";
+        let mut lexer = Lexer::new(source, FilePath::new("test.java"));
+        let tokens: Vec<_> = lexer.by_ref().collect();
+
+        assert!(tokens.iter().any(|t| t.kind == TokenKind::Error));
+        assert!(!lexer.diagnostics().is_empty());
+
+        let output = render_diagnostics(lexer.diagnostics());
+        let stripped = strip_ansi(&output);
+
+        expect![[r#"error: invalid identifier start
+  ╭▸ test.java:1:5
+  │
+1 │ int 2value = 42;
+  ╰╴ ━ identifier cannot start with a digit"#]]
+        .assert_eq(&stripped);
+    }
+
+    #[test]
+    fn test_malformed_number() {
+        let source = "double d = 1.2.3;";
+        let mut lexer = Lexer::new(source, FilePath::new("test.java"));
+        let tokens: Vec<_> = lexer.by_ref().collect();
+
+        assert!(tokens.iter().any(|t| t.kind == TokenKind::Error));
+        assert!(!lexer.diagnostics().is_empty());
+
+        let output = render_diagnostics(lexer.diagnostics());
+        let stripped = strip_ansi(&output);
+
+        expect![[r#"error: malformed number
+  ╭▸ test.java:1:12
+  │
+1 │ double d = 1.2.3;
+  ╰╴ ━ malformed number format"#]]
+        .assert_eq(&stripped);
+    }
+
+    #[test]
+    fn test_unclosed_block_comment() {
+        let source = "/* comment\nint x = 5;";
+        let mut lexer = Lexer::new(source, FilePath::new("test.java"));
+        let tokens: Vec<_> = lexer.by_ref().collect();
+
+        assert!(!lexer.diagnostics().is_empty());
+
+        let output = render_diagnostics(lexer.diagnostics());
+        let stripped = strip_ansi(&output);
+
+        expect![[r#"error: unclosed block comment
+  ╭▸ test.java:1:1
+  │
+1 │ /* comment
+  ╰╴ ━ unclosed block comment"#]]
+        .assert_eq(&stripped);
+    }
+
+    #[test]
+    fn test_unclosed_char_literal() {
+        let source = "char c = 'a;";
+        let mut lexer = Lexer::new(source, FilePath::new("test.java"));
+        let tokens: Vec<_> = lexer.by_ref().collect();
+
+        assert!(tokens.iter().any(|t| t.kind == TokenKind::Error));
+        assert!(!lexer.diagnostics().is_empty());
+
+        let output = render_diagnostics(lexer.diagnostics());
+        let stripped = strip_ansi(&output);
+
+        expect![[r#"error: unclosed character literal
+  ╭▸ test.java:1:10
+  │
+1 │ char c = 'a;
+  ╰╴ ━ unclosed character literal"#]]
+        .assert_eq(&stripped);
+    }
+
+    #[test]
+    fn test_incomplete_escape_sequence() {
+        let source = r#"String s = "\"#;
+        let mut lexer = Lexer::new(source, FilePath::new("test.java"));
+        let tokens: Vec<_> = lexer.by_ref().collect();
+
+        assert!(tokens.iter().any(|t| t.kind == TokenKind::Error));
+        assert!(!lexer.diagnostics().is_empty());
+
+        let output = render_diagnostics(lexer.diagnostics());
+        let stripped = strip_ansi(&output);
+
+        expect![[r#"error: incomplete escape sequence
+  ╭▸ test.java:1:13
+  │
+1 │ String s = "\"
+  ╰╴ ━ incomplete escape sequence"#]]
+        .assert_eq(&stripped);
+    }
+
+    #[test]
+    fn test_valid_unicode_escape() {
+        let source = "char c = '\\u0041';";
+        let mut lexer = Lexer::new(source, FilePath::new("test.java"));
+        let tokens: Vec<_> = lexer.by_ref().collect();
+
+        // Should not produce any errors
+        assert!(tokens.iter().all(|t| t.kind != TokenKind::Error));
+        assert!(lexer.diagnostics().is_empty());
+    }
+
+    #[test]
+    fn test_valid_escape_sequences() {
+        let source = r#"String s = "\b\t\n\f\r\"\\"\0";"#;
+        let mut lexer = Lexer::new(source, FilePath::new("test.java"));
+        let tokens: Vec<_> = lexer.by_ref().collect();
+
+        // Should not produce any errors
+        assert!(tokens.iter().all(|t| t.kind != TokenKind::Error));
+        assert!(lexer.diagnostics().is_empty());
     }
 }
