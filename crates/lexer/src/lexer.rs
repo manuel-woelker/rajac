@@ -156,19 +156,28 @@ impl<'a> Lexer<'a> {
                 }
                 None => {
                     // Report error on the line where the comment started
-                    let error_span = if start_line == self.line {
-                        // Comment started and ended on same line
-                        start..self.pos
-                    } else {
-                        // Multi-line comment, show error on the start line
-                        start_line_start..self.source[start_line_start..].find('\n').unwrap_or(self.source.len()).min(start_line_start + 20)
-                    };
+                    // We need to temporarily restore the line position for error reporting
+                    let current_line = self.line;
+                    let current_line_start = self.line_start;
+                    let current_pos = self.pos;
+                    
+                    self.line = start_line;
+                    self.line_start = start_line_start;
+                    self.pos = start;
+                    
+                    let error_span = start..(start + 2); // Just point to the "/*" start
                     
                     self.add_error(
-                        "unclosed block comment",
-                        "unclosed block comment",
+                        "unclosed comment",
+                        "unclosed comment",
                         error_span,
                     );
+                    
+                    // Restore current position
+                    self.line = current_line;
+                    self.line_start = current_line_start;
+                    self.pos = current_pos;
+                    
                     return;
                 }
             }
@@ -320,8 +329,8 @@ impl<'a> Lexer<'a> {
                         }
                     } else if !self.is_valid_escape_char(escape_char) {
                         self.add_error(
-                            "invalid escape sequence",
-                            format!("invalid escape sequence '\\{}'", escape_char),
+                            "illegal escape character",
+                            format!("illegal escape character '\\{}'", escape_char),
                             escape_start..self.pos + 1,
                         );
                         self.bump();
@@ -391,8 +400,8 @@ impl<'a> Lexer<'a> {
                         }
                     } else if !self.is_valid_escape_char(escape_char) {
                         self.add_error(
-                            "invalid escape sequence",
-                            format!("invalid escape sequence '\\{}'", escape_char),
+                            "illegal escape character",
+                            format!("illegal escape character '\\{}'", escape_char),
                             escape_start..self.pos + 1,
                         );
                         self.bump();
@@ -758,11 +767,11 @@ mod tests {
         let output = render_diagnostics(lexer.diagnostics());
         let stripped = strip_ansi(&output);
 
-        expect![[r#"error: invalid escape sequence
+        expect![[r#"error: illegal escape character
   ╭▸ test.java:1:13
   │
 1 │ String s = "\q";
-  ╰╴            ━━ invalid escape sequence '\q'"#]]
+  ╰╴            ━━ illegal escape character '\q'"#]]
         .assert_eq(&stripped);
     }
 
@@ -860,11 +869,12 @@ mod tests {
         let output = render_diagnostics(lexer.diagnostics());
         let stripped = strip_ansi(&output);
 
-        expect![[r#"error: unclosed block comment
-  ╭▸ test.java:2:1
-  │
-2 │ int x = 5;
-  ╰╴━━━━━━━━━━ unclosed block comment"#]]
+        expect![[r#"
+            error: unclosed comment
+              ╭▸ test.java:1:1
+              │
+            1 │ /* comment
+              ╰╴━━ unclosed comment"#]]
         .assert_eq(&stripped);
     }
 
