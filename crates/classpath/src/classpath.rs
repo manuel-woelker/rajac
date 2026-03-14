@@ -356,7 +356,7 @@ fn resolve_class_relationships(
     let relationships: Vec<_> = parsed_classes
         .iter()
         .filter_map(|parsed_class| {
-            let package_table = symbol_table.get_package(&parsed_class.package)?;
+            let package_table = symbol_table.get_package_shared(&parsed_class.package)?;
             let symbol = package_table.get(&parsed_class.class_name)?;
             let type_id = symbol.ty;
 
@@ -441,14 +441,7 @@ fn find_type_id_for_class_impl(
         (SharedString::new(""), SharedString::new(class_name))
     };
 
-    // Look up the class in the symbol table
-    if let Some(package_table) = symbol_table.get_package(&package)
-        && let Some(symbol) = package_table.get(&simple_name)
-    {
-        return Some(symbol.ty);
-    }
-
-    None
+    symbol_table.lookup_type_id(package.as_str(), simple_name.as_str())
 }
 
 fn build_class_lookup(symbol_table: &SymbolTable) -> HashMap<String, rajac_types::TypeId> {
@@ -458,7 +451,7 @@ fn build_class_lookup(symbol_table: &SymbolTable) -> HashMap<String, rajac_types
             let fqn = if package.is_empty() {
                 name.as_str().to_string()
             } else {
-                format!("{package}.{}", name.as_str())
+                format!("{}.{}", package.as_str(), name.as_str())
             };
             lookup.insert(fqn, symbol.ty);
         }

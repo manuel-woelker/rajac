@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct SymbolTable {
-    packages: HashMap<String, PackageTable>,
+    packages: HashMap<SharedString, PackageTable>,
     pub(crate) type_arena: TypeArena,
     pub(crate) method_arena: MethodArena,
     primitive_types: HashMap<SharedString, TypeId>,
@@ -56,18 +56,22 @@ impl SymbolTable {
     }
 
     pub fn package(&mut self, name: &str) -> &mut PackageTable {
-        self.packages.entry(name.to_string()).or_default()
+        self.packages.entry(SharedString::new(name)).or_default()
     }
 
     pub fn get_package(&self, name: &str) -> Option<&PackageTable> {
+        self.packages.get(&SharedString::new(name))
+    }
+
+    pub fn get_package_shared(&self, name: &SharedString) -> Option<&PackageTable> {
         self.packages.get(name)
     }
 
     pub fn contains_package(&self, name: &str) -> bool {
-        self.packages.contains_key(name)
+        self.packages.contains_key(&SharedString::new(name))
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&String, &PackageTable)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&SharedString, &PackageTable)> {
         self.packages.iter()
     }
 
@@ -91,6 +95,17 @@ impl SymbolTable {
         let name = SharedString::new(class_name);
         package.insert(name.clone(), crate::Symbol::new(name, kind, type_id));
         type_id
+    }
+
+    pub fn lookup_type_id(&self, package_name: &str, type_name: &str) -> Option<TypeId> {
+        if package_name.is_empty()
+            && let Some(type_id) = self.primitive_type_id(type_name)
+        {
+            return Some(type_id);
+        }
+        self.get_package(package_name)
+            .and_then(|package| package.get(type_name))
+            .map(|symbol| symbol.ty)
     }
 }
 

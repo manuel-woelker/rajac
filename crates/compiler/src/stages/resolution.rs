@@ -632,11 +632,10 @@ fn resolve_type(type_id: AstTypeId, arena: &mut AstArena, context: &ResolveConte
                     let package_str = resolved_name.package_name().as_str();
                     let class_str = resolved_name.name().as_str();
 
-                    // Look up the symbol in the symbol table
-                    if let Some(package_table) = context.symbol_table.get_package(package_str)
-                        && let Some(symbol) = package_table.get(class_str)
+                    if let Some(type_id) =
+                        context.symbol_table.lookup_type_id(package_str, class_str)
                     {
-                        *ty = symbol.ty;
+                        *ty = type_id;
                     }
                     // Note: If the type is not found in the symbol table, it means
                     // it's not available in the classpath, which is an error condition
