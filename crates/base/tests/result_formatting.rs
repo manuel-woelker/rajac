@@ -14,10 +14,10 @@ fn result_with_context_formats_error_with_caller_location() {
     let error = result.with_context(|| "failed to load config").unwrap_err();
 
     expect!([r#"
-        Error: failed to load config
-        At: crates/base/tests/result_formatting.rs:14:24
-        Caused by: config missing
-        At: crates/base/tests/result_formatting.rs:14:24
+        × error failed to load config
+        ├─ at crates/base/tests/result_formatting.rs:14:24
+        ╰─ caused by config missing
+           ├─ at crates/base/tests/result_formatting.rs:14:24
     "#])
     .assert_eq(&error.to_test_string());
 }
@@ -29,10 +29,10 @@ fn result_context_formats_error_with_caller_location() {
     let error = result.context("failed to load config").unwrap_err();
 
     expect!([r#"
-        Error: failed to load config
-        At: crates/base/tests/result_formatting.rs:29:24
-        Caused by: config missing
-        At: crates/base/tests/result_formatting.rs:29:24
+        × error failed to load config
+        ├─ at crates/base/tests/result_formatting.rs:29:24
+        ╰─ caused by config missing
+           ├─ at crates/base/tests/result_formatting.rs:29:24
     "#])
     .assert_eq(&error.to_test_string());
 }
@@ -43,8 +43,8 @@ fn option_context_formats_error_with_caller_location() {
     let error = value.context("missing value").unwrap_err();
 
     expect!([r#"
-        Error: missing value
-        At: crates/base/tests/result_formatting.rs:43:23
+        × error missing value
+        ├─ at crates/base/tests/result_formatting.rs:43:23
     "#])
     .assert_eq(&error.to_test_string());
 }

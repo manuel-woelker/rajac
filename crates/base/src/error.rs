@@ -108,34 +108,8 @@ impl RajacError {
     }
 
     pub fn write_to(&self, write: &mut dyn std::fmt::Write) -> std::fmt::Result {
-        writeln!(write, "Error: {}", self.kind)?;
-        writeln!(
-            write,
-            "At: {}:{}:{}",
-            self.location.file(),
-            self.location.line(),
-            self.location.column()
-        )?;
-        if self.span_trace.status() == SpanTraceStatus::CAPTURED {
-            writeln!(write, "Span trace:")?;
-            writeln!(write, "{}", self.span_trace)?;
-        }
-        let mut source = self.source.as_deref();
-        while let Some(error) = source {
-            writeln!(write, "Caused by: {}", error.kind)?;
-            writeln!(
-                write,
-                "At: {}:{}:{}",
-                error.location.file(),
-                error.location.line(),
-                error.location.column()
-            )?;
-            if error.span_trace.status() == SpanTraceStatus::CAPTURED {
-                writeln!(write, "Span trace:")?;
-                writeln!(write, "{}", error.span_trace)?;
-            }
-            source = error.source.as_deref();
-        }
+        writeln!(write, "{} {}", style("1;31", "× error"), self.kind)?;
+        self.write_details(write, "")?;
         Ok(())
     }
 
@@ -144,6 +118,87 @@ impl RajacError {
         self.write_to(&mut test_string).unwrap();
         unansi(&test_string)
     }
+}
+
+impl RajacError {
+    fn write_details(&self, write: &mut dyn std::fmt::Write, prefix: &str) -> std::fmt::Result {
+        writeln!(
+            write,
+            "{}{} {}:{}:{}",
+            prefix,
+            style("2;37", "├─ at"),
+            self.location.file(),
+            self.location.line(),
+            self.location.column()
+        )?;
+
+        if self.span_trace.status() == SpanTraceStatus::CAPTURED {
+            writeln!(write, "{}{}", prefix, style("36", "├─ span trace"))?;
+            write_span_trace(write, prefix, &self.span_trace)?;
+        }
+
+        if let Some(source) = self.source.as_deref() {
+            writeln!(
+                write,
+                "{}{} {}",
+                prefix,
+                style("33", "╰─ caused by"),
+                source.kind
+            )?;
+            source.write_child_details(write, &format!("{prefix}   "))?;
+        }
+
+        Ok(())
+    }
+
+    fn write_child_details(
+        &self,
+        write: &mut dyn std::fmt::Write,
+        prefix: &str,
+    ) -> std::fmt::Result {
+        writeln!(
+            write,
+            "{}{} {}:{}:{}",
+            prefix,
+            style("2;37", "├─ at"),
+            self.location.file(),
+            self.location.line(),
+            self.location.column()
+        )?;
+
+        if self.span_trace.status() == SpanTraceStatus::CAPTURED {
+            writeln!(write, "{}{}", prefix, style("36", "├─ span trace"))?;
+            write_span_trace(write, prefix, &self.span_trace)?;
+        }
+
+        if let Some(source) = self.source.as_deref() {
+            writeln!(
+                write,
+                "{}{} {}",
+                prefix,
+                style("33", "╰─ caused by"),
+                source.kind
+            )?;
+            source.write_child_details(write, &format!("{prefix}   "))?;
+        }
+
+        Ok(())
+    }
+}
+
+fn write_span_trace(
+    write: &mut dyn std::fmt::Write,
+    prefix: &str,
+    span_trace: &SpanTrace,
+) -> std::fmt::Result {
+    for line in span_trace.to_string().lines() {
+        writeln!(write, "{}{} {}", prefix, style("2;36", "│"), line)?;
+    }
+    Ok(())
+}
+
+fn style(code: &str, text: &str) -> String {
+    format!("\u{1b}[{code}m{text}\u{1b}[0m")
 }
 
 impl<T> From<T> for RajacError
@@ -184,8 +239,8 @@ mod tests {
     fn test_err() {
         let err = err!("test {}", 123);
         let rendered = err.to_test_string();
-        assert!(rendered.contains("Error: test 123\n"));
-        assert!(rendered.contains("At: crates/base/src/error.rs:"));
+        assert!(rendered.contains("× error test 123\n"));
+        assert!(rendered.contains("├─ at crates/base/src/error.rs:"));
     }
 
     #[test]
@@ -195,8 +250,8 @@ mod tests {
         })()
         .unwrap_err();
         let rendered = err.to_test_string();
-        assert!(rendered.contains("Error: test 123\n"));
-        assert!(rendered.contains("At: crates/base/src/error.rs:"));
+        assert!(rendered.contains("× error test 123\n"));
+        assert!(rendered.contains("├─ at crates/base/src/error.rs:"));
     }
 
     #[test]
@@ -204,9 +259,12 @@ mod tests {
         let err = RajacError::message("failed to read file")
             .with_source(RajacError::message("missing file"));
         let rendered = err.to_test_string();
-        assert!(rendered.contains("Error: failed to read file\n"));
-        assert!(rendered.contains("Caused by: missing file\n"));
-        assert_eq!(rendered.matches("At: crates/base/src/error.rs:").count(), 2);
+        assert!(rendered.contains("× error failed to read file\n"));
+        assert!(rendered.contains("╰─ caused by missing file\n"));
+        assert_eq!(
+            rendered.matches("├─ at crates/base/src/error.rs:").count(),
+            2
+        );
     }
 
     #[test]
@@ -214,9 +272,12 @@ mod tests {
         let io_error = io::Error::new(io::ErrorKind::NotFound, "missing config");
         let err = RajacError::message("cannot initialize").with_std_source(io_error);
         let rendered = err.to_test_string();
-        assert!(rendered.contains("Error: cannot initialize\n"));
-        assert!(rendered.contains("Caused by: missing config\n"));
-        assert_eq!(rendered.matches("At: crates/base/src/error.rs:").count(), 2);
+        assert!(rendered.contains("× error cannot initialize\n"));
+        assert!(rendered.contains("╰─ caused by missing config\n"));
+        assert_eq!(
+            rendered.matches("├─ at crates/base/src/error.rs:").count(),
+            2
+        );
     }
 
     #[test]
@@ -228,7 +289,7 @@ mod tests {
         let err = RajacError::message("failed inside span");
         let rendered = err.to_test_string();
 
-        assert!(rendered.contains("Span trace:\n"));
+        assert!(rendered.contains("├─ span trace\n"));
         assert!(rendered.contains("error_test_span"));
     }
 }
