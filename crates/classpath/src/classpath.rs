@@ -386,6 +386,7 @@ fn resolve_class_relationships(
 
     // Second pass: Apply the relationships (only write to type_arena)
     let class_lookup = build_class_lookup(symbol_table);
+    let primitive_lookup = symbol_table.primitive_types().clone();
     let (type_arena, method_arena) = symbol_table.arenas_mut();
     for (type_id, super_type_id, interface_type_ids, methods) in relationships {
         let mut resolved_methods = Vec::with_capacity(methods.len());
@@ -393,11 +394,15 @@ fn resolve_class_relationships(
             let params = method
                 .params
                 .iter()
-                .map(|param| resolve_field_type(param, &class_lookup, type_arena))
+                .map(|param| {
+                    resolve_field_type(param, &primitive_lookup, &class_lookup, type_arena)
+                })
                 .collect::<Vec<_>>();
             let return_type = match &method.return_type {
-                Some(field_type) => resolve_field_type(field_type, &class_lookup, type_arena),
-                None => void_type_id(type_arena),
+                Some(field_type) => {
+                    resolve_field_type(field_type, &primitive_lookup, &class_lookup, type_arena)
+                }
+                None => void_type_id(&primitive_lookup),
             };
             let signature = rajac_types::MethodSignature {
                 name: method.name.clone(),
@@ -463,14 +468,15 @@ fn build_class_lookup(symbol_table: &SymbolTable) -> HashMap<String, rajac_types
 
 fn resolve_field_type(
     field_type: &FieldType,
+    primitive_lookup: &HashMap<SharedString, rajac_types::TypeId>,
     class_lookup: &HashMap<String, rajac_types::TypeId>,
     type_arena: &mut rajac_types::TypeArena,
 ) -> rajac_types::TypeId {
     match field_type {
-        FieldType::Base(base_type) => {
-            let primitive = primitive_type_from_base_type(base_type);
-            type_arena.alloc(rajac_types::Type::primitive(primitive))
-        }
+        FieldType::Base(base_type) => primitive_lookup
+            .get(&SharedString::new(primitive_name_from_base_type(base_type)))
+            .copied()
+            .unwrap_or(rajac_types::TypeId::INVALID),
         FieldType::Object(class_name) => {
             let fqn = class_name.replace('/', ".");
             class_lookup
@@ -479,7 +485,8 @@ fn resolve_field_type(
                 .unwrap_or(rajac_types::TypeId::INVALID)
         }
         FieldType::Array(component_type) => {
-            let element_type = resolve_field_type(component_type, class_lookup, type_arena);
+            let element_type =
+                resolve_field_type(component_type, primitive_lookup, class_lookup, type_arena);
             if element_type == rajac_types::TypeId::INVALID {
                 rajac_types::TypeId::INVALID
             } else {
@@ -489,23 +496,26 @@ fn resolve_field_type(
     }
 }
 
-fn primitive_type_from_base_type(base_type: &BaseType) -> rajac_types::PrimitiveType {
+fn primitive_name_from_base_type(base_type: &BaseType) -> &'static str {
     match base_type {
-        BaseType::Boolean => rajac_types::PrimitiveType::Boolean,
-        BaseType::Byte => rajac_types::PrimitiveType::Byte,
-        BaseType::Char => rajac_types::PrimitiveType::Char,
-        BaseType::Short => rajac_types::PrimitiveType::Short,
-        BaseType::Int => rajac_types::PrimitiveType::Int,
-        BaseType::Long => rajac_types::PrimitiveType::Long,
-        BaseType::Float => rajac_types::PrimitiveType::Float,
-        BaseType::Double => rajac_types::PrimitiveType::Double,
+        BaseType::Boolean => "boolean",
+        BaseType::Byte => "byte",
+        BaseType::Char => "char",
+        BaseType::Short => "short",
+        BaseType::Int => "int",
+        BaseType::Long => "long",
+        BaseType::Float => "float",
+        BaseType::Double => "double",
     }
 }
 
-fn void_type_id(type_arena: &mut rajac_types::TypeArena) -> rajac_types::TypeId {
-    type_arena.alloc(rajac_types::Type::primitive(
-        rajac_types::PrimitiveType::Void,
-    ))
+fn void_type_id(
+    primitive_lookup: &HashMap<SharedString, rajac_types::TypeId>,
+) -> rajac_types::TypeId {
+    primitive_lookup
+        .get(&SharedString::new("void"))
+        .copied()
+        .unwrap_or(rajac_types::TypeId::INVALID)
 }
 
 use rajac_base::result::{RajacResult, ResultExt};
@@ -537,7 +547,9 @@ mod tests {
 
     #[test]
     fn resolves_field_types_with_lookup_and_arrays() {
-        let mut type_arena = rajac_types::TypeArena::new();
+        let mut symbol_table = SymbolTable::new();
+        let primitive_lookup = symbol_table.primitive_types().clone();
+        let type_arena = symbol_table.type_arena_mut();
         let string_id = type_arena.alloc(rajac_types::Type::class(
             rajac_types::ClassType::new(SharedString::new("String"))
                 .with_package(SharedString::new("java.lang")),
@@ -547,19 +559,20 @@ mod tests {
 
         let object_type = FieldType::Object("java/lang/String".to_string());
         assert_eq!(
-            resolve_field_type(&object_type, &class_lookup, &mut type_arena),
+            resolve_field_type(&object_type, &primitive_lookup, &class_lookup, type_arena),
             string_id
         );
 
         let int_type = FieldType::Base(BaseType::Int);
-        let int_id = resolve_field_type(&int_type, &class_lookup, &mut type_arena);
+        let int_id = resolve_field_type(&int_type, &primitive_lookup, &class_lookup, type_arena);
         assert_eq!(
             type_arena.get(int_id),
             &rajac_types::Type::primitive(rajac_types::PrimitiveType::Int)
         );
 
         let array_type = FieldType::Array(Box::new(FieldType::Base(BaseType::Boolean)));
-        let array_id = resolve_field_type(&array_type, &class_lookup, &mut type_arena);
+        let array_id =
+            resolve_field_type(&array_type, &primitive_lookup, &class_lookup, type_arena);
         match type_arena.get(array_id) {
             rajac_types::Type::Array(array) => {
                 let element_type = type_arena.get(array.element_type);

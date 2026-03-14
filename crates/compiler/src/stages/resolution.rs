@@ -110,7 +110,8 @@ use rajac_ast::{
 use rajac_base::qualified_name::FullyQualifiedClassName as ResolvedName;
 use rajac_base::shared_string::SharedString;
 use rajac_symbols::SymbolTable;
-use rajac_types::{MethodModifiers, MethodSignature, PrimitiveType, Type, TypeId};
+use rajac_types::{MethodModifiers, MethodSignature, Type, TypeId};
+use std::collections::HashMap;
 
 /// Resolves identifiers and types in all compilation units.
 ///
@@ -609,8 +610,13 @@ fn resolve_type(type_id: AstTypeId, arena: &mut AstArena, context: &ResolveConte
 
         match ty {
             AstType::Error => {}
-            AstType::Primitive { .. } => {
-                // TODO: Set primitive type IDs
+            AstType::Primitive { kind, ty } => {
+                if let Some(type_id) = context
+                    .symbol_table
+                    .primitive_type_id(primitive_name_from_ast(kind))
+                {
+                    *ty = type_id;
+                }
             }
             AstType::Simple {
                 name,
@@ -760,6 +766,7 @@ fn populate_class_methods(
         .map(|symbol| symbol.ty);
 
     if let Some(class_type_id) = class_type_id {
+        let primitive_lookup = symbol_table.primitive_types().clone();
         let (type_arena, method_arena) = symbol_table.arenas_mut();
         let mut resolved_methods = Vec::new();
         for member_id in &members {
@@ -768,6 +775,7 @@ fn populate_class_methods(
                     let signature = method_signature_from_method(
                         &method,
                         arena,
+                        &primitive_lookup,
                         type_arena,
                         method_modifiers_from_ast(&method.modifiers),
                     );
@@ -779,6 +787,7 @@ fn populate_class_methods(
                         &constructor,
                         &class_name,
                         arena,
+                        &primitive_lookup,
                         type_arena,
                         method_modifiers_from_ast(&constructor.modifiers),
                     );
@@ -804,6 +813,7 @@ fn populate_class_methods(
 fn method_signature_from_method(
     method: &Method,
     arena: &mut AstArena,
+    primitive_lookup: &HashMap<SharedString, TypeId>,
     type_arena: &mut rajac_types::TypeArena,
     modifiers: MethodModifiers,
 ) -> MethodSignature {
@@ -812,14 +822,14 @@ fn method_signature_from_method(
         .iter()
         .map(|param_id| {
             let param = arena.param(*param_id);
-            type_id_for_ast_type(param.ty, arena, type_arena)
+            type_id_for_ast_type(param.ty, arena, primitive_lookup, type_arena)
         })
         .collect();
-    let return_type = type_id_for_ast_type(method.return_ty, arena, type_arena);
+    let return_type = type_id_for_ast_type(method.return_ty, arena, primitive_lookup, type_arena);
     let throws = method
         .throws
         .iter()
-        .map(|ty| type_id_for_ast_type(*ty, arena, type_arena))
+        .map(|ty| type_id_for_ast_type(*ty, arena, primitive_lookup, type_arena))
         .collect();
 
     MethodSignature {
@@ -835,6 +845,7 @@ fn method_signature_from_constructor(
     constructor: &Constructor,
     class_name: &SharedString,
     arena: &mut AstArena,
+    primitive_lookup: &HashMap<SharedString, TypeId>,
     type_arena: &mut rajac_types::TypeArena,
     modifiers: MethodModifiers,
 ) -> MethodSignature {
@@ -843,19 +854,19 @@ fn method_signature_from_constructor(
         .iter()
         .map(|param_id| {
             let param = arena.param(*param_id);
-            type_id_for_ast_type(param.ty, arena, type_arena)
+            type_id_for_ast_type(param.ty, arena, primitive_lookup, type_arena)
         })
         .collect();
     let throws = constructor
         .throws
         .iter()
-        .map(|ty| type_id_for_ast_type(*ty, arena, type_arena))
+        .map(|ty| type_id_for_ast_type(*ty, arena, primitive_lookup, type_arena))
         .collect();
 
     MethodSignature {
         name: class_name.clone(),
         params,
-        return_type: void_type_id(type_arena),
+        return_type: void_type_id(primitive_lookup),
         throws,
         modifiers,
     }
@@ -897,6 +908,7 @@ fn method_modifiers_from_ast(modifiers: &Modifiers) -> MethodModifiers {
 fn type_id_for_ast_type(
     type_id: AstTypeId,
     arena: &mut AstArena,
+    primitive_lookup: &HashMap<SharedString, TypeId>,
     type_arena: &mut rajac_types::TypeArena,
 ) -> TypeId {
     let existing = arena.ty(type_id).ty();
@@ -906,15 +918,17 @@ fn type_id_for_ast_type(
 
     match arena.ty(type_id) {
         AstType::Primitive { kind, .. } => {
-            let primitive = primitive_type_from_ast(kind);
-            let resolved = type_arena.alloc(Type::primitive(primitive));
+            let resolved = primitive_lookup
+                .get(&SharedString::new(primitive_name_from_ast(kind)))
+                .copied()
+                .unwrap_or(TypeId::INVALID);
             if let AstType::Primitive { ty, .. } = arena.ty_mut(type_id) {
                 *ty = resolved;
             }
             resolved
         }
         AstType::Array { element_type, .. } => {
-            let element = type_id_for_ast_type(*element_type, arena, type_arena);
+            let element = type_id_for_ast_type(*element_type, arena, primitive_lookup, type_arena);
             if element == TypeId::INVALID {
                 TypeId::INVALID
             } else {
@@ -929,20 +943,23 @@ fn type_id_for_ast_type(
     }
 }
 
-fn primitive_type_from_ast(kind: &rajac_ast::PrimitiveType) -> PrimitiveType {
+fn primitive_name_from_ast(kind: &rajac_ast::PrimitiveType) -> &'static str {
     match kind {
-        rajac_ast::PrimitiveType::Byte => PrimitiveType::Byte,
-        rajac_ast::PrimitiveType::Short => PrimitiveType::Short,
-        rajac_ast::PrimitiveType::Int => PrimitiveType::Int,
-        rajac_ast::PrimitiveType::Long => PrimitiveType::Long,
-        rajac_ast::PrimitiveType::Float => PrimitiveType::Float,
-        rajac_ast::PrimitiveType::Double => PrimitiveType::Double,
-        rajac_ast::PrimitiveType::Char => PrimitiveType::Char,
-        rajac_ast::PrimitiveType::Boolean => PrimitiveType::Boolean,
-        rajac_ast::PrimitiveType::Void => PrimitiveType::Void,
+        rajac_ast::PrimitiveType::Byte => "byte",
+        rajac_ast::PrimitiveType::Short => "short",
+        rajac_ast::PrimitiveType::Int => "int",
+        rajac_ast::PrimitiveType::Long => "long",
+        rajac_ast::PrimitiveType::Float => "float",
+        rajac_ast::PrimitiveType::Double => "double",
+        rajac_ast::PrimitiveType::Char => "char",
+        rajac_ast::PrimitiveType::Boolean => "boolean",
+        rajac_ast::PrimitiveType::Void => "void",
     }
 }
 
-fn void_type_id(type_arena: &mut rajac_types::TypeArena) -> TypeId {
-    type_arena.alloc(Type::primitive(PrimitiveType::Void))
+fn void_type_id(primitive_lookup: &HashMap<SharedString, TypeId>) -> TypeId {
+    primitive_lookup
+        .get(&SharedString::new("void"))
+        .copied()
+        .unwrap_or(TypeId::INVALID)
 }
