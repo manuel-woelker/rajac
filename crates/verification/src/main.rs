@@ -18,23 +18,14 @@ better, more specific error messages. OpenJDK sometimes gives generic errors lik
 when rajac can provide more precise diagnostics like "illegal character". This override system
 uses OpenJDK's line numbers for consistency but compares against rajac's superior error messages.
 */
-fn get_error_message_overrides() -> HashMap<String, String> {
+fn get_error_message_overrides() -> HashMap<&'static str, &'static str> {
     let mut overrides = HashMap::new();
 
     // rajac provides more specific error messages than OpenJDK
     // Format: "TestFileName" -> "expected rajac error message"
-    overrides.insert(
-        "IllegalCharacter".to_string(),
-        "illegal character".to_string(),
-    );
-    overrides.insert(
-        "InvalidIdentifierStart".to_string(),
-        "invalid identifier start".to_string(),
-    );
-    overrides.insert(
-        "MalformedNumber".to_string(),
-        "malformed number".to_string(),
-    );
+    overrides.insert("IllegalCharacter", "illegal character");
+    overrides.insert("InvalidIdentifierStart", "invalid identifier start");
+    overrides.insert("MalformedNumber", "malformed number");
 
     overrides
 }
@@ -301,6 +292,7 @@ fn verify_invalid_sources(
     let error_overrides = get_error_message_overrides();
 
     let java_files = get_java_files(invalid_dir)?;
+    let total_files = java_files.len();
     let mut failures = 0;
 
     // Compile all invalid sources once
@@ -407,7 +399,10 @@ fn verify_invalid_sources(
         to provide better error messages without breaking verification compatibility.
         */
         // Check if we have an override for this test case
-        let expected_error = error_overrides.get(&*file_stem).unwrap_or(&ref_error);
+        let expected_error = error_overrides
+            .get(&*file_stem)
+            .copied()
+            .unwrap_or(&ref_error);
 
         let error_match = rajac_error
             .to_lowercase()
@@ -439,21 +434,22 @@ fn verify_invalid_sources(
                 );
             }
             failures += 1;
-        } else {
-            println!("{} {} - passed", "OK:".green(), file_stem);
         }
     }
 
     if failures > 0 {
+        let passing_files = total_files - failures;
         println!(
-            "\n{} {} invalid source files failed verification",
+            "\n{} {} invalid source files failed verification, {} passed",
             "Error:".red(),
-            failures
+            failures,
+            passing_files
         );
     } else {
         println!(
-            "\n{} All invalid source files verified successfully",
-            "OK:".green()
+            "\n{} All {} invalid source files verified successfully",
+            "OK:".green(),
+            total_files
         );
     }
 
