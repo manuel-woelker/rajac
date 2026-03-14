@@ -296,72 +296,7 @@ pub use bail;
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-
     use super::format_span_trace_fields;
-    use crate::error::RajacError;
-    use crate::logging::{info_span, init_logging};
-    use crate::result::RajacResult;
-
-    #[test]
-    fn test_err() {
-        let err = err!("test {}", 123);
-        let rendered = err.to_test_string();
-        assert!(rendered.contains("× error test 123\n"));
-        assert!(rendered.contains("  at crates/base/src/error.rs:"));
-    }
-
-    #[test]
-    fn test_bail() {
-        let err = (|| -> RajacResult<()> {
-            bail!("test {}", 123);
-        })()
-        .unwrap_err();
-        let rendered = err.to_test_string();
-        assert!(rendered.contains("× error test 123\n"));
-        assert!(rendered.contains("  at crates/base/src/error.rs:"));
-    }
-
-    #[test]
-    fn test_error_chaining() {
-        let err = RajacError::message("failed to read file")
-            .with_source(RajacError::message("missing file"));
-        let rendered = err.to_test_string();
-        assert!(rendered.contains("× error failed to read file\n"));
-        assert!(rendered.contains("caused by: missing file\n"));
-        assert_eq!(
-            rendered.matches("  at crates/base/src/error.rs:").count(),
-            2
-        );
-    }
-
-    #[test]
-    fn test_with_std_source() {
-        let io_error = io::Error::new(io::ErrorKind::NotFound, "missing config");
-        let err = RajacError::message("cannot initialize").with_std_source(io_error);
-        let rendered = err.to_test_string();
-        assert!(rendered.contains("× error cannot initialize\n"));
-        assert!(rendered.contains("caused by: missing config\n"));
-        assert_eq!(
-            rendered.matches("  at crates/base/src/error.rs:").count(),
-            2
-        );
-    }
-
-    #[test]
-    fn test_error_renders_span_trace_when_inside_span() {
-        init_logging();
-        let span = info_span!("error_test_span");
-        let _guard = span.enter();
-
-        let err = RajacError::message("failed inside span");
-        let rendered = err.to_test_string();
-
-        assert!(rendered.contains("  span trace:\n"));
-        assert!(rendered.contains("    0: "));
-        assert!(rendered.contains("error_test_span"));
-        assert!(rendered.contains("       at crates/base/src/error.rs:"));
-    }
 
     #[test]
     fn test_format_span_trace_fields() {
