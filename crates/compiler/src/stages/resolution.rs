@@ -110,7 +110,7 @@ use rajac_ast::{
 use rajac_base::qualified_name::FullyQualifiedClassName as ResolvedName;
 use rajac_base::shared_string::SharedString;
 use rajac_symbols::SymbolTable;
-use rajac_types::{MethodModifiers, MethodSignature, Type, TypeId};
+use rajac_types::{FieldModifiers, FieldSignature, MethodModifiers, MethodSignature, Type, TypeId};
 use std::collections::HashMap;
 
 /// Resolves identifiers and types in all compilation units.
@@ -766,10 +766,22 @@ fn populate_class_methods(
 
     if let Some(class_type_id) = class_type_id {
         let primitive_lookup = symbol_table.primitive_types().clone();
-        let (type_arena, method_arena) = symbol_table.arenas_mut();
+        let (type_arena, method_arena, field_arena) = symbol_table.arenas_mut();
         let mut resolved_methods = Vec::new();
+        let mut resolved_fields = Vec::new();
         for member_id in &members {
             match arena.class_members[member_id.0 as usize].clone() {
+                ClassMember::Field(field) => {
+                    let field_type =
+                        type_id_for_ast_type(field.ty, arena, &primitive_lookup, type_arena);
+                    let signature = FieldSignature::new(
+                        field.name.name.clone(),
+                        field_type,
+                        field_modifiers_from_ast(&field.modifiers),
+                    );
+                    let field_id = field_arena.alloc(signature);
+                    resolved_fields.push((field.name.name.clone(), field_id));
+                }
                 ClassMember::Method(method) => {
                     let signature = method_signature_from_method(
                         &method,
@@ -800,6 +812,9 @@ fn populate_class_methods(
         if let Type::Class(class_type) = type_arena.get_mut(class_type_id) {
             for (name, method_id) in resolved_methods {
                 class_type.add_method(name, method_id);
+            }
+            for (name, field_id) in resolved_fields {
+                class_type.add_field(name, field_id);
             }
         }
     }
@@ -902,6 +917,33 @@ fn method_modifiers_from_ast(modifiers: &Modifiers) -> MethodModifiers {
     }
 
     MethodModifiers(bits)
+}
+
+fn field_modifiers_from_ast(modifiers: &Modifiers) -> FieldModifiers {
+    let mut bits = 0;
+    if modifiers.is_public() {
+        bits |= FieldModifiers::PUBLIC;
+    }
+    if modifiers.is_private() {
+        bits |= FieldModifiers::PRIVATE;
+    }
+    if modifiers.is_protected() {
+        bits |= FieldModifiers::PROTECTED;
+    }
+    if modifiers.is_static() {
+        bits |= FieldModifiers::STATIC;
+    }
+    if modifiers.is_final() {
+        bits |= FieldModifiers::FINAL;
+    }
+    if modifiers.0 & Modifiers::VOLATILE != 0 {
+        bits |= FieldModifiers::VOLATILE;
+    }
+    if modifiers.0 & Modifiers::TRANSIENT != 0 {
+        bits |= FieldModifiers::TRANSIENT;
+    }
+
+    FieldModifiers(bits)
 }
 
 fn type_id_for_ast_type(

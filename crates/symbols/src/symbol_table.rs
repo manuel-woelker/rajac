@@ -1,6 +1,6 @@
 use crate::PackageTable;
 use rajac_base::shared_string::SharedString;
-use rajac_types::{MethodArena, PrimitiveType, Type, TypeArena, TypeId};
+use rajac_types::{FieldArena, MethodArena, PrimitiveType, Type, TypeArena, TypeId};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -8,6 +8,7 @@ pub struct SymbolTable {
     packages: HashMap<SharedString, PackageTable>,
     pub(crate) type_arena: TypeArena,
     pub(crate) method_arena: MethodArena,
+    pub(crate) field_arena: FieldArena,
     primitive_types: HashMap<SharedString, TypeId>,
 }
 
@@ -19,6 +20,7 @@ impl SymbolTable {
             packages: HashMap::new(),
             type_arena,
             method_arena: MethodArena::new(),
+            field_arena: FieldArena::new(),
             primitive_types,
         }
     }
@@ -39,8 +41,20 @@ impl SymbolTable {
         &self.method_arena
     }
 
-    pub fn arenas_mut(&mut self) -> (&mut TypeArena, &mut MethodArena) {
-        (&mut self.type_arena, &mut self.method_arena)
+    pub fn field_arena_mut(&mut self) -> &mut FieldArena {
+        &mut self.field_arena
+    }
+
+    pub fn field_arena(&self) -> &FieldArena {
+        &self.field_arena
+    }
+
+    pub fn arenas_mut(&mut self) -> (&mut TypeArena, &mut MethodArena, &mut FieldArena) {
+        (
+            &mut self.type_arena,
+            &mut self.method_arena,
+            &mut self.field_arena,
+        )
     }
 
     pub fn primitive_type_id(&self, name: &str) -> Option<TypeId> {

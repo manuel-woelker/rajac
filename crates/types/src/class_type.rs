@@ -1,4 +1,4 @@
-use crate::{MethodId, TypeId};
+use crate::{FieldId, MethodId, TypeId};
 use rajac_base::shared_string::SharedString;
 use std::collections::HashMap;
 
@@ -16,6 +16,8 @@ pub struct ClassType {
     pub interfaces: Vec<TypeId>,
     /// Method ids grouped by name for overload resolution.
     pub methods: HashMap<SharedString, Vec<MethodId>>,
+    /// Field ids grouped by name.
+    pub fields: HashMap<SharedString, Vec<FieldId>>,
 }
 
 impl ClassType {
@@ -27,6 +29,7 @@ impl ClassType {
             superclass: None,
             interfaces: Vec::new(),
             methods: HashMap::new(),
+            fields: HashMap::new(),
         }
     }
 
@@ -55,8 +58,17 @@ impl ClassType {
         self
     }
 
+    pub fn with_fields(mut self, fields: HashMap<SharedString, Vec<FieldId>>) -> Self {
+        self.fields = fields;
+        self
+    }
+
     pub fn add_method(&mut self, name: SharedString, method_id: MethodId) {
         self.methods.entry(name).or_default().push(method_id);
+    }
+
+    pub fn add_field(&mut self, name: SharedString, field_id: FieldId) {
+        self.fields.entry(name).or_default().push(field_id);
     }
 
     pub fn internal_name(&self) -> String {
@@ -70,7 +82,7 @@ impl ClassType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::MethodId;
+    use crate::{FieldId, MethodId};
 
     #[test]
     fn add_method_groups_by_name() {
@@ -80,5 +92,15 @@ mod tests {
 
         let methods = class_type.methods.get("size").expect("methods");
         assert_eq!(methods, &[MethodId(0), MethodId(1)]);
+    }
+
+    #[test]
+    fn add_field_groups_by_name() {
+        let mut class_type = ClassType::new(SharedString::new("Widget"));
+        class_type.add_field(SharedString::new("name"), FieldId(0));
+        class_type.add_field(SharedString::new("name"), FieldId(1));
+
+        let fields = class_type.fields.get("name").expect("fields");
+        assert_eq!(fields, &[FieldId(0), FieldId(1)]);
     }
 }

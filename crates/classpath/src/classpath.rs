@@ -1,7 +1,7 @@
 use rajac_base::shared_string::SharedString;
 use rajac_symbols::{Symbol, SymbolKind, SymbolTable};
 use rayon::prelude::*;
-use ristretto_classfile::{BaseType, ClassFile, FieldType, MethodAccessFlags};
+use ristretto_classfile::{BaseType, ClassFile, FieldAccessFlags, FieldType, MethodAccessFlags};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Cursor, Read};
@@ -25,6 +25,7 @@ struct ParsedClass {
     super_class: Option<SharedString>,
     interfaces: Vec<SharedString>,
     methods: Vec<ParsedMethod>,
+    fields: Vec<ParsedField>,
 }
 
 #[derive(Clone, Debug)]
@@ -33,6 +34,13 @@ struct ParsedMethod {
     params: Vec<FieldType>,
     return_type: Option<FieldType>,
     modifiers: rajac_types::MethodModifiers,
+}
+
+#[derive(Clone, Debug)]
+struct ParsedField {
+    name: SharedString,
+    ty: FieldType,
+    modifiers: rajac_types::FieldModifiers,
 }
 
 impl Classpath {
@@ -271,6 +279,12 @@ fn parse_class_file(class_file: &ClassFile) -> Option<ParsedClass> {
         .filter_map(|method| parse_class_method(class_file, method, &class_name))
         .collect();
 
+    let fields: Vec<ParsedField> = class_file
+        .fields
+        .iter()
+        .filter_map(|field| parse_class_field(class_file, field))
+        .collect();
+
     Some(ParsedClass {
         package,
         class_name,
@@ -278,6 +292,7 @@ fn parse_class_file(class_file: &ClassFile) -> Option<ParsedClass> {
         super_class,
         interfaces,
         methods,
+        fields,
     })
 }
 
@@ -302,6 +317,23 @@ fn parse_class_method(
         params,
         return_type,
         modifiers: method_modifiers_from_access_flags(method.access_flags),
+    })
+}
+
+fn parse_class_field(
+    class_file: &ClassFile,
+    field: &ristretto_classfile::Field,
+) -> Option<ParsedField> {
+    let raw_name = class_file
+        .constant_pool
+        .try_get_utf8(field.name_index)
+        .ok()?;
+    let name = SharedString::new(raw_name);
+
+    Some(ParsedField {
+        name,
+        ty: field.field_type.clone(),
+        modifiers: field_modifiers_from_access_flags(field.access_flags),
     })
 }
 
@@ -348,6 +380,35 @@ fn method_modifiers_from_access_flags(
     rajac_types::MethodModifiers(bits)
 }
 
+fn field_modifiers_from_access_flags(
+    access_flags: FieldAccessFlags,
+) -> rajac_types::FieldModifiers {
+    let mut bits = 0;
+    if access_flags.contains(FieldAccessFlags::PUBLIC) {
+        bits |= rajac_types::FieldModifiers::PUBLIC;
+    }
+    if access_flags.contains(FieldAccessFlags::PRIVATE) {
+        bits |= rajac_types::FieldModifiers::PRIVATE;
+    }
+    if access_flags.contains(FieldAccessFlags::PROTECTED) {
+        bits |= rajac_types::FieldModifiers::PROTECTED;
+    }
+    if access_flags.contains(FieldAccessFlags::STATIC) {
+        bits |= rajac_types::FieldModifiers::STATIC;
+    }
+    if access_flags.contains(FieldAccessFlags::FINAL) {
+        bits |= rajac_types::FieldModifiers::FINAL;
+    }
+    if access_flags.contains(FieldAccessFlags::VOLATILE) {
+        bits |= rajac_types::FieldModifiers::VOLATILE;
+    }
+    if access_flags.contains(FieldAccessFlags::TRANSIENT) {
+        bits |= rajac_types::FieldModifiers::TRANSIENT;
+    }
+
+    rajac_types::FieldModifiers(bits)
+}
+
 fn resolve_class_relationships(
     parsed_classes: &[ParsedClass],
     symbol_table: &mut SymbolTable,
@@ -380,6 +441,7 @@ fn resolve_class_relationships(
                 super_type_id,
                 interface_type_ids,
                 parsed_class.methods.clone(),
+                parsed_class.fields.clone(),
             ))
         })
         .collect();
@@ -387,8 +449,8 @@ fn resolve_class_relationships(
     // Second pass: Apply the relationships (only write to type_arena)
     let class_lookup = build_class_lookup(symbol_table);
     let primitive_lookup = symbol_table.primitive_types().clone();
-    let (type_arena, method_arena) = symbol_table.arenas_mut();
-    for (type_id, super_type_id, interface_type_ids, methods) in relationships {
+    let (type_arena, method_arena, field_arena) = symbol_table.arenas_mut();
+    for (type_id, super_type_id, interface_type_ids, methods, fields) in relationships {
         let mut resolved_methods = Vec::with_capacity(methods.len());
         for method in methods {
             let params = method
@@ -415,12 +477,25 @@ fn resolve_class_relationships(
             resolved_methods.push((method.name, method_id));
         }
 
+        let mut resolved_fields = Vec::with_capacity(fields.len());
+        for field in fields {
+            let field_type =
+                resolve_field_type(&field.ty, &primitive_lookup, &class_lookup, type_arena);
+            let signature =
+                rajac_types::FieldSignature::new(field.name.clone(), field_type, field.modifiers);
+            let field_id = field_arena.alloc(signature);
+            resolved_fields.push((field.name, field_id));
+        }
+
         let class_type = type_arena.get_mut(type_id);
         if let rajac_types::Type::Class(class_type_mut) = class_type {
             class_type_mut.superclass = super_type_id;
             class_type_mut.interfaces = interface_type_ids;
             for (name, method_id) in resolved_methods {
                 class_type_mut.add_method(name, method_id);
+            }
+            for (name, field_id) in resolved_fields {
+                class_type_mut.add_field(name, field_id);
             }
         }
     }
@@ -589,6 +664,20 @@ mod tests {
                 rajac_types::MethodModifiers::PUBLIC
                     | rajac_types::MethodModifiers::STATIC
                     | rajac_types::MethodModifiers::FINAL
+            )
+        );
+    }
+
+    #[test]
+    fn maps_access_flags_to_field_modifiers() {
+        let flags = FieldAccessFlags::PUBLIC | FieldAccessFlags::STATIC | FieldAccessFlags::FINAL;
+        let modifiers = field_modifiers_from_access_flags(flags);
+        assert_eq!(
+            modifiers,
+            rajac_types::FieldModifiers(
+                rajac_types::FieldModifiers::PUBLIC
+                    | rajac_types::FieldModifiers::STATIC
+                    | rajac_types::FieldModifiers::FINAL
             )
         );
     }
