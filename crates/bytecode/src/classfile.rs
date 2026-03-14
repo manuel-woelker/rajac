@@ -537,7 +537,7 @@ fn generate_method_bytecode(
 
     let mut code_gen = CodeGenerator::new(arena, type_arena, constant_pool);
     let (instructions, max_stack, max_locals) =
-        code_gen.generate_method_body(is_static, body_id)?;
+        code_gen.generate_method_body(is_static, &method.params, body_id)?;
 
     let code_name = constant_pool.add_utf8("Code")?;
 

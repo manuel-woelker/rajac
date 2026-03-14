@@ -289,19 +289,30 @@ impl<'a> Parser<'a> {
                 Some(self.arena.alloc_expr(unary))
             }
             TokenKind::LParen => {
-                // Check for cast
                 self.bump();
-                if let Some(ty) = self.parse_type()
-                    && self.consume(TokenKind::RParen)
-                {
-                    // This is a cast
+                if matches!(
+                    self.peek(),
+                    TokenKind::KwBoolean
+                        | TokenKind::KwByte
+                        | TokenKind::KwChar
+                        | TokenKind::KwShort
+                        | TokenKind::KwInt
+                        | TokenKind::KwLong
+                        | TokenKind::KwFloat
+                        | TokenKind::KwDouble
+                        | TokenKind::KwVoid
+                        | TokenKind::KwVar
+                ) {
+                    let ty = self.parse_type()?;
+                    self.expect(TokenKind::RParen);
                     let expr = self.parse_unary()?;
                     let cast = Expr::Cast { ty, expr };
                     return Some(self.arena.alloc_expr(cast));
                 }
-                // Otherwise, backtrack and parse as postfix (but we can't backtrack easily here)
-                // For now, treat as primary expression
-                self.parse_postfix()
+
+                let expr = self.parse_expression()?;
+                self.expect(TokenKind::RParen);
+                Some(expr)
             }
             _ => self.parse_postfix(),
         }

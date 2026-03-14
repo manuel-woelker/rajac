@@ -1,5 +1,6 @@
 use rajac_ast::{
-    AstArena, AstType, Expr as AstExpr, ExprId, Literal, LiteralKind, PrimitiveType, Stmt, StmtId,
+    AstArena, AstType, Expr as AstExpr, ExprId, Literal, LiteralKind, ParamId, PrimitiveType,
+    Stmt, StmtId,
 };
 use rajac_base::result::RajacResult;
 use rajac_types::{Ident, Type, TypeArena, TypeId};
@@ -37,7 +38,7 @@ pub struct CodeGenerator<'arena> {
     current_stack: i32,
     max_locals: u16,
     next_local_slot: u16,
-    local_vars: std::collections::HashMap<String, u16>,
+    local_vars: std::collections::HashMap<String, LocalVar>,
 }
 
 impl<'arena> CodeGenerator<'arena> {
@@ -51,7 +52,7 @@ impl<'arena> CodeGenerator<'arena> {
             type_arena,
             constant_pool,
             emitter: BytecodeEmitter::new(),
-            max_stack: 2,
+            max_stack: 0,
             current_stack: 0,
             max_locals: 1,
             next_local_slot: 1, // slot 0 is for 'this'
@@ -62,18 +63,24 @@ impl<'arena> CodeGenerator<'arena> {
     pub fn generate_method_body(
         &mut self,
         is_static: bool,
+        params: &[ParamId],
         body_id: StmtId,
     ) -> RajacResult<(Vec<Instruction>, u16, u16)> {
-        if !is_static {
-            self.max_locals = 1;
-        }
+        self.initialize_method_locals(is_static, params);
 
         self.emit_statement(body_id)?;
 
         if self.emulator().instructions.is_empty()
             || !matches!(
                 self.emulator().instructions.last(),
-                Some(Instruction::Return | Instruction::Areturn | Instruction::Ireturn)
+                Some(
+                    Instruction::Return
+                        | Instruction::Areturn
+                        | Instruction::Ireturn
+                        | Instruction::Freturn
+                        | Instruction::Dreturn
+                        | Instruction::Lreturn
+                )
             )
         {
             self.emit(Instruction::Return);
@@ -136,8 +143,9 @@ impl<'arena> CodeGenerator<'arena> {
             }
             Stmt::Return(Some(expr_id)) => {
                 self.emit_expression(*expr_id)?;
-                // For now, treat all returns as object references
-                self.emit(Instruction::Areturn);
+                let expr_ty = self.arena.expr_typed(*expr_id).ty;
+                let expr_kind = self.kind_for_expr(*expr_id, expr_ty);
+                self.emit(self.return_instruction_for_kind(expr_kind));
             }
             Stmt::LocalVar {
                 ty,
@@ -146,47 +154,11 @@ impl<'arena> CodeGenerator<'arena> {
             } => {
                 if let Some(expr_id) = initializer {
                     self.emit_expression(*expr_id)?;
-                    let slot = self.next_local_slot;
-                    self.next_local_slot += 1;
-                    self.max_locals = self.max_locals.max(self.next_local_slot);
-                    self.local_vars.insert(name.as_str().to_string(), slot);
-
                     let ty = self.arena.ty(*ty);
-                    match ty {
-                        AstType::Primitive {
-                            kind: PrimitiveType::Int,
-                            ty: _,
-                        }
-                        | AstType::Primitive {
-                            kind: PrimitiveType::Boolean,
-                            ty: _,
-                        }
-                        | AstType::Primitive {
-                            kind: PrimitiveType::Byte,
-                            ty: _,
-                        }
-                        | AstType::Primitive {
-                            kind: PrimitiveType::Short,
-                            ty: _,
-                        }
-                        | AstType::Primitive {
-                            kind: PrimitiveType::Char,
-                            ty: _,
-                        } => match slot {
-                            0 => self.emit(Instruction::Istore_0),
-                            1 => self.emit(Instruction::Istore_1),
-                            2 => self.emit(Instruction::Istore_2),
-                            3 => self.emit(Instruction::Istore_3),
-                            _ => self.emit(Instruction::Istore(slot as u8)),
-                        },
-                        _ => match slot {
-                            0 => self.emit(Instruction::Astore_0),
-                            1 => self.emit(Instruction::Astore_1),
-                            2 => self.emit(Instruction::Astore_2),
-                            3 => self.emit(Instruction::Astore_3),
-                            _ => self.emit(Instruction::Astore(slot as u8)),
-                        },
-                    }
+                    let kind = local_kind_from_ast_type(ty);
+                    let slot = self.allocate_local(kind);
+                    self.local_vars.insert(name.as_str().to_string(), LocalVar { slot, kind });
+                    self.emit_store(slot, kind);
                 }
             }
             Stmt::If { .. } | Stmt::While { .. } | Stmt::For { .. } | Stmt::DoWhile { .. } => {}
@@ -198,21 +170,15 @@ impl<'arena> CodeGenerator<'arena> {
     }
 
     pub fn emit_expression(&mut self, expr_id: ExprId) -> RajacResult<()> {
-        let expr = self.arena.expr(expr_id);
+        let typed_expr = self.arena.expr_typed(expr_id);
+        let expr_ty = typed_expr.ty;
+        let expr_kind = self.kind_for_expr(expr_id, expr_ty);
+        let expr = &typed_expr.expr;
         match expr {
             AstExpr::Error => {}
             AstExpr::Ident(ident) => {
-                if let Some(&slot) = self.local_vars.get(ident.as_str()) {
-                    if slot <= 3 {
-                        self.emit(match slot {
-                            0 => Instruction::Iload_0,
-                            1 => Instruction::Iload_1,
-                            2 => Instruction::Iload_2,
-                            _ => Instruction::Iload_3,
-                        });
-                    } else {
-                        self.emit(Instruction::Iload(slot as u8));
-                    }
+                if let Some(local) = self.local_vars.get(ident.as_str()) {
+                    self.emit_load(local.slot, local.kind);
                 }
             }
             AstExpr::Literal(literal) => {
@@ -221,11 +187,21 @@ impl<'arena> CodeGenerator<'arena> {
             AstExpr::Unary { op, expr } => {
                 self.emit_expression(*expr)?;
                 if matches!(op, rajac_ast::UnaryOp::Minus) {
-                    self.emit(Instruction::Ineg);
+                    self.emit(self.neg_instruction_for_kind(expr_kind));
                 }
             }
             AstExpr::Binary { op, lhs, rhs } => {
-                self.emit_binary_op(op, *lhs, *rhs)?;
+                match op {
+                    rajac_ast::BinaryOp::And => {
+                        self.emit_logical_and(*lhs, *rhs)?;
+                    }
+                    rajac_ast::BinaryOp::Or => {
+                        self.emit_logical_or(*lhs, *rhs)?;
+                    }
+                    _ => {
+                        self.emit_binary_op(op, *lhs, *rhs, expr_kind)?;
+                    }
+                }
             }
             AstExpr::Assign { .. } => {}
             AstExpr::Ternary {
@@ -385,6 +361,7 @@ impl<'arena> CodeGenerator<'arena> {
         op: &rajac_ast::BinaryOp,
         lhs: ExprId,
         rhs: ExprId,
+        result_kind: LocalVarKind,
     ) -> RajacResult<()> {
         use rajac_ast::BinaryOp;
 
@@ -476,57 +453,57 @@ impl<'arena> CodeGenerator<'arena> {
             BinaryOp::Add => {
                 self.emit_expression(lhs)?;
                 self.emit_expression(rhs)?;
-                self.emit(Instruction::Iadd);
+                self.emit(self.arithmetic_instruction(result_kind, ArithmeticOp::Add));
             }
             BinaryOp::Sub => {
                 self.emit_expression(lhs)?;
                 self.emit_expression(rhs)?;
-                self.emit(Instruction::Isub);
+                self.emit(self.arithmetic_instruction(result_kind, ArithmeticOp::Sub));
             }
             BinaryOp::Mul => {
                 self.emit_expression(lhs)?;
                 self.emit_expression(rhs)?;
-                self.emit(Instruction::Imul);
+                self.emit(self.arithmetic_instruction(result_kind, ArithmeticOp::Mul));
             }
             BinaryOp::Div => {
                 self.emit_expression(lhs)?;
                 self.emit_expression(rhs)?;
-                self.emit(Instruction::Idiv);
+                self.emit(self.arithmetic_instruction(result_kind, ArithmeticOp::Div));
             }
             BinaryOp::Mod => {
                 self.emit_expression(lhs)?;
                 self.emit_expression(rhs)?;
-                self.emit(Instruction::Irem);
+                self.emit(self.arithmetic_instruction(result_kind, ArithmeticOp::Rem));
             }
             BinaryOp::BitAnd => {
                 self.emit_expression(lhs)?;
                 self.emit_expression(rhs)?;
-                self.emit(Instruction::Iand);
+                self.emit(self.bitwise_instruction(result_kind, BitwiseOp::And));
             }
             BinaryOp::BitOr => {
                 self.emit_expression(lhs)?;
                 self.emit_expression(rhs)?;
-                self.emit(Instruction::Ior);
+                self.emit(self.bitwise_instruction(result_kind, BitwiseOp::Or));
             }
             BinaryOp::BitXor => {
                 self.emit_expression(lhs)?;
                 self.emit_expression(rhs)?;
-                self.emit(Instruction::Ixor);
+                self.emit(self.bitwise_instruction(result_kind, BitwiseOp::Xor));
             }
             BinaryOp::LShift => {
                 self.emit_expression(lhs)?;
                 self.emit_expression(rhs)?;
-                self.emit(Instruction::Ishl);
+                self.emit(self.shift_instruction(result_kind, ShiftOp::Left));
             }
             BinaryOp::RShift => {
                 self.emit_expression(lhs)?;
                 self.emit_expression(rhs)?;
-                self.emit(Instruction::Ishr);
+                self.emit(self.shift_instruction(result_kind, ShiftOp::Right));
             }
             BinaryOp::ARShift => {
                 self.emit_expression(lhs)?;
                 self.emit_expression(rhs)?;
-                self.emit(Instruction::Iushr);
+                self.emit(self.shift_instruction(result_kind, ShiftOp::UnsignedRight));
             }
             BinaryOp::Lt
             | BinaryOp::LtEq
@@ -540,7 +517,7 @@ impl<'arena> CodeGenerator<'arena> {
             BinaryOp::And | BinaryOp::Or => {
                 self.emit_expression(lhs)?;
                 self.emit_expression(rhs)?;
-                self.emit(Instruction::Iand);
+                self.emit(self.bitwise_instruction(result_kind, BitwiseOp::And));
             }
         }
         Ok(())
@@ -661,6 +638,413 @@ impl<'arena> CodeGenerator<'arena> {
 
         Ok(())
     }
+
+    fn initialize_method_locals(&mut self, is_static: bool, params: &[ParamId]) {
+        if is_static {
+            self.max_locals = 0;
+            self.next_local_slot = 0;
+        } else {
+            self.max_locals = 1;
+            self.next_local_slot = 1;
+        }
+
+        for param_id in params {
+            let param = self.arena.param(*param_id);
+            let kind = local_kind_from_ast_type(self.arena.ty(param.ty));
+            let slot = self.allocate_local(kind);
+            self.local_vars
+                .insert(param.name.as_str().to_string(), LocalVar { slot, kind });
+        }
+    }
+
+    fn allocate_local(&mut self, kind: LocalVarKind) -> u16 {
+        let slot = self.next_local_slot;
+        self.next_local_slot += kind.slot_size();
+        self.max_locals = self.max_locals.max(self.next_local_slot);
+        slot
+    }
+
+    fn emit_load(&mut self, slot: u16, kind: LocalVarKind) {
+        match kind {
+            LocalVarKind::IntLike => match slot {
+                0 => self.emit(Instruction::Iload_0),
+                1 => self.emit(Instruction::Iload_1),
+                2 => self.emit(Instruction::Iload_2),
+                3 => self.emit(Instruction::Iload_3),
+                _ => self.emit(Instruction::Iload(slot as u8)),
+            },
+            LocalVarKind::Long => match slot {
+                0 => self.emit(Instruction::Lload_0),
+                1 => self.emit(Instruction::Lload_1),
+                2 => self.emit(Instruction::Lload_2),
+                3 => self.emit(Instruction::Lload_3),
+                _ => self.emit(Instruction::Lload(slot as u8)),
+            },
+            LocalVarKind::Float => match slot {
+                0 => self.emit(Instruction::Fload_0),
+                1 => self.emit(Instruction::Fload_1),
+                2 => self.emit(Instruction::Fload_2),
+                3 => self.emit(Instruction::Fload_3),
+                _ => self.emit(Instruction::Fload(slot as u8)),
+            },
+            LocalVarKind::Double => match slot {
+                0 => self.emit(Instruction::Dload_0),
+                1 => self.emit(Instruction::Dload_1),
+                2 => self.emit(Instruction::Dload_2),
+                3 => self.emit(Instruction::Dload_3),
+                _ => self.emit(Instruction::Dload(slot as u8)),
+            },
+            LocalVarKind::Reference => match slot {
+                0 => self.emit(Instruction::Aload_0),
+                1 => self.emit(Instruction::Aload_1),
+                2 => self.emit(Instruction::Aload_2),
+                3 => self.emit(Instruction::Aload_3),
+                _ => self.emit(Instruction::Aload(slot as u8)),
+            },
+        }
+    }
+
+    fn emit_store(&mut self, slot: u16, kind: LocalVarKind) {
+        match kind {
+            LocalVarKind::IntLike => match slot {
+                0 => self.emit(Instruction::Istore_0),
+                1 => self.emit(Instruction::Istore_1),
+                2 => self.emit(Instruction::Istore_2),
+                3 => self.emit(Instruction::Istore_3),
+                _ => self.emit(Instruction::Istore(slot as u8)),
+            },
+            LocalVarKind::Long => match slot {
+                0 => self.emit(Instruction::Lstore_0),
+                1 => self.emit(Instruction::Lstore_1),
+                2 => self.emit(Instruction::Lstore_2),
+                3 => self.emit(Instruction::Lstore_3),
+                _ => self.emit(Instruction::Lstore(slot as u8)),
+            },
+            LocalVarKind::Float => match slot {
+                0 => self.emit(Instruction::Fstore_0),
+                1 => self.emit(Instruction::Fstore_1),
+                2 => self.emit(Instruction::Fstore_2),
+                3 => self.emit(Instruction::Fstore_3),
+                _ => self.emit(Instruction::Fstore(slot as u8)),
+            },
+            LocalVarKind::Double => match slot {
+                0 => self.emit(Instruction::Dstore_0),
+                1 => self.emit(Instruction::Dstore_1),
+                2 => self.emit(Instruction::Dstore_2),
+                3 => self.emit(Instruction::Dstore_3),
+                _ => self.emit(Instruction::Dstore(slot as u8)),
+            },
+            LocalVarKind::Reference => match slot {
+                0 => self.emit(Instruction::Astore_0),
+                1 => self.emit(Instruction::Astore_1),
+                2 => self.emit(Instruction::Astore_2),
+                3 => self.emit(Instruction::Astore_3),
+                _ => self.emit(Instruction::Astore(slot as u8)),
+            },
+        }
+    }
+
+    fn return_instruction_for_kind(&self, kind: LocalVarKind) -> Instruction {
+        match kind {
+            LocalVarKind::IntLike => Instruction::Ireturn,
+            LocalVarKind::Long => Instruction::Lreturn,
+            LocalVarKind::Float => Instruction::Freturn,
+            LocalVarKind::Double => Instruction::Dreturn,
+            LocalVarKind::Reference => Instruction::Areturn,
+        }
+    }
+
+    fn neg_instruction_for_kind(&self, kind: LocalVarKind) -> Instruction {
+        match kind {
+            LocalVarKind::Long => Instruction::Lneg,
+            LocalVarKind::Float => Instruction::Fneg,
+            LocalVarKind::Double => Instruction::Dneg,
+            _ => Instruction::Ineg,
+        }
+    }
+
+    fn arithmetic_instruction(&self, kind: LocalVarKind, op: ArithmeticOp) -> Instruction {
+        match (kind, op) {
+            (LocalVarKind::Long, ArithmeticOp::Add) => Instruction::Ladd,
+            (LocalVarKind::Long, ArithmeticOp::Sub) => Instruction::Lsub,
+            (LocalVarKind::Long, ArithmeticOp::Mul) => Instruction::Lmul,
+            (LocalVarKind::Long, ArithmeticOp::Div) => Instruction::Ldiv,
+            (LocalVarKind::Long, ArithmeticOp::Rem) => Instruction::Lrem,
+            (LocalVarKind::Float, ArithmeticOp::Add) => Instruction::Fadd,
+            (LocalVarKind::Float, ArithmeticOp::Sub) => Instruction::Fsub,
+            (LocalVarKind::Float, ArithmeticOp::Mul) => Instruction::Fmul,
+            (LocalVarKind::Float, ArithmeticOp::Div) => Instruction::Fdiv,
+            (LocalVarKind::Float, ArithmeticOp::Rem) => Instruction::Frem,
+            (LocalVarKind::Double, ArithmeticOp::Add) => Instruction::Dadd,
+            (LocalVarKind::Double, ArithmeticOp::Sub) => Instruction::Dsub,
+            (LocalVarKind::Double, ArithmeticOp::Mul) => Instruction::Dmul,
+            (LocalVarKind::Double, ArithmeticOp::Div) => Instruction::Ddiv,
+            (LocalVarKind::Double, ArithmeticOp::Rem) => Instruction::Drem,
+            _ => match op {
+                ArithmeticOp::Add => Instruction::Iadd,
+                ArithmeticOp::Sub => Instruction::Isub,
+                ArithmeticOp::Mul => Instruction::Imul,
+                ArithmeticOp::Div => Instruction::Idiv,
+                ArithmeticOp::Rem => Instruction::Irem,
+            },
+        }
+    }
+
+    fn bitwise_instruction(&self, kind: LocalVarKind, op: BitwiseOp) -> Instruction {
+        match (kind, op) {
+            (LocalVarKind::Long, BitwiseOp::And) => Instruction::Land,
+            (LocalVarKind::Long, BitwiseOp::Or) => Instruction::Lor,
+            (LocalVarKind::Long, BitwiseOp::Xor) => Instruction::Lxor,
+            _ => match op {
+                BitwiseOp::And => Instruction::Iand,
+                BitwiseOp::Or => Instruction::Ior,
+                BitwiseOp::Xor => Instruction::Ixor,
+            },
+        }
+    }
+
+    fn shift_instruction(&self, kind: LocalVarKind, op: ShiftOp) -> Instruction {
+        match (kind, op) {
+            (LocalVarKind::Long, ShiftOp::Left) => Instruction::Lshl,
+            (LocalVarKind::Long, ShiftOp::Right) => Instruction::Lshr,
+            (LocalVarKind::Long, ShiftOp::UnsignedRight) => Instruction::Lushr,
+            _ => match op {
+                ShiftOp::Left => Instruction::Ishl,
+                ShiftOp::Right => Instruction::Ishr,
+                ShiftOp::UnsignedRight => Instruction::Iushr,
+            },
+        }
+    }
+
+    fn emit_logical_and(&mut self, lhs: ExprId, rhs: ExprId) -> RajacResult<()> {
+        self.emit_expression(lhs)?;
+        let first_branch_index = self.emitter.instructions.len();
+        self.emit(Instruction::Ifeq(0));
+        self.emit_expression(rhs)?;
+        let second_branch_index = self.emitter.instructions.len();
+        self.emit(Instruction::Ifeq(0));
+        self.emit(Instruction::Iconst_1);
+        let goto_index = self.emitter.instructions.len();
+        self.emit(Instruction::Goto(0));
+        let false_index = self.emitter.instructions.len();
+        self.current_stack = 0;
+        self.emit(Instruction::Iconst_0);
+        let end_index = self.emitter.instructions.len();
+
+        let false_offset = self.byte_offset_for_index(false_index);
+        let end_offset = self.byte_offset_for_index(end_index);
+        self.patch_branch(first_branch_index, BranchKind::IfEq, false_offset);
+        self.patch_branch(second_branch_index, BranchKind::IfEq, false_offset);
+        self.patch_branch(goto_index, BranchKind::Goto, end_offset);
+
+        Ok(())
+    }
+
+    fn emit_logical_or(&mut self, lhs: ExprId, rhs: ExprId) -> RajacResult<()> {
+        self.emit_expression(lhs)?;
+        let true_branch_index = self.emitter.instructions.len();
+        self.emit(Instruction::Ifne(0));
+        self.emit_expression(rhs)?;
+        let false_branch_index = self.emitter.instructions.len();
+        self.emit(Instruction::Ifeq(0));
+        let true_index = self.emitter.instructions.len();
+        self.emit(Instruction::Iconst_1);
+        let goto_index = self.emitter.instructions.len();
+        self.emit(Instruction::Goto(0));
+        let false_index = self.emitter.instructions.len();
+        self.current_stack = 0;
+        self.emit(Instruction::Iconst_0);
+        let end_index = self.emitter.instructions.len();
+
+        let true_offset = self.byte_offset_for_index(true_index);
+        let false_offset = self.byte_offset_for_index(false_index);
+        let end_offset = self.byte_offset_for_index(end_index);
+        self.patch_branch(true_branch_index, BranchKind::IfNe, true_offset);
+        self.patch_branch(false_branch_index, BranchKind::IfEq, false_offset);
+        self.patch_branch(goto_index, BranchKind::Goto, end_offset);
+
+        Ok(())
+    }
+
+    fn byte_offset_for_index(&self, index: usize) -> u16 {
+        u16::try_from(index).unwrap_or(u16::MAX)
+    }
+
+    fn patch_branch(&mut self, index: usize, kind: BranchKind, target: u16) {
+        if let Some(instr) = self.emitter.instructions.get_mut(index) {
+            *instr = match kind {
+                BranchKind::IfEq => Instruction::Ifeq(target),
+                BranchKind::IfNe => Instruction::Ifne(target),
+                BranchKind::Goto => Instruction::Goto(target),
+            };
+        }
+    }
+
+    fn kind_for_expr(&self, expr_id: ExprId, expr_ty: TypeId) -> LocalVarKind {
+        if expr_ty != TypeId::INVALID {
+            return local_kind_from_type_id(expr_ty, self.type_arena);
+        }
+        self.infer_kind_from_expr(expr_id)
+    }
+
+    fn infer_kind_from_expr(&self, expr_id: ExprId) -> LocalVarKind {
+        let expr = self.arena.expr(expr_id);
+        match expr {
+            AstExpr::Literal(literal) => match literal.kind {
+                LiteralKind::Long => LocalVarKind::Long,
+                LiteralKind::Float => LocalVarKind::Float,
+                LiteralKind::Double => LocalVarKind::Double,
+                LiteralKind::String | LiteralKind::Null => LocalVarKind::Reference,
+                _ => LocalVarKind::IntLike,
+            },
+            AstExpr::Ident(ident) => self
+                .local_vars
+                .get(ident.as_str())
+                .map(|local| local.kind)
+                .unwrap_or(LocalVarKind::Reference),
+            AstExpr::Cast { ty, .. } => local_kind_from_ast_type(self.arena.ty(*ty)),
+            AstExpr::Unary { expr, .. } => self.infer_kind_from_expr(*expr),
+            AstExpr::Binary { op, lhs, rhs } => {
+                let lhs_kind = self.infer_kind_from_expr(*lhs);
+                let rhs_kind = self.infer_kind_from_expr(*rhs);
+                match op {
+                    rajac_ast::BinaryOp::And | rajac_ast::BinaryOp::Or => LocalVarKind::IntLike,
+                    rajac_ast::BinaryOp::BitAnd
+                    | rajac_ast::BinaryOp::BitOr
+                    | rajac_ast::BinaryOp::BitXor
+                    | rajac_ast::BinaryOp::LShift
+                    | rajac_ast::BinaryOp::RShift
+                    | rajac_ast::BinaryOp::ARShift => {
+                        if matches!(lhs_kind, LocalVarKind::Long)
+                            || matches!(rhs_kind, LocalVarKind::Long)
+                        {
+                            LocalVarKind::Long
+                        } else {
+                            LocalVarKind::IntLike
+                        }
+                    }
+                    _ => promote_numeric_kind(lhs_kind, rhs_kind),
+                }
+            }
+            AstExpr::Ternary {
+                then_expr,
+                else_expr,
+                ..
+            } => {
+                let then_kind = self.infer_kind_from_expr(*then_expr);
+                let else_kind = self.infer_kind_from_expr(*else_expr);
+                promote_numeric_kind(then_kind, else_kind)
+            }
+            AstExpr::New { .. }
+            | AstExpr::NewArray { .. }
+            | AstExpr::ArrayAccess { .. }
+            | AstExpr::ArrayLength { .. }
+            | AstExpr::This(_)
+            | AstExpr::Super
+            | AstExpr::FieldAccess { .. }
+            | AstExpr::MethodCall { .. }
+            | AstExpr::SuperCall { .. } => LocalVarKind::Reference,
+            AstExpr::Assign { .. } | AstExpr::InstanceOf { .. } | AstExpr::Error => {
+                LocalVarKind::Reference
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct LocalVar {
+    slot: u16,
+    kind: LocalVarKind,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum LocalVarKind {
+    IntLike,
+    Long,
+    Float,
+    Double,
+    Reference,
+}
+
+impl LocalVarKind {
+    fn slot_size(self) -> u16 {
+        match self {
+            LocalVarKind::Long | LocalVarKind::Double => 2,
+            _ => 1,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ArithmeticOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum BitwiseOp {
+    And,
+    Or,
+    Xor,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ShiftOp {
+    Left,
+    Right,
+    UnsignedRight,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum BranchKind {
+    IfEq,
+    IfNe,
+    Goto,
+}
+
+fn local_kind_from_ast_type(ty: &AstType) -> LocalVarKind {
+    match ty {
+        AstType::Primitive { kind, ty: _ } => match kind {
+            PrimitiveType::Long => LocalVarKind::Long,
+            PrimitiveType::Float => LocalVarKind::Float,
+            PrimitiveType::Double => LocalVarKind::Double,
+            PrimitiveType::Void => LocalVarKind::Reference,
+            _ => LocalVarKind::IntLike,
+        },
+        _ => LocalVarKind::Reference,
+    }
+}
+
+fn local_kind_from_type_id(type_id: TypeId, type_arena: &TypeArena) -> LocalVarKind {
+    if type_id == TypeId::INVALID {
+        return LocalVarKind::Reference;
+    }
+    match type_arena.get(type_id) {
+        Type::Primitive(primitive) => match primitive {
+            rajac_types::PrimitiveType::Long => LocalVarKind::Long,
+            rajac_types::PrimitiveType::Float => LocalVarKind::Float,
+            rajac_types::PrimitiveType::Double => LocalVarKind::Double,
+            rajac_types::PrimitiveType::Void => LocalVarKind::Reference,
+            _ => LocalVarKind::IntLike,
+        },
+        Type::Class(_) | Type::Array(_) => LocalVarKind::Reference,
+        Type::TypeVariable(_) | Type::Wildcard(_) | Type::Error => LocalVarKind::Reference,
+    }
+}
+
+fn promote_numeric_kind(lhs_kind: LocalVarKind, rhs_kind: LocalVarKind) -> LocalVarKind {
+    if matches!(lhs_kind, LocalVarKind::Double) || matches!(rhs_kind, LocalVarKind::Double) {
+        LocalVarKind::Double
+    } else if matches!(lhs_kind, LocalVarKind::Float) || matches!(rhs_kind, LocalVarKind::Float) {
+        LocalVarKind::Float
+    } else if matches!(lhs_kind, LocalVarKind::Long) || matches!(rhs_kind, LocalVarKind::Long) {
+        LocalVarKind::Long
+    } else {
+        LocalVarKind::IntLike
+    }
 }
 
 fn type_to_internal_class_name(type_id: rajac_ast::AstTypeId) -> String {
@@ -756,7 +1140,8 @@ fn stack_effect(instr: &Instruction) -> i32 {
         Lneg => 0,
         Fneg | Dneg => 0,
         Ishl | Lshl | Ishr | Lshr | Iushr | Lushr => -1,
-        Ireturn | Freturn | Areturn | Return => 0,
+        Ireturn | Freturn | Areturn => -1,
+        Return => 0,
         Lreturn | Dreturn => -2,
         Getstatic(_) => 1,
         Putstatic(_) => -1,
@@ -772,6 +1157,22 @@ fn stack_effect(instr: &Instruction) -> i32 {
         Athrow => 0,
         Checkcast(_) => 0,
         Instanceof(_) => 0,
+        Ifeq(_)
+        | Ifne(_)
+        | Iflt(_)
+        | Ifge(_)
+        | Ifgt(_)
+        | Ifle(_)
+        | Ifnull(_)
+        | Ifnonnull(_) => -1,
+        If_icmpeq(_)
+        | If_icmpne(_)
+        | If_icmplt(_)
+        | If_icmpge(_)
+        | If_icmpgt(_)
+        | If_icmple(_)
+        | If_acmpeq(_)
+        | If_acmpne(_) => -2,
         _ => 0,
     }
 }
