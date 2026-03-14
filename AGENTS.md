@@ -79,7 +79,13 @@ When completing a unit of work run `scripts/check-code.sh` to verify everything 
 
 ## Running the compiler
 
-The compiler should always be run in release mode for performance:
+The compiler can be run in either debug or release mode. For development and testing, debug mode is preferred for faster compilation:
+
+```bash
+cargo run -p rajac-compiler -- <source-dir>
+```
+
+For performance benchmarking or production builds, use release mode:
 
 ```bash
 cargo run --release -p rajac-compiler -- <source-dir>

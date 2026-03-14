@@ -312,8 +312,8 @@ impl<'a> Lexer<'a> {
                         self.bump(); // consume 'u'
                         if !self.validate_unicode_escape() {
                             self.add_error(
-                                "invalid unicode escape sequence",
-                                "invalid unicode escape sequence",
+                                "illegal unicode escape",
+                                "illegal unicode escape",
                                 escape_start..self.pos,
                             );
                             has_error = true;
@@ -383,8 +383,8 @@ impl<'a> Lexer<'a> {
                         self.bump(); // consume 'u'
                         if !self.validate_unicode_escape() {
                             self.add_error(
-                                "invalid unicode escape sequence",
-                                "invalid unicode escape sequence",
+                                "illegal unicode escape",
+                                "illegal unicode escape",
                                 escape_start..self.pos,
                             );
                             has_error = true;
@@ -779,11 +779,11 @@ mod tests {
         let stripped = strip_ansi(&output);
 
         expect![[r#"
-            error: invalid unicode escape sequence
+            error: illegal unicode escape
               ╭▸ test.java:1:11
               │
             1 │ char c = '\u00G1';
-              ╰╴          ━━━━ invalid unicode escape sequence"#]]
+              ╰╴          ━━━━ illegal unicode escape"#]]
         .assert_eq(&stripped);
     }
 

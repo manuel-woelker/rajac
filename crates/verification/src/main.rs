@@ -273,6 +273,50 @@ fn verify_invalid_sources(
     let java_files = get_java_files(invalid_dir)?;
     let mut failures = 0;
 
+    // Compile all invalid sources once
+    println!("Compiling all invalid sources...");
+    let config = CompilerConfig {
+        source_dirs: vec![FilePath::new(invalid_dir)],
+        target_dir: FilePath::new(invalid_dir.join("classes")),
+        classpaths: classpaths.to_vec(),
+        emit_timing_statistics: false,
+    };
+
+    let mut compiler =
+        Compiler::new_with_symbol_table(config, prepopulated_symbol_table.clone());
+    compiler.compile_directory().ok();
+
+    let diagnostics = &compiler.diagnostics;
+
+    if diagnostics.is_empty() {
+        println!(
+            "{} All invalid sources compiled successfully (this should not happen)",
+            "Error:".red()
+        );
+        return Ok(());
+    }
+
+    // Map diagnostics to files
+    let mut file_diagnostics: std::collections::HashMap<String, Vec<&rajac_diagnostics::Diagnostic>> = 
+        std::collections::HashMap::new();
+    
+    for diagnostic in diagnostics {
+        // Find which file this diagnostic belongs to
+        for chunk in &diagnostic.chunks {
+            let file_path = chunk.path.as_str();
+            let file_stem = Path::new(file_path)
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy();
+            
+            file_diagnostics
+                .entry(file_stem.to_string())
+                .or_default()
+                .push(diagnostic);
+        }
+    }
+
+    // Verify each file against its expected error
     for java_file in &java_files {
         let file_stem = java_file.file_stem().unwrap().to_string_lossy();
         let ref_output_file = invalid_output_dir.join(format!("{}.txt", file_stem));
@@ -294,20 +338,10 @@ fn verify_invalid_sources(
 
         let (ref_line, ref_error) = parse_reference_error(&ref_content)?;
 
-        let config = CompilerConfig {
-            source_dirs: vec![FilePath::new(invalid_dir)],
-            target_dir: FilePath::new(invalid_dir.join("classes")),
-            classpaths: classpaths.to_vec(),
-            emit_timing_statistics: false,
-        };
+        let empty_vec: Vec<&rajac_diagnostics::Diagnostic> = vec![];
+        let file_diagnostics = file_diagnostics.get(&*file_stem).unwrap_or(&empty_vec);
 
-        let mut compiler =
-            Compiler::new_with_symbol_table(config, prepopulated_symbol_table.clone());
-        compiler.compile_directory().ok();
-
-        let diagnostics = &compiler.diagnostics;
-
-        if diagnostics.is_empty() {
+        if file_diagnostics.is_empty() {
             println!(
                 "{} {} should have failed but compiled successfully",
                 "Error:".red(),
@@ -321,7 +355,17 @@ fn verify_invalid_sources(
             continue;
         }
 
-        let diagnostic = diagnostics.iter().next().unwrap();
+        // Find the best matching diagnostic for this file
+        let diagnostic = file_diagnostics.iter()
+            .find(|d| {
+                // Look for a diagnostic that matches the expected line
+                d.chunks.iter().any(|chunk| {
+                    chunk.line == ref_line
+                })
+            })
+            .or_else(|| file_diagnostics.iter().next())
+            .unwrap();
+        
         let rajac_line = diagnostic.chunks.first().map(|c| c.line);
         let rajac_error = diagnostic.message.as_str();
 
