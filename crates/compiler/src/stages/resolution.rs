@@ -727,6 +727,7 @@ fn resolve_expr(
             expr,
             name,
             method_id,
+            args,
             ..
         } => {
             let receiver_ty = expr
@@ -734,7 +735,13 @@ fn resolve_expr(
                 .map(|expr_id| arena.expr_typed(*expr_id).ty)
                 .or(current_class_type_id)
                 .unwrap_or(TypeId::INVALID);
-            if let Some(method) = resolve_method_in_type(receiver_ty, &name.name, symbol_table) {
+            let arg_types = args
+                .iter()
+                .map(|arg| arena.expr_typed(*arg).ty)
+                .collect::<Vec<_>>();
+            if let Some(method) =
+                resolve_method_in_type(receiver_ty, &name.name, &arg_types, symbol_table)
+            {
                 *method_id = Some(method);
                 expr_ty = symbol_table.method_arena().get(method).return_type;
             }
@@ -768,10 +775,19 @@ fn resolve_expr(
             expr_ty = superclass_type_id(current_class_type_id, symbol_table);
         }
         rajac_ast::Expr::SuperCall {
-            name, method_id, ..
+            name,
+            method_id,
+            args,
+            ..
         } => {
             let receiver_ty = superclass_type_id(current_class_type_id, symbol_table);
-            if let Some(method) = resolve_method_in_type(receiver_ty, &name.name, symbol_table) {
+            let arg_types = args
+                .iter()
+                .map(|arg| arena.expr_typed(*arg).ty)
+                .collect::<Vec<_>>();
+            if let Some(method) =
+                resolve_method_in_type(receiver_ty, &name.name, &arg_types, symbol_table)
+            {
                 *method_id = Some(method);
                 expr_ty = symbol_table.method_arena().get(method).return_type;
             }
@@ -983,6 +999,7 @@ fn binary_result_type(
 fn resolve_method_in_type(
     type_id: TypeId,
     name: &SharedString,
+    arg_types: &[TypeId],
     symbol_table: &SymbolTable,
 ) -> Option<MethodId> {
     if type_id == TypeId::INVALID {
@@ -999,9 +1016,9 @@ fn resolve_method_in_type(
         }
         if let Type::Class(class_type) = type_arena.get(current_id) {
             if let Some(methods) = class_type.methods.get(name)
-                && let Some(method_id) = methods.first()
+                && let Some(method_id) = select_method_by_args(methods, arg_types, symbol_table)
             {
-                return Some(*method_id);
+                return Some(method_id);
             }
             if let Some(super_id) = class_type.superclass {
                 stack.push(super_id);
@@ -1013,6 +1030,29 @@ fn resolve_method_in_type(
     }
 
     None
+}
+
+fn select_method_by_args(
+    methods: &[MethodId],
+    arg_types: &[TypeId],
+    symbol_table: &SymbolTable,
+) -> Option<MethodId> {
+    for method_id in methods {
+        let signature = symbol_table.method_arena().get(*method_id);
+        if signature.params.len() != arg_types.len() {
+            continue;
+        }
+        if signature
+            .params
+            .iter()
+            .zip(arg_types)
+            .all(|(param, arg)| *arg == TypeId::INVALID || *param == *arg)
+        {
+            return Some(*method_id);
+        }
+    }
+
+    methods.first().copied()
 }
 
 fn resolve_field_in_type(
@@ -1400,12 +1440,71 @@ mod tests {
         }
 
         assert_eq!(
-            resolve_method_in_type(type_id, &SharedString::new("run"), &symbol_table),
+            resolve_method_in_type(type_id, &SharedString::new("run"), &[], &symbol_table),
             Some(method_id)
         );
         assert_eq!(
             resolve_field_in_type(type_id, &SharedString::new("count"), &symbol_table),
             Some(field_id)
+        );
+    }
+
+    #[test]
+    fn resolves_overload_by_argument_types() {
+        let mut symbol_table = SymbolTable::new();
+        let class_name = SharedString::new("Widget");
+        let type_id = symbol_table.add_class(
+            "",
+            class_name.as_str(),
+            Type::class(rajac_types::ClassType::new(class_name.clone())),
+            SymbolKind::Class,
+        );
+
+        let void_id = symbol_table
+            .primitive_type_id("void")
+            .unwrap_or(TypeId::INVALID);
+        let int_id = symbol_table
+            .primitive_type_id("int")
+            .unwrap_or(TypeId::INVALID);
+        let bool_id = symbol_table
+            .primitive_type_id("boolean")
+            .unwrap_or(TypeId::INVALID);
+
+        let int_method = symbol_table.method_arena_mut().alloc(MethodSignature::new(
+            SharedString::new("pick"),
+            vec![int_id],
+            void_id,
+            MethodModifiers(MethodModifiers::PUBLIC),
+        ));
+        let bool_method = symbol_table.method_arena_mut().alloc(MethodSignature::new(
+            SharedString::new("pick"),
+            vec![bool_id],
+            void_id,
+            MethodModifiers(MethodModifiers::PUBLIC),
+        ));
+
+        if let Type::Class(class_type) = symbol_table.type_arena_mut().get_mut(type_id) {
+            class_type.add_method(SharedString::new("pick"), int_method);
+            class_type.add_method(SharedString::new("pick"), bool_method);
+        }
+
+        assert_eq!(
+            resolve_method_in_type(
+                type_id,
+                &SharedString::new("pick"),
+                &[int_id],
+                &symbol_table
+            ),
+            Some(int_method)
+        );
+        assert_eq!(
+            resolve_method_in_type(
+                type_id,
+                &SharedString::new("pick"),
+                &[bool_id],
+                &symbol_table
+            ),
+            Some(bool_method)
         );
     }
 }
