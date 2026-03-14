@@ -2,7 +2,7 @@ use rajac_ast::{
     AstArena, AstType, Expr as AstExpr, ExprId, Literal, LiteralKind, PrimitiveType, Stmt, StmtId,
 };
 use rajac_base::result::RajacResult;
-use rajac_types::Ident;
+use rajac_types::{Ident, Type, TypeArena, TypeId};
 use ristretto_classfile::ConstantPool;
 use ristretto_classfile::attributes::Instruction;
 
@@ -30,6 +30,7 @@ impl Default for BytecodeEmitter {
 
 pub struct CodeGenerator<'arena> {
     arena: &'arena AstArena,
+    type_arena: &'arena TypeArena,
     constant_pool: &'arena mut ConstantPool,
     emitter: BytecodeEmitter,
     max_stack: u16,
@@ -40,9 +41,14 @@ pub struct CodeGenerator<'arena> {
 }
 
 impl<'arena> CodeGenerator<'arena> {
-    pub fn new(arena: &'arena AstArena, constant_pool: &'arena mut ConstantPool) -> Self {
+    pub fn new(
+        arena: &'arena AstArena,
+        type_arena: &'arena TypeArena,
+        constant_pool: &'arena mut ConstantPool,
+    ) -> Self {
         Self {
             arena,
+            type_arena,
             constant_pool,
             emitter: BytecodeEmitter::new(),
             max_stack: 2,
@@ -627,52 +633,31 @@ impl<'arena> CodeGenerator<'arena> {
         args: &[ExprId],
     ) -> RajacResult<()> {
         if let Some(target_expr_id) = target {
-            let target_expr = self.arena.expr(*target_expr_id);
-
-            let is_println_call = match target_expr {
-                AstExpr::FieldAccess {
-                    expr: inner_target,
-                    name: field_name,
-                    ..
-                } => {
-                    if field_name.as_str() == "out" && name.as_str() == "println" {
-                        let inner = self.arena.expr(*inner_target);
-                        matches!(inner, AstExpr::Ident(ident) if ident.as_str() == "System")
-                    } else {
-                        false
-                    }
-                }
-                _ => false,
-            };
-
-            if is_println_call {
-                return self.emit_println_call(args);
-            }
-        }
-
-        Ok(())
-    }
-
-    fn emit_println_call(&mut self, args: &[ExprId]) -> RajacResult<()> {
-        let system_class = self.constant_pool.add_class("java/lang/System")?;
-        let printstream_class = self.constant_pool.add_class("java/io/PrintStream")?;
-        let system_out =
-            self.constant_pool
-                .add_field_ref(system_class, "out", "Ljava/io/PrintStream;")?;
-        self.emit(Instruction::Getstatic(system_out));
-
-        if !args.is_empty() {
-            self.emit_expression(args[0])?;
+            self.emit_expression(*target_expr_id)?;
         } else {
-            self.emit(Instruction::Aconst_null);
+            self.emit(Instruction::Aload_0);
         }
 
-        let println_method = self.constant_pool.add_method_ref(
-            printstream_class,
-            "println",
-            "(Ljava/lang/String;)V",
-        )?;
-        self.emit(Instruction::Invokevirtual(println_method));
+        for arg in args {
+            self.emit_expression(*arg)?;
+        }
+
+        let descriptor = method_descriptor_from_arg_types(
+            args.iter()
+                .map(|arg| self.arena.expr_typed(*arg).ty)
+                .collect(),
+            self.type_arena,
+        );
+        let owner = target
+            .map(|expr_id| self.arena.expr_typed(*expr_id).ty)
+            .map(|type_id| type_id_to_internal_name(type_id, self.type_arena))
+            .unwrap_or_else(|| "java/lang/Object".to_string());
+
+        let owner_class = self.constant_pool.add_class(&owner)?;
+        let method_ref =
+            self.constant_pool
+                .add_method_ref(owner_class, name.as_str(), &descriptor)?;
+        self.emit(Instruction::Invokevirtual(method_ref));
 
         Ok(())
     }
@@ -691,6 +676,46 @@ fn type_to_internal_class_name_from_type_id(type_id: rajac_ast::AstTypeId) -> St
 fn type_to_descriptor(type_id: rajac_ast::AstTypeId) -> String {
     let _ = type_id;
     "Ljava/lang/Object;".to_string()
+}
+
+fn type_id_to_descriptor(type_id: TypeId, type_arena: &TypeArena) -> String {
+    if type_id == TypeId::INVALID {
+        return "Ljava/lang/Object;".to_string();
+    }
+
+    match type_arena.get(type_id) {
+        Type::Primitive(primitive) => primitive.descriptor().to_string(),
+        Type::Class(class_type) => format!("L{};", class_type.internal_name()),
+        Type::Array(array_type) => {
+            format!(
+                "[{}",
+                type_id_to_descriptor(array_type.element_type, type_arena)
+            )
+        }
+        Type::TypeVariable(_) | Type::Wildcard(_) | Type::Error => "Ljava/lang/Object;".to_string(),
+    }
+}
+
+fn type_id_to_internal_name(type_id: TypeId, type_arena: &TypeArena) -> String {
+    if type_id == TypeId::INVALID {
+        return "java/lang/Object".to_string();
+    }
+    match type_arena.get(type_id) {
+        Type::Class(class_type) => class_type.internal_name(),
+        _ => "java/lang/Object".to_string(),
+    }
+}
+
+fn method_descriptor_from_arg_types(arg_types: Vec<TypeId>, type_arena: &TypeArena) -> String {
+    if arg_types.is_empty() {
+        return "()V".to_string();
+    }
+
+    let args = arg_types
+        .into_iter()
+        .map(|type_id| type_id_to_descriptor(type_id, type_arena))
+        .collect::<String>();
+    format!("({})V", args)
 }
 
 fn stack_effect(instr: &Instruction) -> i32 {
