@@ -56,16 +56,20 @@ fn main() -> RajacResult<()> {
     )?;
 
     // Compare outputs
-    compare_outputs(reference_output, rajac_output)?;
+    let valid_files_count = compare_outputs(reference_output, rajac_output)?;
 
     // Verify invalid sources produce errors
     println!("\nVerifying invalid sources...");
-    verify_invalid_sources(
+    let invalid_files_count = verify_invalid_sources(
         sources_invalid_dir,
         reference_output,
         &classpaths,
         &prepopulated_symbol_table,
     )?;
+
+    // Print harmonized summary
+    println!("\n✓ {} valid files match", valid_files_count);
+    println!("✓ {} invalid files verified", invalid_files_count);
 
     Ok(())
 }
@@ -89,7 +93,7 @@ fn compile_with_rajac(
     Ok(())
 }
 
-fn compare_outputs(reference: &Path, actual: &Path) -> RajacResult<()> {
+fn compare_outputs(reference: &Path, actual: &Path) -> RajacResult<usize> {
     println!("Comparing compiler outputs...");
     println!("Reference: {}", reference.display());
     println!("Actual: {}", actual.display());
@@ -172,7 +176,7 @@ fn compare_outputs(reference: &Path, actual: &Path) -> RajacResult<()> {
         compare_file_contents(&reference_files, &actual_files)?;
     }
 
-    Ok(())
+    Ok(reference_files.len())
 }
 
 fn compare_file_contents(reference_files: &[PathBuf], actual_files: &[PathBuf]) -> RajacResult<()> {
@@ -256,7 +260,7 @@ fn compare_file_contents(reference_files: &[PathBuf], actual_files: &[PathBuf]) 
     }
 
     if mismatches == 0 {
-        println!("✓ All files match!");
+        // Success - main function will print summary
     } else {
         println!("✗ Found {} mismatches", mismatches);
     }
@@ -287,7 +291,7 @@ fn verify_invalid_sources(
     reference_output: &Path,
     classpaths: &[FilePath],
     prepopulated_symbol_table: &SymbolTable,
-) -> RajacResult<()> {
+) -> RajacResult<usize> {
     let invalid_output_dir = reference_output.join("invalid");
     let error_overrides = get_error_message_overrides();
 
@@ -314,7 +318,7 @@ fn verify_invalid_sources(
             "{} All invalid sources compiled successfully (this should not happen)",
             "Error:".red()
         );
-        return Ok(());
+        return Ok(0);
     }
 
     // Map diagnostics to files
@@ -446,14 +450,10 @@ fn verify_invalid_sources(
             passing_files
         );
     } else {
-        println!(
-            "\n{} All {} invalid source files verified successfully",
-            "OK:".green(),
-            total_files
-        );
+        // No summary printed - main function will handle it
     }
 
-    Ok(())
+    Ok(total_files - failures)
 }
 
 fn get_java_files(dir: &Path) -> RajacResult<Vec<PathBuf>> {
