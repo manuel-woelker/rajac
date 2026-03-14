@@ -12,6 +12,7 @@ ecow = {workspace = true}
 speedy = {workspace = true}
 relative-path = {workspace = true}
 tracing = {workspace = true}
+tracing-error = {workspace = true}
 tracing-subscriber = {workspace = true}
 parking_lot = {workspace = true}
 rapidhash = {workspace = true}

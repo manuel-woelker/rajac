@@ -1,4 +1,5 @@
 use std::sync::Once;
+use tracing_error::ErrorLayer;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -7,6 +8,7 @@ pub fn init_logging() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
         tracing_subscriber::registry()
+            .with(ErrorLayer::default())
             .with(
                 tracing_subscriber::fmt::layer(), /*.with_span_events(FmtSpan::ENTER)*/
             )

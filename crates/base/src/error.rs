@@ -1,6 +1,7 @@
 use std::error::Error as StdError;
 use std::fmt::{Debug, Display, Formatter};
 use std::panic::Location;
+use tracing_error::{SpanTrace, SpanTraceStatus};
 
 use crate::shared_string::SharedString;
 use crate::unansi;
@@ -25,6 +26,7 @@ pub struct RajacError {
     kind: ErrorKind,
     source: Option<Box<RajacError>>,
     location: &'static Location<'static>,
+    span_trace: SpanTrace,
 }
 
 impl RajacError {
@@ -38,6 +40,7 @@ impl RajacError {
             kind,
             source: None,
             location,
+            span_trace: SpanTrace::capture(),
         }
     }
 
@@ -77,6 +80,10 @@ impl RajacError {
         self.location
     }
 
+    pub fn span_trace(&self) -> &SpanTrace {
+        &self.span_trace
+    }
+
     pub fn with_source(mut self, source: impl Into<RajacError>) -> Self {
         self.source = Some(Box::new(source.into()));
         self
@@ -109,6 +116,10 @@ impl RajacError {
             self.location.line(),
             self.location.column()
         )?;
+        if self.span_trace.status() == SpanTraceStatus::CAPTURED {
+            writeln!(write, "Span trace:")?;
+            writeln!(write, "{}", self.span_trace)?;
+        }
         let mut source = self.source.as_deref();
         while let Some(error) = source {
             writeln!(write, "Caused by: {}", error.kind)?;
@@ -119,6 +130,10 @@ impl RajacError {
                 error.location.line(),
                 error.location.column()
             )?;
+            if error.span_trace.status() == SpanTraceStatus::CAPTURED {
+                writeln!(write, "Span trace:")?;
+                writeln!(write, "{}", error.span_trace)?;
+            }
             source = error.source.as_deref();
         }
         Ok(())
@@ -162,6 +177,7 @@ mod tests {
     use std::io;
 
     use crate::error::RajacError;
+    use crate::logging::{info_span, init_logging};
     use crate::result::RajacResult;
 
     #[test]
@@ -201,5 +217,18 @@ mod tests {
         assert!(rendered.contains("Error: cannot initialize\n"));
         assert!(rendered.contains("Caused by: missing config\n"));
         assert_eq!(rendered.matches("At: crates/base/src/error.rs:").count(), 2);
+    }
+
+    #[test]
+    fn test_error_renders_span_trace_when_inside_span() {
+        init_logging();
+        let span = info_span!("error_test_span");
+        let _guard = span.enter();
+
+        let err = RajacError::message("failed inside span");
+        let rendered = err.to_test_string();
+
+        assert!(rendered.contains("Span trace:\n"));
+        assert!(rendered.contains("error_test_span"));
     }
 }

@@ -14,6 +14,7 @@ relative-path = "2.0.1"
 rocksdb = { version = "0.24.0" }
 self_cell = "1.2.2"
 tracing = "0.1.44"
+tracing-error = "0.2.1"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 parking_lot = "0.12.5"
 rapidhash = "4.4.1"
