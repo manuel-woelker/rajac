@@ -12,9 +12,12 @@ use walkdir::WalkDir;
 
 use std::collections::HashMap;
 
-// Error message overrides - when present, use line number from reference but compare against this message
-// This allows rajac to provide better, more specific error messages while still verifying
-// against OpenJDK's line numbers for consistency
+/* 📖 # Why use error message overrides instead of exact OpenJDK matching?
+The verification system needs to ensure compatibility with OpenJDK while allowing rajac to provide
+better, more specific error messages. OpenJDK sometimes gives generic errors like "';' expected"
+when rajac can provide more precise diagnostics like "illegal character". This override system
+uses OpenJDK's line numbers for consistency but compares against rajac's superior error messages.
+*/
 fn get_error_message_overrides() -> HashMap<String, String> {
     let mut overrides = HashMap::new();
 
@@ -398,6 +401,11 @@ fn verify_invalid_sources(
 
         let line_match = rajac_line.is_some_and(|l| l == ref_line);
 
+        /* 📖 # Why check for overrides before error comparison?
+        The override system allows us to verify line numbers against OpenJDK (for compatibility)
+        while comparing error messages against rajac's improved diagnostics. This enables rajac
+        to provide better error messages without breaking verification compatibility.
+        */
         // Check if we have an override for this test case
         let expected_error = error_overrides.get(&*file_stem).unwrap_or(&ref_error);
 
