@@ -499,7 +499,7 @@ fn method_from_ast(
 
     let attributes = if let Some(body_id) = method.body {
         // Generate bytecode for method with body
-        generate_method_bytecode(arena, constant_pool, method, body_id)?
+        generate_method_bytecode(arena, type_arena, constant_pool, method, body_id)?
     } else {
         // Handle abstract methods
         let method_can_be_bodyless = match class_kind {
@@ -528,13 +528,14 @@ fn method_from_ast(
 
 fn generate_method_bytecode(
     arena: &AstArena,
+    type_arena: &rajac_types::TypeArena,
     constant_pool: &mut ConstantPool,
     method: &AstMethod,
     body_id: rajac_ast::StmtId,
 ) -> RajacResult<Vec<ristretto_classfile::attributes::Attribute>> {
     let is_static = method.modifiers.0 & Modifiers::STATIC != 0;
 
-    let mut code_gen = CodeGenerator::new(arena, constant_pool);
+    let mut code_gen = CodeGenerator::new(arena, type_arena, constant_pool);
     let (instructions, max_stack, max_locals) =
         code_gen.generate_method_body(is_static, body_id)?;
 
