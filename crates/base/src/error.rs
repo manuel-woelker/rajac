@@ -191,10 +191,77 @@ fn write_span_trace(
     prefix: &str,
     span_trace: &SpanTrace,
 ) -> std::fmt::Result {
-    for line in span_trace.to_string().lines() {
-        writeln!(write, "{}  {}", prefix, line)?;
+    let mut result = Ok(());
+    let mut span_index = 0;
+
+    span_trace.with_spans(|metadata, fields| {
+        if span_index > 0 && writeln!(write).is_err() {
+            result = Err(std::fmt::Error);
+            return false;
+        }
+
+        if writeln!(
+            write,
+            "{}    {}: {}::{}",
+            prefix,
+            span_index,
+            metadata.target(),
+            metadata.name()
+        )
+        .is_err()
+        {
+            result = Err(std::fmt::Error);
+            return false;
+        }
+
+        if !fields.is_empty()
+            && writeln!(
+                write,
+                "{}       {}",
+                prefix,
+                format_span_trace_fields(fields)
+            )
+            .is_err()
+        {
+            result = Err(std::fmt::Error);
+            return false;
+        }
+
+        if let Some((file, line)) = metadata
+            .file()
+            .and_then(|file| metadata.line().map(|line| (file, line)))
+            && writeln!(write, "{}       at {}:{}", prefix, file, line).is_err()
+        {
+            result = Err(std::fmt::Error);
+            return false;
+        }
+
+        span_index += 1;
+        true
+    });
+
+    result
+}
+
+fn format_span_trace_fields(fields: &str) -> String {
+    let mut formatted = String::new();
+
+    for (index, field) in fields.split_whitespace().enumerate() {
+        if index > 0 {
+            formatted.push(' ');
+        }
+
+        if let Some((key, value)) = field.split_once('=') {
+            formatted.push_str(key);
+            formatted.push(':');
+            formatted.push(' ');
+            formatted.push_str(&style("1;97", value));
+        } else {
+            formatted.push_str(field);
+        }
     }
-    Ok(())
+
+    formatted
 }
 
 fn style(code: &str, text: &str) -> String {
@@ -231,6 +298,7 @@ pub use bail;
 mod tests {
     use std::io;
 
+    use super::format_span_trace_fields;
     use crate::error::RajacError;
     use crate::logging::{info_span, init_logging};
     use crate::result::RajacResult;
@@ -290,6 +358,21 @@ mod tests {
         let rendered = err.to_test_string();
 
         assert!(rendered.contains("  span trace:\n"));
+        assert!(rendered.contains("    0: "));
         assert!(rendered.contains("error_test_span"));
+        assert!(rendered.contains("       at crates/base/src/error.rs:"));
+    }
+
+    #[test]
+    fn test_format_span_trace_fields() {
+        let rendered = format_span_trace_fields(
+            "sources_dir=verification/sources output_dir=verification/output/rajac",
+        );
+        let rendered = crate::unansi(&rendered);
+
+        assert_eq!(
+            rendered,
+            "sources_dir: verification/sources output_dir: verification/output/rajac"
+        );
     }
 }
