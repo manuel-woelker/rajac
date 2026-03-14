@@ -1,5 +1,6 @@
 use colored::*;
 use rajac_base::file_path::FilePath;
+use rajac_base::logging::{debug, error, info, info_span, trace, warn};
 use rajac_base::result::{RajacResult, ResultExt};
 use rajac_bytecode::pretty_print::pretty_print_classfile;
 use rajac_compiler::{Compiler, CompilerConfig};
@@ -30,13 +31,21 @@ fn get_error_message_overrides() -> HashMap<&'static str, &'static str> {
     overrides
 }
 
-fn main() -> RajacResult<()> {
+fn main() -> std::process::ExitCode {
+    rajac_base::logging::init_logging();
+    rajac_base::cli::try_main_with_headline("verification failed", run)
+}
+
+fn run() -> RajacResult<()> {
+    let _span = info_span!("verification_main").entered();
     let sources_dir = Path::new("verification/sources");
     let sources_invalid_dir = Path::new("verification/sources_invalid");
     let reference_output = Path::new("verification/output/openjdk_21");
     let rajac_base_output = Path::new("verification/output/rajac");
     let rajac_output = rajac_base_output;
     let classpaths = vec![FilePath::new("/usr/lib/jvm/java-8-openjdk/jre/lib/rt.jar")];
+    info!("initializing verification");
+    debug!(reference_output = %reference_output.display(), rajac_output = %rajac_output.display());
     let prepopulated_symbol_table = Compiler::symbol_table_from_classpaths(&classpaths)?;
 
     if fs::exists(rajac_output)? {
@@ -47,6 +56,7 @@ fn main() -> RajacResult<()> {
     fs::create_dir_all(rajac_output).context("Failed to create rajac output directory")?;
 
     // Compile sources with rajac
+    info!("compiling valid sources with rajac");
     println!("Compiling sources with rajac...");
     compile_with_rajac(
         sources_dir,
@@ -59,6 +69,7 @@ fn main() -> RajacResult<()> {
     let valid_files_count = compare_outputs(reference_output, rajac_output)?;
 
     // Verify invalid sources produce errors
+    info!("verifying invalid sources");
     println!("\nVerifying invalid sources...");
     let invalid_files_count = verify_invalid_sources(
         sources_invalid_dir,
@@ -80,6 +91,12 @@ fn compile_with_rajac(
     classpaths: &[FilePath],
     prepopulated_symbol_table: &SymbolTable,
 ) -> RajacResult<()> {
+    let _span = info_span!(
+        "compile_with_rajac",
+        sources_dir = %sources_dir.display(),
+        output_dir = %output_dir.display()
+    )
+    .entered();
     // Compile sources with rajac using the Compiler struct
     let config = CompilerConfig {
         source_dirs: vec![FilePath::new(sources_dir)],
@@ -88,12 +105,20 @@ fn compile_with_rajac(
         emit_timing_statistics: false,
     };
     let mut compiler = Compiler::new_with_symbol_table(config, prepopulated_symbol_table.clone());
+    debug!("starting compiler.compile_directory for valid sources");
     compiler.compile_directory()?;
+    info!("finished compiling valid sources");
 
     Ok(())
 }
 
 fn compare_outputs(reference: &Path, actual: &Path) -> RajacResult<usize> {
+    let _span = info_span!(
+        "compare_outputs",
+        reference = %reference.display(),
+        actual = %actual.display()
+    )
+    .entered();
     println!("Comparing compiler outputs...");
     println!("Reference: {}", reference.display());
     println!("Actual: {}", actual.display());
@@ -102,7 +127,12 @@ fn compare_outputs(reference: &Path, actual: &Path) -> RajacResult<usize> {
     let actual_files = get_class_files(actual)?;
 
     // Check if same files exist
+    info!(
+        reference_count = reference_files.len(),
+        actual_count = actual_files.len()
+    );
     if reference_files.len() != actual_files.len() {
+        warn!("class file count mismatch");
         println!("File count mismatch!");
         println!("Reference: {} files", reference_files.len());
         println!("Actual: {} files", actual_files.len());
@@ -169,9 +199,14 @@ fn compare_outputs(reference: &Path, actual: &Path) -> RajacResult<usize> {
             })
             .collect();
 
+        info!(
+            common_files = common_names.len(),
+            "comparing common files after file count mismatch"
+        );
         println!("Comparing {} common files...", common_names.len());
         compare_file_contents(&ref_common, &act_common)?;
     } else {
+        info!(files = reference_files.len(), "comparing class files");
         println!("Comparing {} files...", reference_files.len());
         compare_file_contents(&reference_files, &actual_files)?;
     }
@@ -180,13 +215,16 @@ fn compare_outputs(reference: &Path, actual: &Path) -> RajacResult<usize> {
 }
 
 fn compare_file_contents(reference_files: &[PathBuf], actual_files: &[PathBuf]) -> RajacResult<()> {
+    let _span = info_span!("compare_file_contents", files = reference_files.len()).entered();
     let mut mismatches = 0;
 
     for (ref_path, act_path) in reference_files.iter().zip(actual_files.iter()) {
         let ref_filename = ref_path.file_name().unwrap().to_string_lossy().into_owned();
         let act_filename = act_path.file_name().unwrap().to_string_lossy().into_owned();
+        let _span = info_span!("compare_class_file", file = %ref_filename).entered();
 
         if ref_filename != act_filename {
+            warn!(expected = %ref_filename, actual = %act_filename, "filename mismatch");
             println!("Filename mismatch: {} vs {}", ref_filename, act_filename);
             mismatches += 1;
             continue;
@@ -201,6 +239,11 @@ fn compare_file_contents(reference_files: &[PathBuf], actual_files: &[PathBuf]) 
             "Failed to read actual file: {}",
             act_path.display()
         ))?;
+        trace!(
+            reference_bytes = ref_bytes.len(),
+            actual_bytes = act_bytes.len(),
+            "read class files"
+        );
 
         // Parse class files and pretty print them
         use std::io::Cursor;
@@ -228,6 +271,7 @@ fn compare_file_contents(reference_files: &[PathBuf], actual_files: &[PathBuf]) 
         };
 
         if ref_pretty_hash != act_pretty_hash {
+            warn!(reference_hash = %ref_pretty_hash, actual_hash = %act_pretty_hash, "pretty-printed class file mismatch");
             println!("{}Content mismatch in: {}", "❌ ".red(), ref_filename,);
 
             // Generate diff
@@ -262,6 +306,7 @@ fn compare_file_contents(reference_files: &[PathBuf], actual_files: &[PathBuf]) 
     if mismatches == 0 {
         // Success - main function will print summary
     } else {
+        warn!(mismatches, "class file mismatches found");
         println!("✗ Found {} mismatches", mismatches);
     }
 
@@ -292,12 +337,23 @@ fn verify_invalid_sources(
     classpaths: &[FilePath],
     prepopulated_symbol_table: &SymbolTable,
 ) -> RajacResult<usize> {
+    let _span = info_span!(
+        "verify_invalid_sources",
+        invalid_dir = %invalid_dir.display(),
+        reference_output = %reference_output.display()
+    )
+    .entered();
     let invalid_output_dir = reference_output.join("invalid");
     let error_overrides = get_error_message_overrides();
 
     let java_files = get_java_files(invalid_dir)?;
     let total_files = java_files.len();
     let mut failures = 0;
+    info!(
+        invalid_files = total_files,
+        overrides = error_overrides.len(),
+        "loaded invalid source verification inputs"
+    );
 
     // Compile all invalid sources once
     println!("Compiling all invalid sources...");
@@ -312,8 +368,13 @@ fn verify_invalid_sources(
     compiler.compile_directory().ok();
 
     let diagnostics = &compiler.diagnostics;
+    info!(
+        diagnostics = diagnostics.len(),
+        "finished compiling invalid sources"
+    );
 
     if diagnostics.is_empty() {
+        error!("invalid sources produced no diagnostics");
         println!(
             "{} All invalid sources compiled successfully (this should not happen)",
             "Error:".red()
@@ -340,15 +401,18 @@ fn verify_invalid_sources(
                 .entry(file_stem.to_string())
                 .or_default()
                 .push(diagnostic);
+            trace!(file_stem = %file_stem, line = chunk.line, "mapped diagnostic to file");
         }
     }
 
     // Verify each file against its expected error
     for java_file in &java_files {
         let file_stem = java_file.file_stem().unwrap().to_string_lossy();
+        let _span = info_span!("verify_invalid_file", file = %file_stem).entered();
         let ref_output_file = invalid_output_dir.join(format!("{}.txt", file_stem));
 
         if !ref_output_file.exists() {
+            warn!(reference_output = %ref_output_file.display(), "missing reference output");
             println!(
                 "{} Missing reference output for: {}",
                 "Error:".red(),
@@ -364,11 +428,17 @@ fn verify_invalid_sources(
         ))?;
 
         let (ref_line, ref_error) = parse_reference_error(&ref_content)?;
+        debug!(reference_line = ref_line, reference_error = %ref_error, "parsed reference diagnostic");
 
         let empty_vec: Vec<&rajac_diagnostics::Diagnostic> = vec![];
         let file_diagnostics = file_diagnostics.get(&*file_stem).unwrap_or(&empty_vec);
+        debug!(
+            diagnostics_for_file = file_diagnostics.len(),
+            "collected diagnostics for invalid file"
+        );
 
         if file_diagnostics.is_empty() {
+            warn!("invalid file compiled successfully");
             println!(
                 "{} {} should have failed but compiled successfully",
                 "Error:".red(),
@@ -391,6 +461,7 @@ fn verify_invalid_sources(
             })
             .or_else(|| file_diagnostics.iter().next())
             .unwrap();
+        trace!("selected diagnostic for invalid file");
 
         let rajac_line = diagnostic.chunks.first().map(|c| c.line);
         let rajac_error = diagnostic.message.as_str();
@@ -411,32 +482,31 @@ fn verify_invalid_sources(
         let error_match = rajac_error
             .to_lowercase()
             .contains(&expected_error.to_lowercase());
+        debug!(
+            reference_line = ref_line,
+            rajac_line = rajac_line.unwrap_or_default(),
+            expected_error = %expected_error,
+            rajac_error = %rajac_error,
+            line_match,
+            error_match,
+            "compared invalid source diagnostic"
+        );
 
         if !line_match || !error_match {
-            println!(
-                "{} {} - line number or error message mismatch",
-                "Error:".red(),
-                file_stem
+            warn!("invalid source mismatch");
+            print_invalid_source_mismatch(
+                &file_stem,
+                ref_line,
+                &ref_error,
+                if error_overrides.contains_key(&*file_stem) {
+                    Some(expected_error)
+                } else {
+                    None
+                },
+                rajac_line,
+                rajac_error,
+                java_file,
             );
-            println!("  Reference: line {}, error '{}'", ref_line, ref_error);
-            if error_overrides.contains_key(&*file_stem) {
-                println!("  Override:  error '{}'", expected_error);
-                println!(
-                    "  Rajac:     line {}, error '{}'",
-                    rajac_line
-                        .map(|l: usize| l.to_string())
-                        .unwrap_or_else(|| "N/A".to_string()),
-                    rajac_error
-                );
-            } else {
-                println!(
-                    "  Rajac:     line {}, error '{}'",
-                    rajac_line
-                        .map(|l: usize| l.to_string())
-                        .unwrap_or_else(|| "N/A".to_string()),
-                    rajac_error
-                );
-            }
             failures += 1;
         }
     }
@@ -491,4 +561,35 @@ fn parse_reference_error(content: &str) -> RajacResult<(usize, String)> {
     }
 
     Err(rajac_base::err!("Failed to parse reference error output"))
+}
+
+fn print_invalid_source_mismatch(
+    file_stem: &str,
+    reference_line: usize,
+    reference_error: &str,
+    override_error: Option<&str>,
+    rajac_line: Option<usize>,
+    rajac_error: &str,
+    source_path: &Path,
+) {
+    println!(
+        "{} {} - diagnostic mismatch",
+        "Error:".red(),
+        file_stem.bold()
+    );
+    println!("  Source:    {}", source_path.display());
+    println!(
+        "  Reference: line {}, error '{}'",
+        reference_line, reference_error
+    );
+    if let Some(override_error) = override_error {
+        println!("  Override:  error '{}'", override_error);
+    }
+    println!(
+        "  Rajac:     line {}, error '{}'",
+        rajac_line
+            .map(|line| line.to_string())
+            .unwrap_or_else(|| "N/A".to_string()),
+        rajac_error
+    );
 }

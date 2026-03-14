@@ -10,7 +10,10 @@ pub fn init_logging() {
             .with(
                 tracing_subscriber::fmt::layer(), /*.with_span_events(FmtSpan::ENTER)*/
             )
-            .with(EnvFilter::builder().parse("INFO").unwrap())
+            .with(
+                EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| EnvFilter::builder().parse("info").unwrap()),
+            )
             .init();
     });
 }
@@ -23,4 +26,4 @@ macro_rules! log_error {
 }
 
 pub use log_error;
-pub use tracing::{debug, error, info, trace, warn};
+pub use tracing::{debug, error, info, info_span, trace, warn};

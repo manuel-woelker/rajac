@@ -1,0 +1,85 @@
+use crate::error::RajacError;
+use crate::result::RajacResult;
+use std::fmt::Write as _;
+use std::process::ExitCode;
+
+/// What does `try_main` provide for CLI binaries?
+///
+/// It runs a fallible entrypoint, prints a readable error report on failure,
+/// and converts the outcome into a process exit code.
+pub fn try_main(run: impl FnOnce() -> RajacResult<()>) -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprint!("{}", format_cli_error("operation failed", &error));
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// What does `try_main_with_headline` provide?
+///
+/// It behaves like [`try_main`], but lets a binary choose a more specific
+/// headline for its top-level error report.
+pub fn try_main_with_headline(headline: &str, run: impl FnOnce() -> RajacResult<()>) -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprint!("{}", format_cli_error(headline, &error));
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// What does `format_cli_error` return?
+///
+/// It returns a stable, human-readable rendering of a [`RajacError`] that is
+/// suitable for printing from a command-line binary.
+pub fn format_cli_error(headline: &str, error: &RajacError) -> String {
+    let mut rendered = String::new();
+    let _ = writeln!(&mut rendered, "{headline}");
+    error
+        .write_to(&mut rendered)
+        .expect("error rendering should not fail");
+
+    let mut causes = Vec::new();
+    let mut current = error.source();
+    while let Some(cause) = current {
+        causes.push(cause.kind().to_string());
+        current = cause.source();
+    }
+
+    if !causes.is_empty() {
+        rendered.push('\n');
+        rendered.push_str("Cause chain:\n");
+        for (index, cause) in causes.iter().enumerate() {
+            let _ = writeln!(&mut rendered, "  {}. {}", index + 1, cause);
+        }
+    }
+
+    rendered
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::error::RajacError;
+    use expect_test::expect;
+
+    use super::format_cli_error;
+
+    #[test]
+    fn format_cli_error_renders_headline_and_cause_chain() {
+        let error = RajacError::message("failed to verify")
+            .with_source(RajacError::message("missing reference output"));
+
+        expect!([r#"
+            verification failed
+            Error: failed to verify
+            Caused by: missing reference output
+
+            Cause chain:
+              1. missing reference output
+        "#])
+        .assert_eq(&format_cli_error("verification failed", &error));
+    }
+}

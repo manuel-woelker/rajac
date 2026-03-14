@@ -1183,6 +1183,7 @@ dependencies = [
  "regex",
  "ristretto_classfile",
  "sha2",
+ "tracing",
  "walkdir",
 ]
 
