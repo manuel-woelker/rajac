@@ -1,6 +1,6 @@
 use rajac_ast::{
-    AstArena, AstType, Expr as AstExpr, ExprId, Literal, LiteralKind, ParamId, PrimitiveType,
-    Stmt, StmtId,
+    AstArena, AstType, Expr as AstExpr, ExprId, Literal, LiteralKind, ParamId, PrimitiveType, Stmt,
+    StmtId,
 };
 use rajac_base::result::RajacResult;
 use rajac_types::{Ident, Type, TypeArena, TypeId};
@@ -157,7 +157,8 @@ impl<'arena> CodeGenerator<'arena> {
                     let ty = self.arena.ty(*ty);
                     let kind = local_kind_from_ast_type(ty);
                     let slot = self.allocate_local(kind);
-                    self.local_vars.insert(name.as_str().to_string(), LocalVar { slot, kind });
+                    self.local_vars
+                        .insert(name.as_str().to_string(), LocalVar { slot, kind });
                     self.emit_store(slot, kind);
                 }
             }
@@ -190,19 +191,17 @@ impl<'arena> CodeGenerator<'arena> {
                     self.emit(self.neg_instruction_for_kind(expr_kind));
                 }
             }
-            AstExpr::Binary { op, lhs, rhs } => {
-                match op {
-                    rajac_ast::BinaryOp::And => {
-                        self.emit_logical_and(*lhs, *rhs)?;
-                    }
-                    rajac_ast::BinaryOp::Or => {
-                        self.emit_logical_or(*lhs, *rhs)?;
-                    }
-                    _ => {
-                        self.emit_binary_op(op, *lhs, *rhs, expr_kind)?;
-                    }
+            AstExpr::Binary { op, lhs, rhs } => match op {
+                rajac_ast::BinaryOp::And => {
+                    self.emit_logical_and(*lhs, *rhs)?;
                 }
-            }
+                rajac_ast::BinaryOp::Or => {
+                    self.emit_logical_or(*lhs, *rhs)?;
+                }
+                _ => {
+                    self.emit_binary_op(op, *lhs, *rhs, expr_kind)?;
+                }
+            },
             AstExpr::Assign { .. } => {}
             AstExpr::Ternary {
                 condition,
@@ -1157,22 +1156,9 @@ fn stack_effect(instr: &Instruction) -> i32 {
         Athrow => 0,
         Checkcast(_) => 0,
         Instanceof(_) => 0,
-        Ifeq(_)
-        | Ifne(_)
-        | Iflt(_)
-        | Ifge(_)
-        | Ifgt(_)
-        | Ifle(_)
-        | Ifnull(_)
-        | Ifnonnull(_) => -1,
-        If_icmpeq(_)
-        | If_icmpne(_)
-        | If_icmplt(_)
-        | If_icmpge(_)
-        | If_icmpgt(_)
-        | If_icmple(_)
-        | If_acmpeq(_)
-        | If_acmpne(_) => -2,
+        Ifeq(_) | Ifne(_) | Iflt(_) | Ifge(_) | Ifgt(_) | Ifle(_) | Ifnull(_) | Ifnonnull(_) => -1,
+        If_icmpeq(_) | If_icmpne(_) | If_icmplt(_) | If_icmpge(_) | If_icmpgt(_) | If_icmple(_)
+        | If_acmpeq(_) | If_acmpne(_) => -2,
         _ => 0,
     }
 }

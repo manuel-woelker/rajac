@@ -676,13 +676,13 @@ fn resolve_expr(
     match &mut expr {
         rajac_ast::Expr::Error => {}
         rajac_ast::Expr::Ident(name) => {
-            if let Some(resolved_name) = resolve_class_name(&name.name, context, symbol_table) {
-                if let Some(type_id) = symbol_table.lookup_type_id(
+            if let Some(resolved_name) = resolve_class_name(&name.name, context, symbol_table)
+                && let Some(type_id) = symbol_table.lookup_type_id(
                     resolved_name.package_name().as_str(),
                     resolved_name.name().as_str(),
-                ) {
-                    expr_ty = type_id;
-                }
+                )
+            {
+                expr_ty = type_id;
             }
         }
         rajac_ast::Expr::Literal(literal) => {
