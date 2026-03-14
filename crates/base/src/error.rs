@@ -126,14 +126,14 @@ impl RajacError {
             write,
             "{}{} {}:{}:{}",
             prefix,
-            style("2;37", "├─ at"),
+            style("2;37", "  at"),
             self.location.file(),
             self.location.line(),
             self.location.column()
         )?;
 
         if self.span_trace.status() == SpanTraceStatus::CAPTURED {
-            writeln!(write, "{}{}", prefix, style("36", "├─ span trace"))?;
+            writeln!(write, "{}{}", prefix, style("36", "  span trace:"))?;
             write_span_trace(write, prefix, &self.span_trace)?;
         }
 
@@ -142,7 +142,7 @@ impl RajacError {
                 write,
                 "{}{} {}",
                 prefix,
-                style("33", "╰─ caused by"),
+                style("33", "caused by:"),
                 source.kind
             )?;
             source.write_child_details(write, &format!("{prefix}   "))?;
@@ -160,14 +160,14 @@ impl RajacError {
             write,
             "{}{} {}:{}:{}",
             prefix,
-            style("2;37", "├─ at"),
+            style("2;37", "  at"),
             self.location.file(),
             self.location.line(),
             self.location.column()
         )?;
 
         if self.span_trace.status() == SpanTraceStatus::CAPTURED {
-            writeln!(write, "{}{}", prefix, style("36", "├─ span trace"))?;
+            writeln!(write, "{}{}", prefix, style("36", "  span trace:"))?;
             write_span_trace(write, prefix, &self.span_trace)?;
         }
 
@@ -176,7 +176,7 @@ impl RajacError {
                 write,
                 "{}{} {}",
                 prefix,
-                style("33", "╰─ caused by"),
+                style("33", "caused by:"),
                 source.kind
             )?;
             source.write_child_details(write, &format!("{prefix}   "))?;
@@ -192,7 +192,7 @@ fn write_span_trace(
     span_trace: &SpanTrace,
 ) -> std::fmt::Result {
     for line in span_trace.to_string().lines() {
-        writeln!(write, "{}{} {}", prefix, style("2;36", "│"), line)?;
+        writeln!(write, "{}  {}", prefix, line)?;
     }
     Ok(())
 }
@@ -240,7 +240,7 @@ mod tests {
         let err = err!("test {}", 123);
         let rendered = err.to_test_string();
         assert!(rendered.contains("× error test 123\n"));
-        assert!(rendered.contains("├─ at crates/base/src/error.rs:"));
+        assert!(rendered.contains("  at crates/base/src/error.rs:"));
     }
 
     #[test]
@@ -251,7 +251,7 @@ mod tests {
         .unwrap_err();
         let rendered = err.to_test_string();
         assert!(rendered.contains("× error test 123\n"));
-        assert!(rendered.contains("├─ at crates/base/src/error.rs:"));
+        assert!(rendered.contains("  at crates/base/src/error.rs:"));
     }
 
     #[test]
@@ -260,9 +260,9 @@ mod tests {
             .with_source(RajacError::message("missing file"));
         let rendered = err.to_test_string();
         assert!(rendered.contains("× error failed to read file\n"));
-        assert!(rendered.contains("╰─ caused by missing file\n"));
+        assert!(rendered.contains("caused by: missing file\n"));
         assert_eq!(
-            rendered.matches("├─ at crates/base/src/error.rs:").count(),
+            rendered.matches("  at crates/base/src/error.rs:").count(),
             2
         );
     }
@@ -273,9 +273,9 @@ mod tests {
         let err = RajacError::message("cannot initialize").with_std_source(io_error);
         let rendered = err.to_test_string();
         assert!(rendered.contains("× error cannot initialize\n"));
-        assert!(rendered.contains("╰─ caused by missing config\n"));
+        assert!(rendered.contains("caused by: missing config\n"));
         assert_eq!(
-            rendered.matches("├─ at crates/base/src/error.rs:").count(),
+            rendered.matches("  at crates/base/src/error.rs:").count(),
             2
         );
     }
@@ -289,7 +289,7 @@ mod tests {
         let err = RajacError::message("failed inside span");
         let rendered = err.to_test_string();
 
-        assert!(rendered.contains("├─ span trace\n"));
+        assert!(rendered.contains("  span trace:\n"));
         assert!(rendered.contains("error_test_span"));
     }
 }

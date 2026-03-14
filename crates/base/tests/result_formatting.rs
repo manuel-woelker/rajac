@@ -15,9 +15,9 @@ fn result_with_context_formats_error_with_caller_location() {
 
     expect!([r#"
         × error failed to load config
-        ├─ at crates/base/tests/result_formatting.rs:14:24
-        ╰─ caused by config missing
-           ├─ at crates/base/tests/result_formatting.rs:14:24
+          at crates/base/tests/result_formatting.rs:14:24
+        caused by: config missing
+             at crates/base/tests/result_formatting.rs:14:24
     "#])
     .assert_eq(&error.to_test_string());
 }
@@ -30,9 +30,9 @@ fn result_context_formats_error_with_caller_location() {
 
     expect!([r#"
         × error failed to load config
-        ├─ at crates/base/tests/result_formatting.rs:29:24
-        ╰─ caused by config missing
-           ├─ at crates/base/tests/result_formatting.rs:29:24
+          at crates/base/tests/result_formatting.rs:29:24
+        caused by: config missing
+             at crates/base/tests/result_formatting.rs:29:24
     "#])
     .assert_eq(&error.to_test_string());
 }
@@ -44,7 +44,7 @@ fn option_context_formats_error_with_caller_location() {
 
     expect!([r#"
         × error missing value
-        ├─ at crates/base/tests/result_formatting.rs:43:23
+          at crates/base/tests/result_formatting.rs:43:23
     "#])
     .assert_eq(&error.to_test_string());
 }
