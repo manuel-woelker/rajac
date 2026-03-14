@@ -74,8 +74,8 @@ impl<'a> Lexer<'a> {
     fn is_valid_escape_char(&self, c: char) -> bool {
         match c {
             'b' | 't' | 'n' | 'f' | 'r' | '"' | '\'' | '\\' => true,
-            '0'..='7' => true,  // Octal escape
-            'u' => true,         // Unicode escape (handled separately)
+            '0'..='7' => true, // Octal escape
+            'u' => true,       // Unicode escape (handled separately)
             _ => false,
         }
     }
@@ -141,7 +141,7 @@ impl<'a> Lexer<'a> {
         let start = self.pos.saturating_sub(2); // position of the '/*'
         let start_line = self.line;
         let start_line_start = self.line_start;
-        
+
         loop {
             match self.peek() {
                 Some('*') => {
@@ -160,24 +160,20 @@ impl<'a> Lexer<'a> {
                     let current_line = self.line;
                     let current_line_start = self.line_start;
                     let current_pos = self.pos;
-                    
+
                     self.line = start_line;
                     self.line_start = start_line_start;
                     self.pos = start;
-                    
+
                     let error_span = start..(start + 2); // Just point to the "/*" start
-                    
-                    self.add_error(
-                        "unclosed comment",
-                        "unclosed comment",
-                        error_span,
-                    );
-                    
+
+                    self.add_error("unclosed comment", "unclosed comment", error_span);
+
                     // Restore current position
                     self.line = current_line;
                     self.line_start = current_line_start;
                     self.pos = current_pos;
-                    
+
                     return;
                 }
             }
@@ -260,44 +256,64 @@ impl<'a> Lexer<'a> {
     fn read_number(&mut self, start: usize) -> TokenKind {
         let mut has_decimal_point = false;
         let mut has_exponent = false;
-        
+
         while let Some(c) = self.peek() {
             if c.is_ascii_digit() {
                 self.bump();
             } else if c == '.' && !has_decimal_point && !has_exponent {
                 self.bump();
                 has_decimal_point = true;
-                
+
                 // Check if there's another decimal point after this one
-                if let Some(next_char) = self.peek() {
-                    if next_char == '.' {
-                        self.add_error(
-                            "malformed number",
-                            "malformed number format",
-                            start..self.pos,
-                        );
-                        // Continue consuming to avoid getting stuck
-                        self.bump();
-                        while let Some(c) = self.peek() {
-                            if c.is_ascii_digit() || c == '.' || c == 'e' || c == 'E' || c == 'f' || c == 'F' || c == 'l' || c == 'L' || c == 'x' || c == 'X' || c == 'b' || c == 'B' {
-                                self.bump();
-                            } else {
-                                break;
-                            }
+                if let Some(next_char) = self.peek()
+                    && next_char == '.'
+                {
+                    self.add_error(
+                        "malformed number",
+                        "malformed number format",
+                        start..self.pos,
+                    );
+                    // Continue consuming to avoid getting stuck
+                    self.bump();
+                    while let Some(c) = self.peek() {
+                        if c.is_ascii_digit()
+                            || c == '.'
+                            || c == 'e'
+                            || c == 'E'
+                            || c == 'f'
+                            || c == 'F'
+                            || c == 'l'
+                            || c == 'L'
+                            || c == 'x'
+                            || c == 'X'
+                            || c == 'b'
+                            || c == 'B'
+                        {
+                            self.bump();
+                        } else {
+                            break;
                         }
-                        return TokenKind::Error;
                     }
+                    return TokenKind::Error;
                 }
             } else if (c == 'e' || c == 'E') && !has_exponent {
                 self.bump();
                 has_exponent = true;
                 // Allow optional sign after exponent
-                if let Some(sign_char) = self.peek() {
-                    if sign_char == '+' || sign_char == '-' {
-                        self.bump();
-                    }
+                if let Some(sign_char) = self.peek()
+                    && (sign_char == '+' || sign_char == '-')
+                {
+                    self.bump();
                 }
-            } else if c == 'f' || c == 'F' || c == 'l' || c == 'L' || c == 'x' || c == 'X' || c == 'b' || c == 'B' {
+            } else if c == 'f'
+                || c == 'F'
+                || c == 'l'
+                || c == 'L'
+                || c == 'x'
+                || c == 'X'
+                || c == 'b'
+                || c == 'B'
+            {
                 self.bump();
             } else {
                 break;
@@ -311,7 +327,11 @@ impl<'a> Lexer<'a> {
         while let Some(c) = self.peek() {
             if c == '"' {
                 self.bump();
-                return if has_error { TokenKind::Error } else { TokenKind::StringLiteral };
+                return if has_error {
+                    TokenKind::Error
+                } else {
+                    TokenKind::StringLiteral
+                };
             }
             if c == '\\' {
                 self.bump();
@@ -382,7 +402,11 @@ impl<'a> Lexer<'a> {
         while let Some(c) = self.peek() {
             if c == '\'' {
                 self.bump();
-                return if has_error { TokenKind::Error } else { TokenKind::CharLiteral };
+                return if has_error {
+                    TokenKind::Error
+                } else {
+                    TokenKind::CharLiteral
+                };
             }
             if c == '\\' {
                 self.bump();
@@ -452,7 +476,7 @@ impl<'a> Lexer<'a> {
             '+' => return None,
             '-' => return None,
             '*' => TokenKind::Star,
-            '/' => return None,  // Handle in main match for comments
+            '/' => return None, // Handle in main match for comments
             '%' => TokenKind::Percent,
             '&' => return None,
             '|' => return None,
@@ -627,7 +651,7 @@ impl<'a> Lexer<'a> {
             _ if c.is_ascii_digit() => {
                 let start_pos = self.pos - 1;
                 self.read_number(start_pos);
-                
+
                 // Check if this is actually an invalid identifier (digit followed by identifier chars)
                 if let Some(next_char) = self.peek() {
                     if next_char.is_alphabetic() || next_char == '_' || next_char == '$' {

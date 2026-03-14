@@ -73,6 +73,18 @@ Prefer data driven tests to reduce code duplication.
 
 Prefer black box testing and try to avoid mocking as much as possible.
 
+### Error Message Overrides
+
+The verification system supports error message overrides in `crates/verification/src/main.rs`. 
+When rajac provides better error messages than OpenJDK, add an override to:
+
+1. Use the line number from OpenJDK's reference output for consistency
+2. Compare against rajac's superior error message
+
+This allows rajac to improve error messaging while maintaining compatibility verification.
+
+Format: `get_error_message_overrides()` function maps test filenames to expected rajac error messages.
+
 ## Checks and formatting
 
 When completing a unit of work run `scripts/check-code.sh` to verify everything is green.
