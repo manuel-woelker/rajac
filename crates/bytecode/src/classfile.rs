@@ -61,6 +61,7 @@ pub fn classfile_from_class_decl(
         None,
         &[],
         type_arena,
+        symbol_table,
     )
 }
 
@@ -83,6 +84,7 @@ fn emit_classfiles_for_class(
         outer_internal_name.as_deref(),
         &nested_classes,
         type_arena,
+        _symbol_table,
     )?;
     class_files.push(class_file);
 
@@ -108,6 +110,7 @@ fn classfile_from_class_decl_with_context(
     outer_internal_name: Option<&str>,
     nested_classes: &[NestedClassInfo],
     type_arena: &rajac_types::TypeArena,
+    symbol_table: &SymbolTable,
 ) -> RajacResult<ClassFile> {
     let class = arena.class_decl(class_id);
 
@@ -152,6 +155,7 @@ fn classfile_from_class_decl_with_context(
                     &class.modifiers,
                     method,
                     type_arena,
+                    symbol_table,
                 )? {
                     methods.push(method_info);
                 }
@@ -490,6 +494,7 @@ fn method_from_ast(
     class_modifiers: &Modifiers,
     method: &AstMethod,
     type_arena: &rajac_types::TypeArena,
+    symbol_table: &SymbolTable,
 ) -> RajacResult<Option<Method>> {
     let name_index = constant_pool.add_utf8(method.name.as_str())?;
     let descriptor = method_to_descriptor(arena, method, type_arena)?;
@@ -499,7 +504,14 @@ fn method_from_ast(
 
     let attributes = if let Some(body_id) = method.body {
         // Generate bytecode for method with body
-        generate_method_bytecode(arena, type_arena, constant_pool, method, body_id)?
+        generate_method_bytecode(
+            arena,
+            type_arena,
+            symbol_table,
+            constant_pool,
+            method,
+            body_id,
+        )?
     } else {
         // Handle abstract methods
         let method_can_be_bodyless = match class_kind {
@@ -529,13 +541,14 @@ fn method_from_ast(
 fn generate_method_bytecode(
     arena: &AstArena,
     type_arena: &rajac_types::TypeArena,
+    symbol_table: &SymbolTable,
     constant_pool: &mut ConstantPool,
     method: &AstMethod,
     body_id: rajac_ast::StmtId,
 ) -> RajacResult<Vec<ristretto_classfile::attributes::Attribute>> {
     let is_static = method.modifiers.0 & Modifiers::STATIC != 0;
 
-    let mut code_gen = CodeGenerator::new(arena, type_arena, constant_pool);
+    let mut code_gen = CodeGenerator::new(arena, type_arena, symbol_table, constant_pool);
     let (instructions, max_stack, max_locals) =
         code_gen.generate_method_body(is_static, &method.params, body_id)?;
 

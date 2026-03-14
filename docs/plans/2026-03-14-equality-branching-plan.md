@@ -6,6 +6,12 @@ Running `cargo run -p verification` showed that equality is not yet lowered into
 Primitive and object equality methods currently evaluate operands and return immediately without emitting comparison instructions.
 The verification run also exposed a separate method call issue: `String.equals` is emitted with a `void` descriptor instead of a `boolean` return type.
 
+## What is the current status?
+
+The bytecode generator now has label-based branch assembly, conditional lowering for equality, boolean materialization, and `Stmt::If` emission.
+`cargo run -p verification` now passes for the current equality sources, and `./scripts/check-code.sh` is green.
+The remaining work is centered on loops plus control-flow stack support for `break`, `continue`, and labels.
+
 ## What needs to be built first?
 
 A real control-flow assembly layer should be added before implementing more branching features.
@@ -56,20 +62,20 @@ Even after branch support is added, `String.equals` will remain wrong until meth
 
 ## What checklist tracks the work?
 
-- [ ] Add `LabelId` and label binding support in `crates/bytecode/src/bytecode.rs`.
-- [ ] Add unresolved branch recording and a final resolution pass based on bytecode offsets.
-- [ ] Convert `&&` and `||` lowering to the new branch infrastructure.
-- [ ] Add a dedicated conditional emission path for boolean expressions.
-- [ ] Implement primitive `==` and `!=` lowering.
-- [ ] Implement reference `==` and `!=` lowering.
-- [ ] Optimize `null` comparisons to `ifnull` and `ifnonnull`.
-- [ ] Implement boolean materialization for comparison expressions.
-- [ ] Implement `Stmt::If` bytecode emission.
+- [x] Add `LabelId` and label binding support in `crates/bytecode/src/bytecode.rs`.
+- [x] Add unresolved branch recording and a final resolution pass based on bytecode offsets.
+- [x] Convert `&&` and `||` lowering to the new branch infrastructure.
+- [x] Add a dedicated conditional emission path for boolean expressions.
+- [x] Implement primitive `==` and `!=` lowering.
+- [x] Implement reference `==` and `!=` lowering.
+- [x] Optimize `null` comparisons to `ifnull` and `ifnonnull`.
+- [x] Implement boolean materialization for comparison expressions.
+- [x] Implement `Stmt::If` bytecode emission.
 - [ ] Implement `Stmt::While` bytecode emission.
 - [ ] Implement `Stmt::DoWhile` bytecode emission.
 - [ ] Implement `Stmt::For` bytecode emission.
 - [ ] Add a control-flow stack for `break`, `continue`, and labeled statements.
-- [ ] Fix method invocation descriptor generation to include return types.
+- [x] Fix method invocation descriptor generation to include return types.
 - [ ] Add verification sources that exercise equality inside `if` statements and loops.
-- [ ] Run `cargo run -p verification` and compare the output.
-- [ ] Run `./scripts/check-code.sh`.
+- [x] Run `cargo run -p verification` and compare the output.
+- [x] Run `./scripts/check-code.sh`.

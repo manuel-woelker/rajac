@@ -3,23 +3,79 @@ use rajac_ast::{
     StmtId,
 };
 use rajac_base::result::RajacResult;
+use rajac_symbols::SymbolTable;
 use rajac_types::{Ident, Type, TypeArena, TypeId};
 use ristretto_classfile::ConstantPool;
 use ristretto_classfile::attributes::Instruction;
 
 pub struct BytecodeEmitter {
-    pub instructions: Vec<Instruction>,
+    code_items: Vec<CodeItem>,
 }
 
 impl BytecodeEmitter {
     pub fn new() -> Self {
         Self {
-            instructions: Vec::new(),
+            code_items: Vec::new(),
         }
     }
 
-    pub fn emit(&mut self, instruction: Instruction) {
-        self.instructions.push(instruction);
+    fn emit(&mut self, instruction: Instruction) {
+        self.code_items.push(CodeItem::Instruction(instruction));
+    }
+
+    fn emit_branch(&mut self, kind: BranchKind, label: LabelId) {
+        self.code_items.push(CodeItem::Branch {
+            kind,
+            target: label,
+        });
+    }
+
+    fn bind_label(&mut self, label: LabelId) {
+        self.code_items.push(CodeItem::Label(label));
+    }
+
+    fn is_empty(&self) -> bool {
+        self.code_items
+            .iter()
+            .all(|item| matches!(item, CodeItem::Label(_)))
+    }
+
+    fn last_instruction(&self) -> Option<&Instruction> {
+        self.code_items.iter().rev().find_map(|item| match item {
+            CodeItem::Instruction(instruction) => Some(instruction),
+            CodeItem::Branch { .. } | CodeItem::Label(_) => None,
+        })
+    }
+
+    fn finalize(&self) -> Vec<Instruction> {
+        let mut offset = 0u16;
+        let mut labels = std::collections::HashMap::new();
+
+        for item in &self.code_items {
+            match item {
+                CodeItem::Instruction(_) | CodeItem::Branch { .. } => {
+                    offset = offset.saturating_add(1);
+                }
+                CodeItem::Label(label) => {
+                    labels.insert(*label, offset);
+                }
+            }
+        }
+
+        let mut instructions = Vec::new();
+
+        for item in &self.code_items {
+            match item {
+                CodeItem::Instruction(instruction) => instructions.push(instruction.clone()),
+                CodeItem::Branch { kind, target } => {
+                    let offset = labels.get(target).copied().unwrap_or_default();
+                    instructions.push(branch_instruction(*kind, offset));
+                }
+                CodeItem::Label(_) => {}
+            }
+        }
+
+        instructions
     }
 }
 
@@ -32,6 +88,7 @@ impl Default for BytecodeEmitter {
 pub struct CodeGenerator<'arena> {
     arena: &'arena AstArena,
     type_arena: &'arena TypeArena,
+    symbol_table: &'arena SymbolTable,
     constant_pool: &'arena mut ConstantPool,
     emitter: BytecodeEmitter,
     max_stack: u16,
@@ -39,17 +96,20 @@ pub struct CodeGenerator<'arena> {
     max_locals: u16,
     next_local_slot: u16,
     local_vars: std::collections::HashMap<String, LocalVar>,
+    next_label_id: u32,
 }
 
 impl<'arena> CodeGenerator<'arena> {
     pub fn new(
         arena: &'arena AstArena,
         type_arena: &'arena TypeArena,
+        symbol_table: &'arena SymbolTable,
         constant_pool: &'arena mut ConstantPool,
     ) -> Self {
         Self {
             arena,
             type_arena,
+            symbol_table,
             constant_pool,
             emitter: BytecodeEmitter::new(),
             max_stack: 0,
@@ -57,6 +117,7 @@ impl<'arena> CodeGenerator<'arena> {
             max_locals: 1,
             next_local_slot: 1, // slot 0 is for 'this'
             local_vars: std::collections::HashMap::new(),
+            next_label_id: 0,
         }
     }
 
@@ -70,9 +131,9 @@ impl<'arena> CodeGenerator<'arena> {
 
         self.emit_statement(body_id)?;
 
-        if self.emulator().instructions.is_empty()
+        if self.emulator().is_empty()
             || !matches!(
-                self.emulator().instructions.last(),
+                self.emulator().last_instruction(),
                 Some(
                     Instruction::Return
                         | Instruction::Areturn
@@ -86,11 +147,7 @@ impl<'arena> CodeGenerator<'arena> {
             self.emit(Instruction::Return);
         }
 
-        Ok((
-            self.emitter.instructions.clone(),
-            self.max_stack,
-            self.max_locals,
-        ))
+        Ok((self.emitter.finalize(), self.max_stack, self.max_locals))
     }
 
     pub fn generate_constructor_body(
@@ -108,11 +165,7 @@ impl<'arena> CodeGenerator<'arena> {
 
         self.emit(Instruction::Return);
 
-        Ok((
-            self.emitter.instructions.clone(),
-            self.max_stack,
-            self.max_locals,
-        ))
+        Ok((self.emitter.finalize(), self.max_stack, self.max_locals))
     }
 
     fn emit(&mut self, instruction: Instruction) {
@@ -124,6 +177,23 @@ impl<'arena> CodeGenerator<'arena> {
 
     fn emulator(&mut self) -> &mut BytecodeEmitter {
         &mut self.emitter
+    }
+
+    fn new_label(&mut self) -> LabelId {
+        let label = LabelId(self.next_label_id);
+        self.next_label_id += 1;
+        label
+    }
+
+    fn bind_label(&mut self, label: LabelId) {
+        self.emitter.bind_label(label);
+    }
+
+    fn emit_branch(&mut self, kind: BranchKind, label: LabelId) {
+        let delta = stack_effect(&branch_instruction(kind, 0));
+        self.current_stack = (self.current_stack + delta).max(0);
+        self.max_stack = self.max_stack.max(self.current_stack as u16);
+        self.emitter.emit_branch(kind, label);
     }
 
     pub fn emit_statement(&mut self, stmt_id: StmtId) -> RajacResult<()> {
@@ -156,13 +226,42 @@ impl<'arena> CodeGenerator<'arena> {
                     self.emit_expression(*expr_id)?;
                     let ty = self.arena.ty(*ty);
                     let kind = local_kind_from_ast_type(ty);
+                    let local_ty = ty.ty();
                     let slot = self.allocate_local(kind);
-                    self.local_vars
-                        .insert(name.as_str().to_string(), LocalVar { slot, kind });
+                    self.local_vars.insert(
+                        name.as_str().to_string(),
+                        LocalVar {
+                            slot,
+                            kind,
+                            ty: local_ty,
+                        },
+                    );
                     self.emit_store(slot, kind);
                 }
             }
-            Stmt::If { .. } | Stmt::While { .. } | Stmt::For { .. } | Stmt::DoWhile { .. } => {}
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                let then_label = self.new_label();
+                let end_label = self.new_label();
+                let else_label = else_branch.map(|_| self.new_label()).unwrap_or(end_label);
+
+                self.emit_condition(*condition, then_label, else_label)?;
+                self.bind_label(then_label);
+                self.emit_statement(*then_branch)?;
+
+                if let Some(else_branch) = else_branch {
+                    self.emit_branch(BranchKind::Goto, end_label);
+                    self.current_stack = 0;
+                    self.bind_label(else_label);
+                    self.emit_statement(*else_branch)?;
+                }
+
+                self.bind_label(end_label);
+            }
+            Stmt::While { .. } | Stmt::For { .. } | Stmt::DoWhile { .. } => {}
             Stmt::Break(_) | Stmt::Continue(_) | Stmt::Label(_, _) | Stmt::Switch { .. } => {}
             Stmt::Throw(_) => {}
             Stmt::Try { .. } | Stmt::Synchronized { .. } => {}
@@ -185,12 +284,18 @@ impl<'arena> CodeGenerator<'arena> {
             AstExpr::Literal(literal) => {
                 self.emit_literal(literal)?;
             }
-            AstExpr::Unary { op, expr } => {
-                self.emit_expression(*expr)?;
-                if matches!(op, rajac_ast::UnaryOp::Minus) {
+            AstExpr::Unary { op, expr } => match op {
+                rajac_ast::UnaryOp::Minus => {
+                    self.emit_expression(*expr)?;
                     self.emit(self.neg_instruction_for_kind(expr_kind));
                 }
-            }
+                rajac_ast::UnaryOp::Bang => {
+                    self.emit_boolean_expression(expr_id)?;
+                }
+                _ => {
+                    self.emit_expression(*expr)?;
+                }
+            },
             AstExpr::Binary { op, lhs, rhs } => match op {
                 rajac_ast::BinaryOp::And => {
                     self.emit_logical_and(*lhs, *rhs)?;
@@ -208,9 +313,18 @@ impl<'arena> CodeGenerator<'arena> {
                 then_expr,
                 else_expr,
             } => {
-                self.emit_expression(*condition)?;
+                let then_label = self.new_label();
+                let else_label = self.new_label();
+                let end_label = self.new_label();
+
+                self.emit_condition(*condition, then_label, else_label)?;
+                self.bind_label(then_label);
                 self.emit_expression(*then_expr)?;
+                self.emit_branch(BranchKind::Goto, end_label);
+                self.current_stack = 0;
+                self.bind_label(else_label);
                 self.emit_expression(*else_expr)?;
+                self.bind_label(end_label);
             }
             AstExpr::Cast { ty, expr } => {
                 self.emit_expression(*expr)?;
@@ -230,9 +344,10 @@ impl<'arena> CodeGenerator<'arena> {
                 name,
                 type_args: _,
                 args,
+                method_id,
                 ..
             } => {
-                self.emit_method_call(expr.as_ref(), name, args)?;
+                self.emit_method_call(expr.as_ref(), name, args, *method_id, expr_ty)?;
             }
             AstExpr::New { ty, args } => {
                 let class_name = type_to_internal_class_name_from_type_id(*ty);
@@ -352,6 +467,224 @@ impl<'arena> CodeGenerator<'arena> {
                 self.emit(Instruction::Aconst_null);
             }
         }
+        Ok(())
+    }
+
+    fn emit_boolean_expression(&mut self, expr_id: ExprId) -> RajacResult<()> {
+        let true_label = self.new_label();
+        let false_label = self.new_label();
+        let end_label = self.new_label();
+
+        self.emit_condition(expr_id, true_label, false_label)?;
+        self.bind_label(true_label);
+        self.emit(Instruction::Iconst_1);
+        self.emit_branch(BranchKind::Goto, end_label);
+        self.current_stack = 0;
+        self.bind_label(false_label);
+        self.emit(Instruction::Iconst_0);
+        self.bind_label(end_label);
+
+        Ok(())
+    }
+
+    fn emit_condition(
+        &mut self,
+        expr_id: ExprId,
+        true_label: LabelId,
+        false_label: LabelId,
+    ) -> RajacResult<()> {
+        let typed_expr = self.arena.expr_typed(expr_id);
+        let expr = &typed_expr.expr;
+
+        match expr {
+            AstExpr::Literal(literal) if matches!(literal.kind, LiteralKind::Bool) => {
+                if literal.value.as_str() == "true" {
+                    self.emit_branch(BranchKind::Goto, true_label);
+                } else {
+                    self.emit_branch(BranchKind::Goto, false_label);
+                }
+            }
+            AstExpr::Unary {
+                op: rajac_ast::UnaryOp::Bang,
+                expr,
+            } => {
+                self.emit_condition(*expr, false_label, true_label)?;
+            }
+            AstExpr::Binary {
+                op: rajac_ast::BinaryOp::And,
+                lhs,
+                rhs,
+            } => {
+                let rhs_label = self.new_label();
+                self.emit_condition(*lhs, rhs_label, false_label)?;
+                self.bind_label(rhs_label);
+                self.emit_condition(*rhs, true_label, false_label)?;
+            }
+            AstExpr::Binary {
+                op: rajac_ast::BinaryOp::Or,
+                lhs,
+                rhs,
+            } => {
+                let rhs_label = self.new_label();
+                self.emit_condition(*lhs, true_label, rhs_label)?;
+                self.bind_label(rhs_label);
+                self.emit_condition(*rhs, true_label, false_label)?;
+            }
+            AstExpr::Binary { op, lhs, rhs }
+                if matches!(
+                    op,
+                    rajac_ast::BinaryOp::EqEq
+                        | rajac_ast::BinaryOp::BangEq
+                        | rajac_ast::BinaryOp::Lt
+                        | rajac_ast::BinaryOp::LtEq
+                        | rajac_ast::BinaryOp::Gt
+                        | rajac_ast::BinaryOp::GtEq
+                ) =>
+            {
+                self.emit_comparison_condition(op.clone(), *lhs, *rhs, true_label, false_label)?;
+            }
+            _ => {
+                self.emit_expression(expr_id)?;
+                self.emit_branch(BranchKind::IfNe, true_label);
+                self.emit_branch(BranchKind::Goto, false_label);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn emit_comparison_condition(
+        &mut self,
+        op: rajac_ast::BinaryOp,
+        lhs: ExprId,
+        rhs: ExprId,
+        true_label: LabelId,
+        false_label: LabelId,
+    ) -> RajacResult<()> {
+        let lhs_kind = self.kind_for_expr(lhs, self.arena.expr_typed(lhs).ty);
+        let rhs_kind = self.kind_for_expr(rhs, self.arena.expr_typed(rhs).ty);
+        let comparison_kind = promote_numeric_kind(lhs_kind, rhs_kind);
+        let lhs_is_null = is_null_literal(self.arena.expr(lhs));
+        let rhs_is_null = is_null_literal(self.arena.expr(rhs));
+
+        if matches!(lhs_kind, LocalVarKind::Reference)
+            || matches!(rhs_kind, LocalVarKind::Reference)
+        {
+            if rhs_is_null {
+                self.emit_expression(lhs)?;
+                self.emit_branch(
+                    if matches!(op, rajac_ast::BinaryOp::EqEq) {
+                        BranchKind::IfNull
+                    } else {
+                        BranchKind::IfNonNull
+                    },
+                    true_label,
+                );
+            } else if lhs_is_null {
+                self.emit_expression(rhs)?;
+                self.emit_branch(
+                    if matches!(op, rajac_ast::BinaryOp::EqEq) {
+                        BranchKind::IfNull
+                    } else {
+                        BranchKind::IfNonNull
+                    },
+                    true_label,
+                );
+            } else {
+                self.emit_expression(lhs)?;
+                self.emit_expression(rhs)?;
+                self.emit_branch(
+                    match op {
+                        rajac_ast::BinaryOp::EqEq => BranchKind::IfAcmpEq,
+                        rajac_ast::BinaryOp::BangEq => BranchKind::IfAcmpNe,
+                        _ => unreachable!(),
+                    },
+                    true_label,
+                );
+            }
+
+            self.emit_branch(BranchKind::Goto, false_label);
+            return Ok(());
+        }
+
+        self.emit_expression(lhs)?;
+        self.emit_expression(rhs)?;
+
+        match comparison_kind {
+            LocalVarKind::Long => {
+                self.emit(Instruction::Lcmp);
+                self.emit_branch(branch_kind_for_zero_compare(op), true_label);
+            }
+            LocalVarKind::Float => {
+                self.emit(Instruction::Fcmpl);
+                self.emit_branch(branch_kind_for_zero_compare(op), true_label);
+            }
+            LocalVarKind::Double => {
+                self.emit(Instruction::Dcmpl);
+                self.emit_branch(branch_kind_for_zero_compare(op), true_label);
+            }
+            LocalVarKind::IntLike => {
+                self.emit_branch(branch_kind_for_int_compare(op), true_label);
+            }
+            LocalVarKind::Reference => unreachable!(),
+        }
+
+        self.emit_branch(BranchKind::Goto, false_label);
+        Ok(())
+    }
+
+    fn emit_comparison_false_branch(
+        &mut self,
+        op: rajac_ast::BinaryOp,
+        lhs: ExprId,
+        rhs: ExprId,
+        false_label: LabelId,
+    ) -> RajacResult<()> {
+        let lhs_kind = self.kind_for_expr(lhs, self.arena.expr_typed(lhs).ty);
+        let rhs_kind = self.kind_for_expr(rhs, self.arena.expr_typed(rhs).ty);
+        let comparison_kind = promote_numeric_kind(lhs_kind, rhs_kind);
+        let lhs_is_null = is_null_literal(self.arena.expr(lhs));
+        let rhs_is_null = is_null_literal(self.arena.expr(rhs));
+
+        if matches!(lhs_kind, LocalVarKind::Reference)
+            || matches!(rhs_kind, LocalVarKind::Reference)
+        {
+            if rhs_is_null {
+                self.emit_expression(lhs)?;
+                self.emit_branch(inverse_null_branch_kind(op), false_label);
+            } else if lhs_is_null {
+                self.emit_expression(rhs)?;
+                self.emit_branch(inverse_null_branch_kind(op), false_label);
+            } else {
+                self.emit_expression(lhs)?;
+                self.emit_expression(rhs)?;
+                self.emit_branch(inverse_reference_branch_kind(op), false_label);
+            }
+            return Ok(());
+        }
+
+        self.emit_expression(lhs)?;
+        self.emit_expression(rhs)?;
+
+        match comparison_kind {
+            LocalVarKind::Long => {
+                self.emit(Instruction::Lcmp);
+                self.emit_branch(inverse_zero_compare_branch_kind(op), false_label);
+            }
+            LocalVarKind::Float => {
+                self.emit(Instruction::Fcmpl);
+                self.emit_branch(inverse_zero_compare_branch_kind(op), false_label);
+            }
+            LocalVarKind::Double => {
+                self.emit(Instruction::Dcmpl);
+                self.emit_branch(inverse_zero_compare_branch_kind(op), false_label);
+            }
+            LocalVarKind::IntLike => {
+                self.emit_branch(inverse_int_compare_branch_kind(op), false_label);
+            }
+            LocalVarKind::Reference => unreachable!(),
+        }
+
         Ok(())
     }
 
@@ -510,8 +843,7 @@ impl<'arena> CodeGenerator<'arena> {
             | BinaryOp::GtEq
             | BinaryOp::EqEq
             | BinaryOp::BangEq => {
-                self.emit_expression(lhs)?;
-                self.emit_expression(rhs)?;
+                self.emit_boolean_expression_expr(op.clone(), lhs, rhs)?;
             }
             BinaryOp::And | BinaryOp::Or => {
                 self.emit_expression(lhs)?;
@@ -519,6 +851,28 @@ impl<'arena> CodeGenerator<'arena> {
                 self.emit(self.bitwise_instruction(result_kind, BitwiseOp::And));
             }
         }
+        Ok(())
+    }
+
+    fn emit_boolean_expression_expr(
+        &mut self,
+        op: rajac_ast::BinaryOp,
+        lhs: ExprId,
+        rhs: ExprId,
+    ) -> RajacResult<()> {
+        let true_label = self.new_label();
+        let false_label = self.new_label();
+        let end_label = self.new_label();
+
+        self.emit_comparison_false_branch(op, lhs, rhs, false_label)?;
+        self.bind_label(true_label);
+        self.emit(Instruction::Iconst_1);
+        self.emit_branch(BranchKind::Goto, end_label);
+        self.current_stack = 0;
+        self.bind_label(false_label);
+        self.emit(Instruction::Iconst_0);
+        self.bind_label(end_label);
+
         Ok(())
     }
 
@@ -607,6 +961,8 @@ impl<'arena> CodeGenerator<'arena> {
         target: Option<&ExprId>,
         name: &Ident,
         args: &[ExprId],
+        method_id: Option<rajac_types::MethodId>,
+        return_type: TypeId,
     ) -> RajacResult<()> {
         if let Some(target_expr_id) = target {
             self.emit_expression(*target_expr_id)?;
@@ -618,14 +974,23 @@ impl<'arena> CodeGenerator<'arena> {
             self.emit_expression(*arg)?;
         }
 
-        let descriptor = method_descriptor_from_arg_types(
-            args.iter()
-                .map(|arg| self.arena.expr_typed(*arg).ty)
-                .collect(),
-            self.type_arena,
-        );
+        let descriptor = method_id
+            .map(|method_id| {
+                let signature = self.symbol_table.method_arena().get(method_id);
+                method_descriptor_from_signature(signature, self.type_arena)
+            })
+            .or_else(|| infer_method_descriptor(name, args, self.symbol_table, self.type_arena))
+            .unwrap_or_else(|| {
+                method_descriptor_from_parts(
+                    args.iter()
+                        .map(|arg| self.expression_type_id(*arg))
+                        .collect(),
+                    return_type,
+                    self.type_arena,
+                )
+            });
         let owner = target
-            .map(|expr_id| self.arena.expr_typed(*expr_id).ty)
+            .map(|expr_id| self.expression_type_id(*expr_id))
             .map(|type_id| type_id_to_internal_name(type_id, self.type_arena))
             .unwrap_or_else(|| "java/lang/Object".to_string());
 
@@ -649,10 +1014,17 @@ impl<'arena> CodeGenerator<'arena> {
 
         for param_id in params {
             let param = self.arena.param(*param_id);
-            let kind = local_kind_from_ast_type(self.arena.ty(param.ty));
+            let param_ty = self.arena.ty(param.ty);
+            let kind = local_kind_from_ast_type(param_ty);
             let slot = self.allocate_local(kind);
-            self.local_vars
-                .insert(param.name.as_str().to_string(), LocalVar { slot, kind });
+            self.local_vars.insert(
+                param.name.as_str().to_string(),
+                LocalVar {
+                    slot,
+                    kind,
+                    ty: param_ty.ty(),
+                },
+            );
         }
     }
 
@@ -816,67 +1188,41 @@ impl<'arena> CodeGenerator<'arena> {
     }
 
     fn emit_logical_and(&mut self, lhs: ExprId, rhs: ExprId) -> RajacResult<()> {
-        self.emit_expression(lhs)?;
-        let first_branch_index = self.emitter.instructions.len();
-        self.emit(Instruction::Ifeq(0));
-        self.emit_expression(rhs)?;
-        let second_branch_index = self.emitter.instructions.len();
-        self.emit(Instruction::Ifeq(0));
-        self.emit(Instruction::Iconst_1);
-        let goto_index = self.emitter.instructions.len();
-        self.emit(Instruction::Goto(0));
-        let false_index = self.emitter.instructions.len();
-        self.current_stack = 0;
-        self.emit(Instruction::Iconst_0);
-        let end_index = self.emitter.instructions.len();
+        let false_label = self.new_label();
+        let end_label = self.new_label();
 
-        let false_offset = self.byte_offset_for_index(false_index);
-        let end_offset = self.byte_offset_for_index(end_index);
-        self.patch_branch(first_branch_index, BranchKind::IfEq, false_offset);
-        self.patch_branch(second_branch_index, BranchKind::IfEq, false_offset);
-        self.patch_branch(goto_index, BranchKind::Goto, end_offset);
+        self.emit_expression(lhs)?;
+        self.emit_branch(BranchKind::IfEq, false_label);
+        self.emit_expression(rhs)?;
+        self.emit_branch(BranchKind::IfEq, false_label);
+        self.emit(Instruction::Iconst_1);
+        self.emit_branch(BranchKind::Goto, end_label);
+        self.current_stack = 0;
+        self.bind_label(false_label);
+        self.emit(Instruction::Iconst_0);
+        self.bind_label(end_label);
 
         Ok(())
     }
 
     fn emit_logical_or(&mut self, lhs: ExprId, rhs: ExprId) -> RajacResult<()> {
-        self.emit_expression(lhs)?;
-        let true_branch_index = self.emitter.instructions.len();
-        self.emit(Instruction::Ifne(0));
-        self.emit_expression(rhs)?;
-        let false_branch_index = self.emitter.instructions.len();
-        self.emit(Instruction::Ifeq(0));
-        let true_index = self.emitter.instructions.len();
-        self.emit(Instruction::Iconst_1);
-        let goto_index = self.emitter.instructions.len();
-        self.emit(Instruction::Goto(0));
-        let false_index = self.emitter.instructions.len();
-        self.current_stack = 0;
-        self.emit(Instruction::Iconst_0);
-        let end_index = self.emitter.instructions.len();
+        let true_label = self.new_label();
+        let false_label = self.new_label();
+        let end_label = self.new_label();
 
-        let true_offset = self.byte_offset_for_index(true_index);
-        let false_offset = self.byte_offset_for_index(false_index);
-        let end_offset = self.byte_offset_for_index(end_index);
-        self.patch_branch(true_branch_index, BranchKind::IfNe, true_offset);
-        self.patch_branch(false_branch_index, BranchKind::IfEq, false_offset);
-        self.patch_branch(goto_index, BranchKind::Goto, end_offset);
+        self.emit_expression(lhs)?;
+        self.emit_branch(BranchKind::IfNe, true_label);
+        self.emit_expression(rhs)?;
+        self.emit_branch(BranchKind::IfEq, false_label);
+        self.bind_label(true_label);
+        self.emit(Instruction::Iconst_1);
+        self.emit_branch(BranchKind::Goto, end_label);
+        self.current_stack = 0;
+        self.bind_label(false_label);
+        self.emit(Instruction::Iconst_0);
+        self.bind_label(end_label);
 
         Ok(())
-    }
-
-    fn byte_offset_for_index(&self, index: usize) -> u16 {
-        u16::try_from(index).unwrap_or(u16::MAX)
-    }
-
-    fn patch_branch(&mut self, index: usize, kind: BranchKind, target: u16) {
-        if let Some(instr) = self.emitter.instructions.get_mut(index) {
-            *instr = match kind {
-                BranchKind::IfEq => Instruction::Ifeq(target),
-                BranchKind::IfNe => Instruction::Ifne(target),
-                BranchKind::Goto => Instruction::Goto(target),
-            };
-        }
     }
 
     fn kind_for_expr(&self, expr_id: ExprId, expr_ty: TypeId) -> LocalVarKind {
@@ -884,6 +1230,26 @@ impl<'arena> CodeGenerator<'arena> {
             return local_kind_from_type_id(expr_ty, self.type_arena);
         }
         self.infer_kind_from_expr(expr_id)
+    }
+
+    fn expression_type_id(&self, expr_id: ExprId) -> TypeId {
+        let expr_ty = self.arena.expr_typed(expr_id).ty;
+        if expr_ty != TypeId::INVALID {
+            return expr_ty;
+        }
+
+        match self.arena.expr(expr_id) {
+            AstExpr::Ident(ident) => self
+                .local_vars
+                .get(ident.as_str())
+                .map(|local| local.ty)
+                .unwrap_or(TypeId::INVALID),
+            AstExpr::MethodCall { name, args, .. } if is_object_equals_call(name, args) => self
+                .symbol_table
+                .primitive_type_id("boolean")
+                .unwrap_or(TypeId::INVALID),
+            _ => TypeId::INVALID,
+        }
     }
 
     fn infer_kind_from_expr(&self, expr_id: ExprId) -> LocalVarKind {
@@ -934,14 +1300,17 @@ impl<'arena> CodeGenerator<'arena> {
                 let else_kind = self.infer_kind_from_expr(*else_expr);
                 promote_numeric_kind(then_kind, else_kind)
             }
-            AstExpr::New { .. }
+            AstExpr::MethodCall { name, args, .. } if is_object_equals_call(name, args) => {
+                LocalVarKind::IntLike
+            }
+            AstExpr::MethodCall { .. }
+            | AstExpr::New { .. }
             | AstExpr::NewArray { .. }
             | AstExpr::ArrayAccess { .. }
             | AstExpr::ArrayLength { .. }
             | AstExpr::This(_)
             | AstExpr::Super
             | AstExpr::FieldAccess { .. }
-            | AstExpr::MethodCall { .. }
             | AstExpr::SuperCall { .. } => LocalVarKind::Reference,
             AstExpr::Assign { .. } | AstExpr::InstanceOf { .. } | AstExpr::Error => {
                 LocalVarKind::Reference
@@ -954,6 +1323,17 @@ impl<'arena> CodeGenerator<'arena> {
 struct LocalVar {
     slot: u16,
     kind: LocalVarKind,
+    ty: TypeId,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+struct LabelId(u32);
+
+#[derive(Clone, Debug)]
+enum CodeItem {
+    Instruction(Instruction),
+    Branch { kind: BranchKind, target: LabelId },
+    Label(LabelId),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1001,7 +1381,43 @@ enum ShiftOp {
 enum BranchKind {
     IfEq,
     IfNe,
+    IfLt,
+    IfLe,
+    IfGt,
+    IfGe,
+    IfIcmpEq,
+    IfIcmpNe,
+    IfIcmpLt,
+    IfIcmpLe,
+    IfIcmpGt,
+    IfIcmpGe,
+    IfAcmpEq,
+    IfAcmpNe,
+    IfNull,
+    IfNonNull,
     Goto,
+}
+
+fn branch_instruction(kind: BranchKind, target: u16) -> Instruction {
+    match kind {
+        BranchKind::IfEq => Instruction::Ifeq(target),
+        BranchKind::IfNe => Instruction::Ifne(target),
+        BranchKind::IfLt => Instruction::Iflt(target),
+        BranchKind::IfLe => Instruction::Ifle(target),
+        BranchKind::IfGt => Instruction::Ifgt(target),
+        BranchKind::IfGe => Instruction::Ifge(target),
+        BranchKind::IfIcmpEq => Instruction::If_icmpeq(target),
+        BranchKind::IfIcmpNe => Instruction::If_icmpne(target),
+        BranchKind::IfIcmpLt => Instruction::If_icmplt(target),
+        BranchKind::IfIcmpLe => Instruction::If_icmple(target),
+        BranchKind::IfIcmpGt => Instruction::If_icmpgt(target),
+        BranchKind::IfIcmpGe => Instruction::If_icmpge(target),
+        BranchKind::IfAcmpEq => Instruction::If_acmpeq(target),
+        BranchKind::IfAcmpNe => Instruction::If_acmpne(target),
+        BranchKind::IfNull => Instruction::Ifnull(target),
+        BranchKind::IfNonNull => Instruction::Ifnonnull(target),
+        BranchKind::Goto => Instruction::Goto(target),
+    }
 }
 
 fn local_kind_from_ast_type(ty: &AstType) -> LocalVarKind {
@@ -1044,6 +1460,103 @@ fn promote_numeric_kind(lhs_kind: LocalVarKind, rhs_kind: LocalVarKind) -> Local
     } else {
         LocalVarKind::IntLike
     }
+}
+
+fn branch_kind_for_zero_compare(op: rajac_ast::BinaryOp) -> BranchKind {
+    match op {
+        rajac_ast::BinaryOp::EqEq => BranchKind::IfEq,
+        rajac_ast::BinaryOp::BangEq => BranchKind::IfNe,
+        rajac_ast::BinaryOp::Lt => BranchKind::IfLt,
+        rajac_ast::BinaryOp::LtEq => BranchKind::IfLe,
+        rajac_ast::BinaryOp::Gt => BranchKind::IfGt,
+        rajac_ast::BinaryOp::GtEq => BranchKind::IfGe,
+        _ => unreachable!(),
+    }
+}
+
+fn branch_kind_for_int_compare(op: rajac_ast::BinaryOp) -> BranchKind {
+    match op {
+        rajac_ast::BinaryOp::EqEq => BranchKind::IfIcmpEq,
+        rajac_ast::BinaryOp::BangEq => BranchKind::IfIcmpNe,
+        rajac_ast::BinaryOp::Lt => BranchKind::IfIcmpLt,
+        rajac_ast::BinaryOp::LtEq => BranchKind::IfIcmpLe,
+        rajac_ast::BinaryOp::Gt => BranchKind::IfIcmpGt,
+        rajac_ast::BinaryOp::GtEq => BranchKind::IfIcmpGe,
+        _ => unreachable!(),
+    }
+}
+
+fn inverse_zero_compare_branch_kind(op: rajac_ast::BinaryOp) -> BranchKind {
+    match op {
+        rajac_ast::BinaryOp::EqEq => BranchKind::IfNe,
+        rajac_ast::BinaryOp::BangEq => BranchKind::IfEq,
+        rajac_ast::BinaryOp::Lt => BranchKind::IfGe,
+        rajac_ast::BinaryOp::LtEq => BranchKind::IfGt,
+        rajac_ast::BinaryOp::Gt => BranchKind::IfLe,
+        rajac_ast::BinaryOp::GtEq => BranchKind::IfLt,
+        _ => unreachable!(),
+    }
+}
+
+fn inverse_int_compare_branch_kind(op: rajac_ast::BinaryOp) -> BranchKind {
+    match op {
+        rajac_ast::BinaryOp::EqEq => BranchKind::IfIcmpNe,
+        rajac_ast::BinaryOp::BangEq => BranchKind::IfIcmpEq,
+        rajac_ast::BinaryOp::Lt => BranchKind::IfIcmpGe,
+        rajac_ast::BinaryOp::LtEq => BranchKind::IfIcmpGt,
+        rajac_ast::BinaryOp::Gt => BranchKind::IfIcmpLe,
+        rajac_ast::BinaryOp::GtEq => BranchKind::IfIcmpLt,
+        _ => unreachable!(),
+    }
+}
+
+fn inverse_reference_branch_kind(op: rajac_ast::BinaryOp) -> BranchKind {
+    match op {
+        rajac_ast::BinaryOp::EqEq => BranchKind::IfAcmpNe,
+        rajac_ast::BinaryOp::BangEq => BranchKind::IfAcmpEq,
+        _ => unreachable!(),
+    }
+}
+
+fn inverse_null_branch_kind(op: rajac_ast::BinaryOp) -> BranchKind {
+    match op {
+        rajac_ast::BinaryOp::EqEq => BranchKind::IfNonNull,
+        rajac_ast::BinaryOp::BangEq => BranchKind::IfNull,
+        _ => unreachable!(),
+    }
+}
+
+fn is_null_literal(expr: &AstExpr) -> bool {
+    matches!(
+        expr,
+        AstExpr::Literal(Literal {
+            kind: LiteralKind::Null,
+            ..
+        })
+    )
+}
+
+fn is_object_equals_call(name: &Ident, args: &[ExprId]) -> bool {
+    name.as_str() == "equals" && args.len() == 1
+}
+
+fn infer_method_descriptor(
+    name: &Ident,
+    args: &[ExprId],
+    symbol_table: &SymbolTable,
+    type_arena: &TypeArena,
+) -> Option<String> {
+    if is_object_equals_call(name, args) {
+        let object_type = type_id_to_descriptor(TypeId::INVALID, type_arena);
+        let boolean_type = symbol_table.primitive_type_id("boolean")?;
+        return Some(format!(
+            "({}){}",
+            object_type,
+            type_id_to_descriptor(boolean_type, type_arena)
+        ));
+    }
+
+    None
 }
 
 fn type_to_internal_class_name(type_id: rajac_ast::AstTypeId) -> String {
@@ -1089,16 +1602,24 @@ fn type_id_to_internal_name(type_id: TypeId, type_arena: &TypeArena) -> String {
     }
 }
 
-fn method_descriptor_from_arg_types(arg_types: Vec<TypeId>, type_arena: &TypeArena) -> String {
-    if arg_types.is_empty() {
-        return "()V".to_string();
-    }
+fn method_descriptor_from_signature(
+    signature: &rajac_types::MethodSignature,
+    type_arena: &TypeArena,
+) -> String {
+    method_descriptor_from_parts(signature.params.clone(), signature.return_type, type_arena)
+}
 
+fn method_descriptor_from_parts(
+    arg_types: Vec<TypeId>,
+    return_type: TypeId,
+    type_arena: &TypeArena,
+) -> String {
     let args = arg_types
         .into_iter()
         .map(|type_id| type_id_to_descriptor(type_id, type_arena))
         .collect::<String>();
-    format!("({})V", args)
+    let return_type = type_id_to_descriptor(return_type, type_arena);
+    format!("({}){}", args, return_type)
 }
 
 fn stack_effect(instr: &Instruction) -> i32 {
@@ -1135,6 +1656,9 @@ fn stack_effect(instr: &Instruction) -> i32 {
         Ladd | Lsub | Lmul | Ldiv | Lrem | Land | Lor | Lxor => -2,
         Fadd | Fsub | Fmul | Fdiv | Frem => -1,
         Dadd | Dsub | Dmul | Ddiv | Drem => -2,
+        Lcmp => -3,
+        Fcmpl | Fcmpg => -1,
+        Dcmpl | Dcmpg => -3,
         Ineg => 0,
         Lneg => 0,
         Fneg | Dneg => 0,
