@@ -70,7 +70,7 @@ TEST_START_NS="$(now_ns)"
 TEST_OUTPUT_FILE="$(mktemp)"
 trap 'rm -f "$TEST_OUTPUT_FILE"' EXIT
 
-if ! cargo nextest run --manifest-path "$MANIFEST_PATH" --workspace --all-targets --all-features --show-progress=none --status-level fail >"$TEST_OUTPUT_FILE" 2>&1; then
+if ! cargo nextest run --manifest-path "$MANIFEST_PATH" --workspace --all-targets --all-features --show-progress=none --status-level fail --no-fail-fast >"$TEST_OUTPUT_FILE" 2>&1; then
   cat "$TEST_OUTPUT_FILE"
   exit 1
 fi
