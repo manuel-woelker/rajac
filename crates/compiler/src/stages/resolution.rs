@@ -110,8 +110,11 @@ use rajac_ast::{
 use rajac_base::qualified_name::FullyQualifiedClassName as ResolvedName;
 use rajac_base::shared_string::SharedString;
 use rajac_symbols::SymbolTable;
-use rajac_types::{FieldModifiers, FieldSignature, MethodModifiers, MethodSignature, Type, TypeId};
-use std::collections::HashMap;
+use rajac_types::{
+    FieldId, FieldModifiers, FieldSignature, MethodId, MethodModifiers, MethodSignature, Type,
+    TypeId,
+};
+use std::collections::{HashMap, HashSet};
 
 /// Resolves identifiers and types in all compilation units.
 ///
@@ -176,32 +179,37 @@ pub fn resolve_identifiers(
 
 /// Resolves identifiers in a single compilation unit.
 fn resolve_compilation_unit(ast: &Ast, arena: &mut AstArena, symbol_table: &mut SymbolTable) {
-    {
-        let context = ResolveContext::new(ast, symbol_table);
+    let context = ResolveContext::new(ast);
 
-        for stmt_id in &ast.statements {
-            resolve_stmt(*stmt_id, arena, &context);
-        }
+    for stmt_id in &ast.statements {
+        resolve_stmt(*stmt_id, arena, symbol_table, &context, None);
+    }
 
-        for class_id in &ast.classes {
-            resolve_class_decl(*class_id, arena, &context);
-        }
+    for class_id in &ast.classes {
+        resolve_class_decl(*class_id, arena, symbol_table, &context);
     }
 
     populate_compilation_unit_methods(ast, arena, symbol_table);
+
+    for stmt_id in &ast.statements {
+        resolve_stmt(*stmt_id, arena, symbol_table, &context, None);
+    }
+
+    for class_id in &ast.classes {
+        resolve_class_decl(*class_id, arena, symbol_table, &context);
+    }
 }
 
 /// Context for resolving identifiers using the symbol table, package, and imports.
-struct ResolveContext<'a> {
-    symbol_table: &'a SymbolTable,
+struct ResolveContext {
     current_package: SharedString,
     single_type_imports: Vec<(SharedString, SharedString)>,
     on_demand_imports: Vec<SharedString>,
 }
 
-impl<'a> ResolveContext<'a> {
+impl ResolveContext {
     /// Builds a resolution context from the current AST and symbol table.
-    fn new(ast: &Ast, symbol_table: &'a SymbolTable) -> Self {
+    fn new(ast: &Ast) -> Self {
         let current_package = ast
             .package
             .as_ref()
@@ -220,7 +228,6 @@ impl<'a> ResolveContext<'a> {
         }
 
         Self {
-            symbol_table,
             current_package,
             single_type_imports,
             on_demand_imports,
@@ -232,15 +239,17 @@ impl<'a> ResolveContext<'a> {
 fn resolve_class_decl(
     class_id: rajac_ast::ClassDeclId,
     arena: &mut AstArena,
+    symbol_table: &mut SymbolTable,
     context: &ResolveContext,
 ) {
-    let (members, extends, implements, permits) = {
+    let (class_name, members, extends, implements, permits) = {
         let class = &mut arena.class_decls[class_id.0 as usize];
         // Note: class names no longer need resolution since we use TypeIds for types
         for _param in &mut class.type_params {
             // TODO: Implement type parameter name resolution for SharedString
         }
         (
+            class.name.name.clone(),
             class.members.clone(),
             class.extends,
             class.implements.clone(),
@@ -248,39 +257,68 @@ fn resolve_class_decl(
         )
     };
 
+    let current_class_type_id =
+        symbol_table.lookup_type_id(context.current_package.as_str(), class_name.as_str());
+
     if let Some(type_id) = extends {
-        resolve_type(type_id, arena, context);
+        resolve_type(type_id, arena, symbol_table, context);
     }
     for type_id in implements {
-        resolve_type(type_id, arena, context);
+        resolve_type(type_id, arena, symbol_table, context);
     }
     for type_id in permits {
-        resolve_type(type_id, arena, context);
+        resolve_type(type_id, arena, symbol_table, context);
     }
     for member_id in members {
-        resolve_class_member(member_id, arena, context);
+        resolve_class_member(
+            member_id,
+            arena,
+            symbol_table,
+            context,
+            current_class_type_id,
+        );
     }
 }
 
 /// Resolves identifiers in a class member.
-fn resolve_class_member(member_id: ClassMemberId, arena: &mut AstArena, context: &ResolveContext) {
+fn resolve_class_member(
+    member_id: ClassMemberId,
+    arena: &mut AstArena,
+    symbol_table: &mut SymbolTable,
+    context: &ResolveContext,
+    current_class_type_id: Option<TypeId>,
+) {
     let mut member = arena.class_members[member_id.0 as usize].clone();
 
     match &mut member {
-        rajac_ast::ClassMember::Field(field) => resolve_field(field, arena, context),
-        rajac_ast::ClassMember::Method(method) => resolve_method(method, arena, context),
-        rajac_ast::ClassMember::Constructor(constructor) => {
-            resolve_constructor(constructor, arena, context)
+        rajac_ast::ClassMember::Field(field) => {
+            resolve_field(field, arena, symbol_table, context, current_class_type_id)
         }
-        rajac_ast::ClassMember::StaticBlock(stmt_id) => resolve_stmt(*stmt_id, arena, context),
+        rajac_ast::ClassMember::Method(method) => {
+            resolve_method(method, arena, symbol_table, context, current_class_type_id)
+        }
+        rajac_ast::ClassMember::Constructor(constructor) => resolve_constructor(
+            constructor,
+            arena,
+            symbol_table,
+            context,
+            current_class_type_id,
+        ),
+        rajac_ast::ClassMember::StaticBlock(stmt_id) => resolve_stmt(
+            *stmt_id,
+            arena,
+            symbol_table,
+            context,
+            current_class_type_id,
+        ),
         rajac_ast::ClassMember::NestedClass(class_id)
         | rajac_ast::ClassMember::NestedInterface(class_id)
         | rajac_ast::ClassMember::NestedRecord(class_id)
         | rajac_ast::ClassMember::NestedAnnotation(class_id) => {
-            resolve_class_decl(*class_id, arena, context)
+            resolve_class_decl(*class_id, arena, symbol_table, context)
         }
         rajac_ast::ClassMember::NestedEnum(enum_decl) => {
-            resolve_enum_decl(enum_decl, arena, context)
+            resolve_enum_decl(enum_decl, arena, symbol_table, context)
         }
     }
 
@@ -288,51 +326,68 @@ fn resolve_class_member(member_id: ClassMemberId, arena: &mut AstArena, context:
 }
 
 /// Resolves identifiers in an enum declaration.
-fn resolve_enum_decl(enum_decl: &mut EnumDecl, arena: &mut AstArena, context: &ResolveContext) {
+fn resolve_enum_decl(
+    enum_decl: &mut EnumDecl,
+    arena: &mut AstArena,
+    symbol_table: &mut SymbolTable,
+    context: &ResolveContext,
+) {
     // Note: enum names no longer need resolution since we use TypeIds for types
 
     for type_id in enum_decl.implements.clone() {
-        resolve_type(type_id, arena, context);
+        resolve_type(type_id, arena, symbol_table, context);
     }
 
     for entry in &mut enum_decl.entries {
         // Note: entry names no longer need resolution since they're just identifiers
         for expr_id in entry.args.clone() {
-            resolve_expr(expr_id, arena, context);
+            resolve_expr(expr_id, arena, symbol_table, context, None);
         }
         if let Some(members) = &entry.body {
             for member_id in members.clone() {
-                resolve_class_member(member_id, arena, context);
+                resolve_class_member(member_id, arena, symbol_table, context, None);
             }
         }
     }
 
     for member_id in enum_decl.members.clone() {
-        resolve_class_member(member_id, arena, context);
+        resolve_class_member(member_id, arena, symbol_table, context, None);
     }
 }
 
 /// Resolves identifiers in a field declaration.
-fn resolve_field(field: &mut Field, arena: &mut AstArena, context: &ResolveContext) {
+fn resolve_field(
+    field: &mut Field,
+    arena: &mut AstArena,
+    symbol_table: &mut SymbolTable,
+    context: &ResolveContext,
+    current_class_type_id: Option<TypeId>,
+) {
     // Note: field names no longer need resolution since they're just identifiers
-    resolve_type(field.ty, arena, context);
+    resolve_type(field.ty, arena, symbol_table, context);
     if let Some(expr_id) = field.initializer {
-        resolve_expr(expr_id, arena, context);
+        resolve_expr(expr_id, arena, symbol_table, context, current_class_type_id);
     }
 }
 
 /// Resolves identifiers in a method declaration.
-fn resolve_method(method: &mut Method, arena: &mut AstArena, context: &ResolveContext) {
+fn resolve_method(
+    method: &mut Method,
+    arena: &mut AstArena,
+    symbol_table: &mut SymbolTable,
+    context: &ResolveContext,
+    current_class_type_id: Option<TypeId>,
+) {
     // Note: method names no longer need resolution since they're just identifiers
     for param_id in method.params.clone() {
-        resolve_param(param_id, arena, context);
+        resolve_param(param_id, arena, symbol_table, context);
     }
-    resolve_type(method.return_ty, arena, context);
+    resolve_type(method.return_ty, arena, symbol_table, context);
     for throws_id in method.throws.clone() {
-        resolve_type(throws_id, arena, context);
+        resolve_type(throws_id, arena, symbol_table, context);
     }
     if let Some(body) = method.body {
-        resolve_stmt(body, arena, context);
+        resolve_stmt(body, arena, symbol_table, context, current_class_type_id);
     }
 }
 
@@ -340,29 +395,42 @@ fn resolve_method(method: &mut Method, arena: &mut AstArena, context: &ResolveCo
 fn resolve_constructor(
     constructor: &mut Constructor,
     arena: &mut AstArena,
+    symbol_table: &mut SymbolTable,
     context: &ResolveContext,
+    current_class_type_id: Option<TypeId>,
 ) {
     // Note: constructor names no longer need resolution since they're just identifiers
     for param_id in constructor.params.clone() {
-        resolve_param(param_id, arena, context);
+        resolve_param(param_id, arena, symbol_table, context);
     }
     for throws_id in constructor.throws.clone() {
-        resolve_type(throws_id, arena, context);
+        resolve_type(throws_id, arena, symbol_table, context);
     }
     if let Some(body) = constructor.body {
-        resolve_stmt(body, arena, context);
+        resolve_stmt(body, arena, symbol_table, context, current_class_type_id);
     }
 }
 
 /// Resolves identifiers in a parameter.
-fn resolve_param(param_id: ParamId, arena: &mut AstArena, context: &ResolveContext) {
+fn resolve_param(
+    param_id: ParamId,
+    arena: &mut AstArena,
+    symbol_table: &mut SymbolTable,
+    context: &ResolveContext,
+) {
     let param = &mut arena.params[param_id.0 as usize];
     // Note: parameter names no longer need resolution since they're just identifiers
-    resolve_type(param.ty, arena, context);
+    resolve_type(param.ty, arena, symbol_table, context);
 }
 
 /// Resolves identifiers in a statement.
-fn resolve_stmt(stmt_id: StmtId, arena: &mut AstArena, context: &ResolveContext) {
+fn resolve_stmt(
+    stmt_id: StmtId,
+    arena: &mut AstArena,
+    symbol_table: &mut SymbolTable,
+    context: &ResolveContext,
+    current_class_type_id: Option<TypeId>,
+) {
     let (exprs, stmts, types, params) = {
         let stmt = &mut arena.stmts[stmt_id.0 as usize];
         let mut exprs = Vec::new();
@@ -490,23 +558,29 @@ fn resolve_stmt(stmt_id: StmtId, arena: &mut AstArena, context: &ResolveContext)
     };
 
     for type_id in types {
-        resolve_type(type_id, arena, context);
+        resolve_type(type_id, arena, symbol_table, context);
     }
     for param_id in params {
-        resolve_param(param_id, arena, context);
+        resolve_param(param_id, arena, symbol_table, context);
     }
     for expr_id in exprs {
-        resolve_expr(expr_id, arena, context);
+        resolve_expr(expr_id, arena, symbol_table, context, current_class_type_id);
     }
     for stmt_id in stmts {
-        resolve_stmt(stmt_id, arena, context);
+        resolve_stmt(stmt_id, arena, symbol_table, context, current_class_type_id);
     }
 }
 
 /// Resolves identifiers in an expression.
-fn resolve_expr(expr_id: ExprId, arena: &mut AstArena, context: &ResolveContext) {
+fn resolve_expr(
+    expr_id: ExprId,
+    arena: &mut AstArena,
+    symbol_table: &mut SymbolTable,
+    context: &ResolveContext,
+    current_class_type_id: Option<TypeId>,
+) {
     let (exprs, types) = {
-        let expr = &mut arena.exprs[expr_id.0 as usize];
+        let expr = arena.expr(expr_id);
         let mut exprs = Vec::new();
         let mut types = Vec::new();
 
@@ -540,20 +614,18 @@ fn resolve_expr(expr_id: ExprId, arena: &mut AstArena, context: &ResolveContext)
                 exprs.push(*expr);
                 types.push(*ty);
             }
-            rajac_ast::Expr::FieldAccess { expr, name: _ } => {
+            rajac_ast::Expr::FieldAccess { expr, .. } => {
                 exprs.push(*expr);
-                // Note: local variable names no longer need resolution since they're just identifiers
             }
             rajac_ast::Expr::MethodCall {
                 expr,
-                name: _,
                 type_args,
                 args,
+                ..
             } => {
                 if let Some(expr_id) = expr {
                     exprs.push(*expr_id);
                 }
-                // Note: local variable names no longer need resolution since they're just identifiers
                 if let Some(type_args) = type_args {
                     types.extend(type_args.iter().copied());
                 }
@@ -579,11 +651,8 @@ fn resolve_expr(expr_id: ExprId, arena: &mut AstArena, context: &ResolveContext)
             }
             rajac_ast::Expr::Super => {}
             rajac_ast::Expr::SuperCall {
-                name: _,
-                type_args,
-                args,
+                type_args, args, ..
             } => {
-                // Note: local variable names no longer need resolution since they're just identifiers
                 if let Some(type_args) = type_args {
                     types.extend(type_args.iter().copied());
                 }
@@ -595,15 +664,132 @@ fn resolve_expr(expr_id: ExprId, arena: &mut AstArena, context: &ResolveContext)
     };
 
     for type_id in types {
-        resolve_type(type_id, arena, context);
+        resolve_type(type_id, arena, symbol_table, context);
     }
     for expr_id in exprs {
-        resolve_expr(expr_id, arena, context);
+        resolve_expr(expr_id, arena, symbol_table, context, current_class_type_id);
     }
+
+    let mut expr = arena.expr(expr_id).clone();
+    let mut expr_ty = TypeId::INVALID;
+
+    match &mut expr {
+        rajac_ast::Expr::Error => {}
+        rajac_ast::Expr::Ident(_name) => {}
+        rajac_ast::Expr::Literal(literal) => {
+            expr_ty = literal_type_id(literal, symbol_table);
+        }
+        rajac_ast::Expr::Unary { op, expr } => {
+            let operand_ty = arena.expr_typed(*expr).ty;
+            expr_ty = unary_result_type(op, operand_ty, symbol_table);
+        }
+        rajac_ast::Expr::Binary { op, lhs, rhs } => {
+            let lhs_ty = arena.expr_typed(*lhs).ty;
+            let rhs_ty = arena.expr_typed(*rhs).ty;
+            expr_ty = binary_result_type(op, lhs_ty, rhs_ty, symbol_table);
+        }
+        rajac_ast::Expr::Assign { lhs, .. } => {
+            expr_ty = arena.expr_typed(*lhs).ty;
+        }
+        rajac_ast::Expr::Ternary {
+            then_expr,
+            else_expr,
+            ..
+        } => {
+            let then_ty = arena.expr_typed(*then_expr).ty;
+            let else_ty = arena.expr_typed(*else_expr).ty;
+            expr_ty = if then_ty != TypeId::INVALID && then_ty == else_ty {
+                then_ty
+            } else {
+                TypeId::INVALID
+            };
+        }
+        rajac_ast::Expr::Cast { ty, .. } => {
+            expr_ty = arena.ty(*ty).ty();
+        }
+        rajac_ast::Expr::InstanceOf { .. } => {
+            expr_ty = symbol_table
+                .primitive_type_id("boolean")
+                .unwrap_or(TypeId::INVALID);
+        }
+        rajac_ast::Expr::FieldAccess {
+            expr,
+            name,
+            field_id,
+        } => {
+            let receiver_ty = arena.expr_typed(*expr).ty;
+            if let Some(field) = resolve_field_in_type(receiver_ty, &name.name, symbol_table) {
+                *field_id = Some(field);
+                expr_ty = symbol_table.field_arena().get(field).ty;
+            }
+        }
+        rajac_ast::Expr::MethodCall {
+            expr,
+            name,
+            method_id,
+            ..
+        } => {
+            let receiver_ty = expr
+                .as_ref()
+                .map(|expr_id| arena.expr_typed(*expr_id).ty)
+                .or(current_class_type_id)
+                .unwrap_or(TypeId::INVALID);
+            if let Some(method) = resolve_method_in_type(receiver_ty, &name.name, symbol_table) {
+                *method_id = Some(method);
+                expr_ty = symbol_table.method_arena().get(method).return_type;
+            }
+        }
+        rajac_ast::Expr::New { ty, .. } => {
+            expr_ty = arena.ty(*ty).ty();
+        }
+        rajac_ast::Expr::NewArray { ty, dimensions } => {
+            let element_id = arena.ty(*ty).ty();
+            if element_id != TypeId::INVALID {
+                let mut array_id = element_id;
+                for _ in 0..dimensions.len() {
+                    array_id = symbol_table.type_arena_mut().alloc(Type::array(array_id));
+                }
+                expr_ty = array_id;
+            }
+        }
+        rajac_ast::Expr::ArrayAccess { array, .. } => {
+            let array_ty = arena.expr_typed(*array).ty;
+            expr_ty = array_element_type(array_ty, symbol_table);
+        }
+        rajac_ast::Expr::ArrayLength { .. } => {
+            expr_ty = symbol_table
+                .primitive_type_id("int")
+                .unwrap_or(TypeId::INVALID);
+        }
+        rajac_ast::Expr::This(_) => {
+            expr_ty = current_class_type_id.unwrap_or(TypeId::INVALID);
+        }
+        rajac_ast::Expr::Super => {
+            expr_ty = superclass_type_id(current_class_type_id, symbol_table);
+        }
+        rajac_ast::Expr::SuperCall {
+            name, method_id, ..
+        } => {
+            let receiver_ty = superclass_type_id(current_class_type_id, symbol_table);
+            if let Some(method) = resolve_method_in_type(receiver_ty, &name.name, symbol_table) {
+                *method_id = Some(method);
+                expr_ty = symbol_table.method_arena().get(method).return_type;
+            }
+        }
+    }
+
+    let typed_expr = arena.expr_typed_mut(expr_id);
+    typed_expr.expr = expr;
+    typed_expr.ty = expr_ty;
 }
 
 /// Resolves identifiers in a type.
-fn resolve_type(type_id: AstTypeId, arena: &mut AstArena, context: &ResolveContext) {
+fn resolve_type(
+    type_id: AstTypeId,
+    arena: &mut AstArena,
+    symbol_table: &mut SymbolTable,
+    context: &ResolveContext,
+) {
     let types = {
         let ty = arena.ty_mut(type_id);
         let mut types = Vec::new();
@@ -611,9 +797,7 @@ fn resolve_type(type_id: AstTypeId, arena: &mut AstArena, context: &ResolveConte
         match ty {
             AstType::Error => {}
             AstType::Primitive { kind, ty } => {
-                if let Some(type_id) = context
-                    .symbol_table
-                    .primitive_type_id(primitive_name_from_ast(kind))
+                if let Some(type_id) = symbol_table.primitive_type_id(primitive_name_from_ast(kind))
                 {
                     *ty = type_id;
                 }
@@ -628,13 +812,11 @@ fn resolve_type(type_id: AstTypeId, arena: &mut AstArena, context: &ResolveConte
                 }
 
                 // Resolve the class name and set the TypeId
-                if let Some(resolved_name) = resolve_class_name(name, context) {
+                if let Some(resolved_name) = resolve_class_name(name, context, symbol_table) {
                     let package_str = resolved_name.package_name().as_str();
                     let class_str = resolved_name.name().as_str();
 
-                    if let Some(type_id) =
-                        context.symbol_table.lookup_type_id(package_str, class_str)
-                    {
+                    if let Some(type_id) = symbol_table.lookup_type_id(package_str, class_str) {
                         *ty = type_id;
                     }
                     // Note: If the type is not found in the symbol table, it means
@@ -656,21 +838,42 @@ fn resolve_type(type_id: AstTypeId, arena: &mut AstArena, context: &ResolveConte
     };
 
     for type_id in types {
-        resolve_type(type_id, arena, context);
+        resolve_type(type_id, arena, symbol_table, context);
+    }
+
+    let (element_type_id, needs_array) = match arena.ty(type_id) {
+        AstType::Array {
+            element_type, ty, ..
+        } => (*element_type, *ty == TypeId::INVALID),
+        _ => (AstTypeId::INVALID, false),
+    };
+
+    if needs_array {
+        let element_id = arena.ty(element_type_id).ty();
+        if element_id != TypeId::INVALID {
+            let array_id = symbol_table.type_arena_mut().alloc(Type::array(element_id));
+            if let AstType::Array { ty, .. } = arena.ty_mut(type_id) {
+                *ty = array_id;
+            }
+        }
     }
 }
 
 /// Resolves a class name using the current package and imports.
-fn resolve_class_name(name: &SharedString, context: &ResolveContext) -> Option<ResolvedName> {
+fn resolve_class_name(
+    name: &SharedString,
+    context: &ResolveContext,
+    symbol_table: &SymbolTable,
+) -> Option<ResolvedName> {
     let name_str = name.as_str();
 
     for (package, import_name) in &context.single_type_imports {
-        if import_name == name && package_has_symbol(context.symbol_table, package, name_str) {
+        if import_name == name && package_has_symbol(symbol_table, package, name_str) {
             return Some(ResolvedName::new(package.clone(), name.clone()));
         }
     }
 
-    if package_has_symbol(context.symbol_table, &context.current_package, name_str) {
+    if package_has_symbol(symbol_table, &context.current_package, name_str) {
         return Some(ResolvedName::new(
             context.current_package.clone(),
             name.clone(),
@@ -678,7 +881,7 @@ fn resolve_class_name(name: &SharedString, context: &ResolveContext) -> Option<R
     }
 
     // Check java.lang package first (implicitly imported in Java)
-    if package_has_symbol(context.symbol_table, "java.lang", name_str) {
+    if package_has_symbol(symbol_table, "java.lang", name_str) {
         return Some(ResolvedName::new(
             SharedString::new("java.lang"),
             name.clone(),
@@ -686,7 +889,7 @@ fn resolve_class_name(name: &SharedString, context: &ResolveContext) -> Option<R
     }
 
     for package in &context.on_demand_imports {
-        if package_has_symbol(context.symbol_table, package, name_str) {
+        if package_has_symbol(symbol_table, package, name_str) {
             return Some(ResolvedName::new(package.clone(), name.clone()));
         }
     }
@@ -717,6 +920,156 @@ fn split_import_name(segments: &[SharedString]) -> Option<(SharedString, SharedS
     let (name, package) = segments.split_last()?;
     let package = package_name_from_segments(package);
     Some((package, name.clone()))
+}
+
+fn literal_type_id(literal: &rajac_ast::Literal, symbol_table: &SymbolTable) -> TypeId {
+    use rajac_ast::LiteralKind;
+
+    match literal.kind {
+        LiteralKind::Int => symbol_table.primitive_type_id("int"),
+        LiteralKind::Long => symbol_table.primitive_type_id("long"),
+        LiteralKind::Float => symbol_table.primitive_type_id("float"),
+        LiteralKind::Double => symbol_table.primitive_type_id("double"),
+        LiteralKind::Char => symbol_table.primitive_type_id("char"),
+        LiteralKind::Bool => symbol_table.primitive_type_id("boolean"),
+        LiteralKind::String => symbol_table.lookup_type_id("java.lang", "String"),
+        LiteralKind::Null => None,
+    }
+    .unwrap_or(TypeId::INVALID)
+}
+
+fn unary_result_type(
+    op: &rajac_ast::UnaryOp,
+    operand_ty: TypeId,
+    symbol_table: &SymbolTable,
+) -> TypeId {
+    match op {
+        rajac_ast::UnaryOp::Bang => symbol_table
+            .primitive_type_id("boolean")
+            .unwrap_or(TypeId::INVALID),
+        _ => operand_ty,
+    }
+}
+
+fn binary_result_type(
+    op: &rajac_ast::BinaryOp,
+    lhs_ty: TypeId,
+    rhs_ty: TypeId,
+    symbol_table: &SymbolTable,
+) -> TypeId {
+    use rajac_ast::BinaryOp;
+
+    match op {
+        BinaryOp::Lt
+        | BinaryOp::LtEq
+        | BinaryOp::Gt
+        | BinaryOp::GtEq
+        | BinaryOp::EqEq
+        | BinaryOp::BangEq
+        | BinaryOp::And
+        | BinaryOp::Or => symbol_table
+            .primitive_type_id("boolean")
+            .unwrap_or(TypeId::INVALID),
+        _ => {
+            if lhs_ty != TypeId::INVALID {
+                lhs_ty
+            } else {
+                rhs_ty
+            }
+        }
+    }
+}
+
+fn resolve_method_in_type(
+    type_id: TypeId,
+    name: &SharedString,
+    symbol_table: &SymbolTable,
+) -> Option<MethodId> {
+    if type_id == TypeId::INVALID {
+        return None;
+    }
+
+    let type_arena = symbol_table.type_arena();
+    let mut stack = vec![type_id];
+    let mut visited = HashSet::new();
+
+    while let Some(current_id) = stack.pop() {
+        if !visited.insert(current_id) {
+            continue;
+        }
+        if let Type::Class(class_type) = type_arena.get(current_id) {
+            if let Some(methods) = class_type.methods.get(name)
+                && let Some(method_id) = methods.first()
+            {
+                return Some(*method_id);
+            }
+            if let Some(super_id) = class_type.superclass {
+                stack.push(super_id);
+            }
+            for interface_id in &class_type.interfaces {
+                stack.push(*interface_id);
+            }
+        }
+    }
+
+    None
+}
+
+fn resolve_field_in_type(
+    type_id: TypeId,
+    name: &SharedString,
+    symbol_table: &SymbolTable,
+) -> Option<FieldId> {
+    if type_id == TypeId::INVALID {
+        return None;
+    }
+
+    let type_arena = symbol_table.type_arena();
+    let mut stack = vec![type_id];
+    let mut visited = HashSet::new();
+
+    while let Some(current_id) = stack.pop() {
+        if !visited.insert(current_id) {
+            continue;
+        }
+        if let Type::Class(class_type) = type_arena.get(current_id) {
+            if let Some(fields) = class_type.fields.get(name)
+                && let Some(field_id) = fields.first()
+            {
+                return Some(*field_id);
+            }
+            if let Some(super_id) = class_type.superclass {
+                stack.push(super_id);
+            }
+            for interface_id in &class_type.interfaces {
+                stack.push(*interface_id);
+            }
+        }
+    }
+
+    None
+}
+
+fn array_element_type(array_type_id: TypeId, symbol_table: &SymbolTable) -> TypeId {
+    if array_type_id == TypeId::INVALID {
+        return TypeId::INVALID;
+    }
+    match symbol_table.type_arena().get(array_type_id) {
+        Type::Array(array) => array.element_type,
+        _ => TypeId::INVALID,
+    }
+}
+
+fn superclass_type_id(current_class_type_id: Option<TypeId>, symbol_table: &SymbolTable) -> TypeId {
+    let current_id = match current_class_type_id {
+        Some(id) => id,
+        None => return TypeId::INVALID,
+    };
+
+    match symbol_table.type_arena().get(current_id) {
+        Type::Class(class_type) => class_type.superclass.unwrap_or(TypeId::INVALID),
+        _ => TypeId::INVALID,
+    }
 }
 
 fn populate_compilation_unit_methods(
@@ -1003,4 +1356,56 @@ fn void_type_id(primitive_lookup: &HashMap<SharedString, TypeId>) -> TypeId {
         .get(&SharedString::new("void"))
         .copied()
         .unwrap_or(TypeId::INVALID)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rajac_base::shared_string::SharedString;
+    use rajac_symbols::SymbolKind;
+
+    #[test]
+    fn resolves_methods_and_fields_by_name() {
+        let mut symbol_table = SymbolTable::new();
+        let class_name = SharedString::new("Widget");
+        let type_id = symbol_table.add_class(
+            "",
+            class_name.as_str(),
+            Type::class(rajac_types::ClassType::new(class_name.clone())),
+            SymbolKind::Class,
+        );
+
+        let void_id = symbol_table
+            .primitive_type_id("void")
+            .unwrap_or(TypeId::INVALID);
+        let int_id = symbol_table
+            .primitive_type_id("int")
+            .unwrap_or(TypeId::INVALID);
+
+        let method_id = symbol_table.method_arena_mut().alloc(MethodSignature::new(
+            SharedString::new("run"),
+            Vec::new(),
+            void_id,
+            MethodModifiers(MethodModifiers::PUBLIC),
+        ));
+        let field_id = symbol_table.field_arena_mut().alloc(FieldSignature::new(
+            SharedString::new("count"),
+            int_id,
+            FieldModifiers(FieldModifiers::PUBLIC),
+        ));
+
+        if let Type::Class(class_type) = symbol_table.type_arena_mut().get_mut(type_id) {
+            class_type.add_method(SharedString::new("run"), method_id);
+            class_type.add_field(SharedString::new("count"), field_id);
+        }
+
+        assert_eq!(
+            resolve_method_in_type(type_id, &SharedString::new("run"), &symbol_table),
+            Some(method_id)
+        );
+        assert_eq!(
+            resolve_field_in_type(type_id, &SharedString::new("count"), &symbol_table),
+            Some(field_id)
+        );
+    }
 }

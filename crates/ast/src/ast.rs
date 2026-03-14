@@ -1,6 +1,6 @@
 use super::ast_type::{AstTypeId, AstTypeParam};
 use rajac_base::shared_string::SharedString;
-use rajac_types::Ident;
+use rajac_types::{FieldId as ResolvedFieldId, Ident, MethodId as ResolvedMethodId, TypeId};
 use std::ops::Range;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -299,12 +299,14 @@ pub enum Expr {
     FieldAccess {
         expr: ExprId,
         name: Ident,
+        field_id: Option<ResolvedFieldId>,
     },
     MethodCall {
         expr: Option<ExprId>,
         name: Ident,
         type_args: Option<Vec<AstTypeId>>,
         args: Vec<ExprId>,
+        method_id: Option<ResolvedMethodId>,
     },
     New {
         ty: AstTypeId,
@@ -327,7 +329,23 @@ pub enum Expr {
         name: Ident,
         type_args: Option<Vec<AstTypeId>>,
         args: Vec<ExprId>,
+        method_id: Option<ResolvedMethodId>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedExpr {
+    pub expr: Expr,
+    pub ty: TypeId,
+}
+
+impl TypedExpr {
+    pub fn new(expr: Expr) -> Self {
+        Self {
+            expr,
+            ty: TypeId::INVALID,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

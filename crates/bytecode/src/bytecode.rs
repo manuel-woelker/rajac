@@ -241,7 +241,7 @@ impl<'arena> CodeGenerator<'arena> {
                 let _ = class_name;
                 self.emit(Instruction::Instanceof(0));
             }
-            AstExpr::FieldAccess { expr, name } => {
+            AstExpr::FieldAccess { expr, name, .. } => {
                 self.emit_field_access(*expr, name)?;
             }
             AstExpr::MethodCall {
@@ -249,6 +249,7 @@ impl<'arena> CodeGenerator<'arena> {
                 name,
                 type_args: _,
                 args,
+                ..
             } => {
                 self.emit_method_call(expr.as_ref(), name, args)?;
             }
@@ -591,6 +592,7 @@ impl<'arena> CodeGenerator<'arena> {
             AstExpr::FieldAccess {
                 expr: inner_target,
                 name: field_name,
+                ..
             } => {
                 if field_name.as_str() == "out" {
                     let inner = self.arena.expr(*inner_target);
@@ -631,6 +633,7 @@ impl<'arena> CodeGenerator<'arena> {
                 AstExpr::FieldAccess {
                     expr: inner_target,
                     name: field_name,
+                    ..
                 } => {
                     if field_name.as_str() == "out" && name.as_str() == "println" {
                         let inner = self.arena.expr(*inner_target);

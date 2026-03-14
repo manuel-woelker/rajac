@@ -4,7 +4,7 @@ use super::ast_type::{AstType, AstTypeId};
 #[derive(Debug, Default)]
 pub struct AstArena {
     pub stmts: Vec<Stmt>,
-    pub exprs: Vec<Expr>,
+    pub exprs: Vec<TypedExpr>,
     pub types: Vec<AstType>,
     pub params: Vec<Param>,
     pub methods: Vec<Method>,
@@ -27,7 +27,7 @@ impl AstArena {
 
     pub fn alloc_expr(&mut self, expr: Expr) -> ExprId {
         let id = ExprId(self.exprs.len() as u32);
-        self.exprs.push(expr);
+        self.exprs.push(TypedExpr::new(expr));
         id
     }
 
@@ -78,7 +78,19 @@ impl AstArena {
     }
 
     pub fn expr(&self, id: ExprId) -> &Expr {
+        &self.exprs[id.0 as usize].expr
+    }
+
+    pub fn expr_mut(&mut self, id: ExprId) -> &mut Expr {
+        &mut self.exprs[id.0 as usize].expr
+    }
+
+    pub fn expr_typed(&self, id: ExprId) -> &TypedExpr {
         &self.exprs[id.0 as usize]
+    }
+
+    pub fn expr_typed_mut(&mut self, id: ExprId) -> &mut TypedExpr {
+        &mut self.exprs[id.0 as usize]
     }
 
     pub fn ty(&self, id: AstTypeId) -> &AstType {

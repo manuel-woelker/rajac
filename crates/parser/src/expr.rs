@@ -329,11 +329,16 @@ impl<'a> Parser<'a> {
                                 name,
                                 type_args: None,
                                 args,
+                                method_id: None,
                             };
                             expr = self.arena.alloc_expr(method_call);
                         } else {
                             // Field access
-                            let field_access = Expr::FieldAccess { expr, name };
+                            let field_access = Expr::FieldAccess {
+                                expr,
+                                name,
+                                field_id: None,
+                            };
                             expr = self.arena.alloc_expr(field_access);
                         }
                     } else if self.peek() == TokenKind::KwClass {
@@ -474,6 +479,7 @@ impl<'a> Parser<'a> {
                         name,
                         type_args: None,
                         args,
+                        method_id: None,
                     };
                     Some(self.arena.alloc_expr(method_call))
                 } else {
@@ -503,6 +509,7 @@ impl<'a> Parser<'a> {
                         name: Ident::new(rajac_base::shared_string::SharedString::new("super")),
                         type_args: None,
                         args,
+                        method_id: None,
                     };
                     Some(self.arena.alloc_expr(super_call))
                 } else {
