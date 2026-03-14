@@ -1,7 +1,8 @@
 use rajac_base::shared_string::SharedString;
 use rajac_symbols::{Symbol, SymbolKind, SymbolTable};
 use rayon::prelude::*;
-use ristretto_classfile::ClassFile;
+use ristretto_classfile::{BaseType, ClassFile, FieldType, MethodAccessFlags};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Cursor, Read};
 use std::path::Path;
@@ -23,6 +24,15 @@ struct ParsedClass {
     is_interface: bool,
     super_class: Option<SharedString>,
     interfaces: Vec<SharedString>,
+    methods: Vec<ParsedMethod>,
+}
+
+#[derive(Clone, Debug)]
+struct ParsedMethod {
+    name: SharedString,
+    params: Vec<FieldType>,
+    return_type: Option<FieldType>,
+    modifiers: rajac_types::MethodModifiers,
 }
 
 impl Classpath {
@@ -255,13 +265,87 @@ fn parse_class_file(class_file: &ClassFile) -> Option<ParsedClass> {
         })
         .collect();
 
+    let methods: Vec<ParsedMethod> = class_file
+        .methods
+        .iter()
+        .filter_map(|method| parse_class_method(class_file, method, &class_name))
+        .collect();
+
     Some(ParsedClass {
         package,
         class_name,
         is_interface,
         super_class,
         interfaces,
+        methods,
     })
+}
+
+fn parse_class_method(
+    class_file: &ClassFile,
+    method: &ristretto_classfile::Method,
+    class_name: &SharedString,
+) -> Option<ParsedMethod> {
+    let raw_name = class_file
+        .constant_pool
+        .try_get_utf8(method.name_index)
+        .ok()?;
+    let name = method_name_for_class(raw_name, class_name)?;
+    let descriptor = class_file
+        .constant_pool
+        .try_get_utf8(method.descriptor_index)
+        .ok()?;
+    let (params, return_type) = FieldType::parse_method_descriptor(descriptor).ok()?;
+
+    Some(ParsedMethod {
+        name,
+        params,
+        return_type,
+        modifiers: method_modifiers_from_access_flags(method.access_flags),
+    })
+}
+
+fn method_name_for_class(raw_name: &str, class_name: &SharedString) -> Option<SharedString> {
+    match raw_name {
+        "<clinit>" => None,
+        "<init>" => Some(class_name.clone()),
+        _ => Some(SharedString::new(raw_name)),
+    }
+}
+
+fn method_modifiers_from_access_flags(
+    access_flags: MethodAccessFlags,
+) -> rajac_types::MethodModifiers {
+    let mut bits = 0;
+    if access_flags.contains(MethodAccessFlags::PUBLIC) {
+        bits |= rajac_types::MethodModifiers::PUBLIC;
+    }
+    if access_flags.contains(MethodAccessFlags::PRIVATE) {
+        bits |= rajac_types::MethodModifiers::PRIVATE;
+    }
+    if access_flags.contains(MethodAccessFlags::PROTECTED) {
+        bits |= rajac_types::MethodModifiers::PROTECTED;
+    }
+    if access_flags.contains(MethodAccessFlags::STATIC) {
+        bits |= rajac_types::MethodModifiers::STATIC;
+    }
+    if access_flags.contains(MethodAccessFlags::FINAL) {
+        bits |= rajac_types::MethodModifiers::FINAL;
+    }
+    if access_flags.contains(MethodAccessFlags::ABSTRACT) {
+        bits |= rajac_types::MethodModifiers::ABSTRACT;
+    }
+    if access_flags.contains(MethodAccessFlags::NATIVE) {
+        bits |= rajac_types::MethodModifiers::NATIVE;
+    }
+    if access_flags.contains(MethodAccessFlags::SYNCHRONIZED) {
+        bits |= rajac_types::MethodModifiers::SYNCHRONIZED;
+    }
+    if access_flags.contains(MethodAccessFlags::STRICT) {
+        bits |= rajac_types::MethodModifiers::STRICTFP;
+    }
+
+    rajac_types::MethodModifiers(bits)
 }
 
 fn resolve_class_relationships(
@@ -291,17 +375,48 @@ fn resolve_class_relationships(
                 })
                 .collect();
 
-            Some((type_id, super_type_id, interface_type_ids))
+            Some((
+                type_id,
+                super_type_id,
+                interface_type_ids,
+                parsed_class.methods.clone(),
+            ))
         })
         .collect();
 
     // Second pass: Apply the relationships (only write to type_arena)
-    let type_arena = symbol_table.type_arena_mut();
-    for (type_id, super_type_id, interface_type_ids) in relationships {
+    let class_lookup = build_class_lookup(symbol_table);
+    let (type_arena, method_arena) = symbol_table.arenas_mut();
+    for (type_id, super_type_id, interface_type_ids, methods) in relationships {
+        let mut resolved_methods = Vec::with_capacity(methods.len());
+        for method in methods {
+            let params = method
+                .params
+                .iter()
+                .map(|param| resolve_field_type(param, &class_lookup, type_arena))
+                .collect::<Vec<_>>();
+            let return_type = match &method.return_type {
+                Some(field_type) => resolve_field_type(field_type, &class_lookup, type_arena),
+                None => void_type_id(type_arena),
+            };
+            let signature = rajac_types::MethodSignature {
+                name: method.name.clone(),
+                params,
+                return_type,
+                throws: Vec::new(),
+                modifiers: method.modifiers,
+            };
+            let method_id = method_arena.alloc(signature);
+            resolved_methods.push((method.name, method_id));
+        }
+
         let class_type = type_arena.get_mut(type_id);
         if let rajac_types::Type::Class(class_type_mut) = class_type {
             class_type_mut.superclass = super_type_id;
             class_type_mut.interfaces = interface_type_ids;
+            for (name, method_id) in resolved_methods {
+                class_type_mut.add_method(name, method_id);
+            }
         }
     }
 
@@ -331,6 +446,68 @@ fn find_type_id_for_class_impl(
     None
 }
 
+fn build_class_lookup(symbol_table: &SymbolTable) -> HashMap<String, rajac_types::TypeId> {
+    let mut lookup = HashMap::new();
+    for (package, table) in symbol_table.iter() {
+        for (name, symbol) in table.iter() {
+            let fqn = if package.is_empty() {
+                name.as_str().to_string()
+            } else {
+                format!("{package}.{}", name.as_str())
+            };
+            lookup.insert(fqn, symbol.ty);
+        }
+    }
+    lookup
+}
+
+fn resolve_field_type(
+    field_type: &FieldType,
+    class_lookup: &HashMap<String, rajac_types::TypeId>,
+    type_arena: &mut rajac_types::TypeArena,
+) -> rajac_types::TypeId {
+    match field_type {
+        FieldType::Base(base_type) => {
+            let primitive = primitive_type_from_base_type(base_type);
+            type_arena.alloc(rajac_types::Type::primitive(primitive))
+        }
+        FieldType::Object(class_name) => {
+            let fqn = class_name.replace('/', ".");
+            class_lookup
+                .get(&fqn)
+                .copied()
+                .unwrap_or(rajac_types::TypeId::INVALID)
+        }
+        FieldType::Array(component_type) => {
+            let element_type = resolve_field_type(component_type, class_lookup, type_arena);
+            if element_type == rajac_types::TypeId::INVALID {
+                rajac_types::TypeId::INVALID
+            } else {
+                type_arena.alloc(rajac_types::Type::array(element_type))
+            }
+        }
+    }
+}
+
+fn primitive_type_from_base_type(base_type: &BaseType) -> rajac_types::PrimitiveType {
+    match base_type {
+        BaseType::Boolean => rajac_types::PrimitiveType::Boolean,
+        BaseType::Byte => rajac_types::PrimitiveType::Byte,
+        BaseType::Char => rajac_types::PrimitiveType::Char,
+        BaseType::Short => rajac_types::PrimitiveType::Short,
+        BaseType::Int => rajac_types::PrimitiveType::Int,
+        BaseType::Long => rajac_types::PrimitiveType::Long,
+        BaseType::Float => rajac_types::PrimitiveType::Float,
+        BaseType::Double => rajac_types::PrimitiveType::Double,
+    }
+}
+
+fn void_type_id(type_arena: &mut rajac_types::TypeArena) -> rajac_types::TypeId {
+    type_arena.alloc(rajac_types::Type::primitive(
+        rajac_types::PrimitiveType::Void,
+    ))
+}
+
 use rajac_base::result::{RajacResult, ResultExt};
 use std::path::PathBuf;
 
@@ -342,5 +519,71 @@ mod tests {
     fn test_parse_class_file_name() {
         let classpath = Classpath::new();
         assert!(classpath.entries.is_empty());
+    }
+
+    #[test]
+    fn method_name_handles_init_and_clinit() {
+        let class_name = SharedString::new("Widget");
+        assert_eq!(
+            method_name_for_class("<init>", &class_name),
+            Some(SharedString::new("Widget"))
+        );
+        assert_eq!(method_name_for_class("<clinit>", &class_name), None);
+        assert_eq!(
+            method_name_for_class("run", &class_name),
+            Some(SharedString::new("run"))
+        );
+    }
+
+    #[test]
+    fn resolves_field_types_with_lookup_and_arrays() {
+        let mut type_arena = rajac_types::TypeArena::new();
+        let string_id = type_arena.alloc(rajac_types::Type::class(
+            rajac_types::ClassType::new(SharedString::new("String"))
+                .with_package(SharedString::new("java.lang")),
+        ));
+        let mut class_lookup = HashMap::new();
+        class_lookup.insert("java.lang.String".to_string(), string_id);
+
+        let object_type = FieldType::Object("java/lang/String".to_string());
+        assert_eq!(
+            resolve_field_type(&object_type, &class_lookup, &mut type_arena),
+            string_id
+        );
+
+        let int_type = FieldType::Base(BaseType::Int);
+        let int_id = resolve_field_type(&int_type, &class_lookup, &mut type_arena);
+        assert_eq!(
+            type_arena.get(int_id),
+            &rajac_types::Type::primitive(rajac_types::PrimitiveType::Int)
+        );
+
+        let array_type = FieldType::Array(Box::new(FieldType::Base(BaseType::Boolean)));
+        let array_id = resolve_field_type(&array_type, &class_lookup, &mut type_arena);
+        match type_arena.get(array_id) {
+            rajac_types::Type::Array(array) => {
+                let element_type = type_arena.get(array.element_type);
+                assert_eq!(
+                    element_type,
+                    &rajac_types::Type::primitive(rajac_types::PrimitiveType::Boolean)
+                );
+            }
+            other => panic!("expected array type, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn maps_access_flags_to_method_modifiers() {
+        let flags =
+            MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC | MethodAccessFlags::FINAL;
+        let modifiers = method_modifiers_from_access_flags(flags);
+        assert_eq!(
+            modifiers,
+            rajac_types::MethodModifiers(
+                rajac_types::MethodModifiers::PUBLIC
+                    | rajac_types::MethodModifiers::STATIC
+                    | rajac_types::MethodModifiers::FINAL
+            )
+        );
     }
 }

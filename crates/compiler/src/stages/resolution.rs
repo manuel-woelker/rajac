@@ -86,7 +86,7 @@
 
 //! let symbol_table = SymbolTable::new();
 
-//! resolution::resolve_identifiers(&mut compilation_units, &symbol_table);
+//! resolution::resolve_identifiers(&mut compilation_units, &mut symbol_table);
 
 //! println!("Resolved identifiers in {} compilation units", compilation_units.len());
 
@@ -104,12 +104,13 @@ optimization of the resolution algorithms without affecting other phases.
 
 use crate::CompilationUnit;
 use rajac_ast::{
-    Ast, AstArena, AstType, AstTypeId, ClassMemberId, Constructor, EnumDecl, ExprId, Field, Method,
-    ParamId, StmtId,
+    Ast, AstArena, AstType, AstTypeId, ClassDeclId, ClassMember, ClassMemberId, Constructor,
+    EnumDecl, ExprId, Field, Method, Modifiers, ParamId, StmtId,
 };
 use rajac_base::qualified_name::FullyQualifiedClassName as ResolvedName;
 use rajac_base::shared_string::SharedString;
 use rajac_symbols::SymbolTable;
+use rajac_types::{MethodModifiers, MethodSignature, PrimitiveType, Type, TypeId};
 
 /// Resolves identifiers and types in all compilation units.
 ///
@@ -120,7 +121,7 @@ use rajac_symbols::SymbolTable;
 /// # Parameters
 ///
 /// - `compilation_units` - Mutable slice of compilation units to resolve
-/// - `symbol_table` - Reference to the populated symbol table
+/// - `symbol_table` - Mutable reference to the populated symbol table
 ///
 /// # Resolution Process
 ///
@@ -148,7 +149,7 @@ use rajac_symbols::SymbolTable;
 /// let mut compilation_units = vec!/* parsed compilation units */;
 /// let symbol_table = SymbolTable::new();
 ///
-/// resolution::resolve_identifiers(&mut compilation_units, &symbol_table);
+/// resolution::resolve_identifiers(&mut compilation_units, &mut symbol_table);
 ///
 /// for unit in &compilation_units {
 ///     println!("Resolved compilation unit: {}", unit.source_file.as_str());
@@ -163,23 +164,30 @@ use rajac_symbols::SymbolTable;
 /// - Built-in types (String, Object) are always available
 /// - Fully qualified names bypass import resolution
 /// - Inner classes have special resolution rules
-pub fn resolve_identifiers(compilation_units: &mut [CompilationUnit], symbol_table: &SymbolTable) {
+pub fn resolve_identifiers(
+    compilation_units: &mut [CompilationUnit],
+    symbol_table: &mut SymbolTable,
+) {
     for unit in compilation_units.iter_mut() {
         resolve_compilation_unit(&unit.ast, &mut unit.arena, symbol_table);
     }
 }
 
 /// Resolves identifiers in a single compilation unit.
-fn resolve_compilation_unit(ast: &Ast, arena: &mut AstArena, symbol_table: &SymbolTable) {
-    let context = ResolveContext::new(ast, symbol_table);
+fn resolve_compilation_unit(ast: &Ast, arena: &mut AstArena, symbol_table: &mut SymbolTable) {
+    {
+        let context = ResolveContext::new(ast, symbol_table);
 
-    for stmt_id in &ast.statements {
-        resolve_stmt(*stmt_id, arena, &context);
+        for stmt_id in &ast.statements {
+            resolve_stmt(*stmt_id, arena, &context);
+        }
+
+        for class_id in &ast.classes {
+            resolve_class_decl(*class_id, arena, &context);
+        }
     }
 
-    for class_id in &ast.classes {
-        resolve_class_decl(*class_id, arena, &context);
-    }
+    populate_compilation_unit_methods(ast, arena, symbol_table);
 }
 
 /// Context for resolving identifiers using the symbol table, package, and imports.
@@ -704,4 +712,237 @@ fn split_import_name(segments: &[SharedString]) -> Option<(SharedString, SharedS
     let (name, package) = segments.split_last()?;
     let package = package_name_from_segments(package);
     Some((package, name.clone()))
+}
+
+fn populate_compilation_unit_methods(
+    ast: &Ast,
+    arena: &mut AstArena,
+    symbol_table: &mut SymbolTable,
+) {
+    let package_name = ast
+        .package
+        .as_ref()
+        .map(|p| package_name_from_segments(&p.name.segments))
+        .unwrap_or_else(|| SharedString::new(""));
+
+    for class_id in &ast.classes {
+        populate_class_methods(*class_id, arena, symbol_table, &package_name);
+    }
+}
+
+fn populate_class_methods(
+    class_id: ClassDeclId,
+    arena: &mut AstArena,
+    symbol_table: &mut SymbolTable,
+    package_name: &SharedString,
+) {
+    let (class_name, members) = {
+        let class = arena.class_decl(class_id);
+        (class.name.name.clone(), class.members.clone())
+    };
+
+    let nested_classes: Vec<ClassDeclId> = members
+        .iter()
+        .filter_map(
+            |member_id| match &arena.class_members[member_id.0 as usize] {
+                ClassMember::NestedClass(class_id)
+                | ClassMember::NestedInterface(class_id)
+                | ClassMember::NestedRecord(class_id)
+                | ClassMember::NestedAnnotation(class_id) => Some(*class_id),
+                _ => None,
+            },
+        )
+        .collect();
+
+    let class_type_id = symbol_table
+        .get_package(package_name.as_str())
+        .and_then(|package| package.get(class_name.as_str()))
+        .map(|symbol| symbol.ty);
+
+    if let Some(class_type_id) = class_type_id {
+        let (type_arena, method_arena) = symbol_table.arenas_mut();
+        let mut resolved_methods = Vec::new();
+        for member_id in &members {
+            match arena.class_members[member_id.0 as usize].clone() {
+                ClassMember::Method(method) => {
+                    let signature = method_signature_from_method(
+                        &method,
+                        arena,
+                        type_arena,
+                        method_modifiers_from_ast(&method.modifiers),
+                    );
+                    let method_id = method_arena.alloc(signature);
+                    resolved_methods.push((method.name.name.clone(), method_id));
+                }
+                ClassMember::Constructor(constructor) => {
+                    let signature = method_signature_from_constructor(
+                        &constructor,
+                        &class_name,
+                        arena,
+                        type_arena,
+                        method_modifiers_from_ast(&constructor.modifiers),
+                    );
+                    let method_id = method_arena.alloc(signature);
+                    resolved_methods.push((class_name.clone(), method_id));
+                }
+                _ => {}
+            }
+        }
+
+        if let Type::Class(class_type) = type_arena.get_mut(class_type_id) {
+            for (name, method_id) in resolved_methods {
+                class_type.add_method(name, method_id);
+            }
+        }
+    }
+
+    for nested_class_id in nested_classes {
+        populate_class_methods(nested_class_id, arena, symbol_table, package_name);
+    }
+}
+
+fn method_signature_from_method(
+    method: &Method,
+    arena: &mut AstArena,
+    type_arena: &mut rajac_types::TypeArena,
+    modifiers: MethodModifiers,
+) -> MethodSignature {
+    let params = method
+        .params
+        .iter()
+        .map(|param_id| {
+            let param = arena.param(*param_id);
+            type_id_for_ast_type(param.ty, arena, type_arena)
+        })
+        .collect();
+    let return_type = type_id_for_ast_type(method.return_ty, arena, type_arena);
+    let throws = method
+        .throws
+        .iter()
+        .map(|ty| type_id_for_ast_type(*ty, arena, type_arena))
+        .collect();
+
+    MethodSignature {
+        name: method.name.name.clone(),
+        params,
+        return_type,
+        throws,
+        modifiers,
+    }
+}
+
+fn method_signature_from_constructor(
+    constructor: &Constructor,
+    class_name: &SharedString,
+    arena: &mut AstArena,
+    type_arena: &mut rajac_types::TypeArena,
+    modifiers: MethodModifiers,
+) -> MethodSignature {
+    let params = constructor
+        .params
+        .iter()
+        .map(|param_id| {
+            let param = arena.param(*param_id);
+            type_id_for_ast_type(param.ty, arena, type_arena)
+        })
+        .collect();
+    let throws = constructor
+        .throws
+        .iter()
+        .map(|ty| type_id_for_ast_type(*ty, arena, type_arena))
+        .collect();
+
+    MethodSignature {
+        name: class_name.clone(),
+        params,
+        return_type: void_type_id(type_arena),
+        throws,
+        modifiers,
+    }
+}
+
+fn method_modifiers_from_ast(modifiers: &Modifiers) -> MethodModifiers {
+    let mut bits = 0;
+    if modifiers.is_public() {
+        bits |= MethodModifiers::PUBLIC;
+    }
+    if modifiers.is_private() {
+        bits |= MethodModifiers::PRIVATE;
+    }
+    if modifiers.is_protected() {
+        bits |= MethodModifiers::PROTECTED;
+    }
+    if modifiers.is_static() {
+        bits |= MethodModifiers::STATIC;
+    }
+    if modifiers.is_final() {
+        bits |= MethodModifiers::FINAL;
+    }
+    if modifiers.is_abstract() {
+        bits |= MethodModifiers::ABSTRACT;
+    }
+    if modifiers.0 & Modifiers::NATIVE != 0 {
+        bits |= MethodModifiers::NATIVE;
+    }
+    if modifiers.0 & Modifiers::SYNCHRONIZED != 0 {
+        bits |= MethodModifiers::SYNCHRONIZED;
+    }
+    if modifiers.0 & Modifiers::STRICTFP != 0 {
+        bits |= MethodModifiers::STRICTFP;
+    }
+
+    MethodModifiers(bits)
+}
+
+fn type_id_for_ast_type(
+    type_id: AstTypeId,
+    arena: &mut AstArena,
+    type_arena: &mut rajac_types::TypeArena,
+) -> TypeId {
+    let existing = arena.ty(type_id).ty();
+    if existing != TypeId::INVALID {
+        return existing;
+    }
+
+    match arena.ty(type_id) {
+        AstType::Primitive { kind, .. } => {
+            let primitive = primitive_type_from_ast(kind);
+            let resolved = type_arena.alloc(Type::primitive(primitive));
+            if let AstType::Primitive { ty, .. } = arena.ty_mut(type_id) {
+                *ty = resolved;
+            }
+            resolved
+        }
+        AstType::Array { element_type, .. } => {
+            let element = type_id_for_ast_type(*element_type, arena, type_arena);
+            if element == TypeId::INVALID {
+                TypeId::INVALID
+            } else {
+                let resolved = type_arena.alloc(Type::array(element));
+                if let AstType::Array { ty, .. } = arena.ty_mut(type_id) {
+                    *ty = resolved;
+                }
+                resolved
+            }
+        }
+        _ => existing,
+    }
+}
+
+fn primitive_type_from_ast(kind: &rajac_ast::PrimitiveType) -> PrimitiveType {
+    match kind {
+        rajac_ast::PrimitiveType::Byte => PrimitiveType::Byte,
+        rajac_ast::PrimitiveType::Short => PrimitiveType::Short,
+        rajac_ast::PrimitiveType::Int => PrimitiveType::Int,
+        rajac_ast::PrimitiveType::Long => PrimitiveType::Long,
+        rajac_ast::PrimitiveType::Float => PrimitiveType::Float,
+        rajac_ast::PrimitiveType::Double => PrimitiveType::Double,
+        rajac_ast::PrimitiveType::Char => PrimitiveType::Char,
+        rajac_ast::PrimitiveType::Boolean => PrimitiveType::Boolean,
+        rajac_ast::PrimitiveType::Void => PrimitiveType::Void,
+    }
+}
+
+fn void_type_id(type_arena: &mut rajac_types::TypeArena) -> TypeId {
+    type_arena.alloc(Type::primitive(PrimitiveType::Void))
 }
