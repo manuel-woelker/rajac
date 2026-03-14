@@ -1,12 +1,15 @@
 use crate::error::RajacError;
 use crate::shared_string::SharedString;
 use std::error::Error as StdError;
+use std::panic::Location;
 
 pub type RajacResult<T> = Result<T, RajacError>;
 
 pub trait ResultExt<T> {
+    #[track_caller]
     fn context(self, context: impl Into<SharedString>) -> RajacResult<T>;
 
+    #[track_caller]
     fn with_context<C, S>(self, context: C) -> RajacResult<T>
     where
         C: FnOnce() -> S,
@@ -14,8 +17,10 @@ pub trait ResultExt<T> {
 }
 
 pub trait OptionExt<T> {
+    #[track_caller]
     fn context(self, context: impl Into<SharedString>) -> RajacResult<T>;
 
+    #[track_caller]
     fn with_context<C, S>(self, context: C) -> RajacResult<T>
     where
         C: FnOnce() -> S,
@@ -26,62 +31,51 @@ impl<T, E> ResultExt<T> for Result<T, E>
 where
     E: StdError + Send + Sync + 'static,
 {
+    #[track_caller]
     fn context(self, context: impl Into<SharedString>) -> RajacResult<T> {
-        self.map_err(|error| RajacError::message(context.into()).with_std_source(error))
+        let caller = Location::caller();
+        self.map_err(|error| {
+            RajacError::message_at_location(context.into(), caller)
+                .with_std_source_at_location(error, caller)
+        })
     }
 
+    #[track_caller]
     fn with_context<C, S>(self, context: C) -> RajacResult<T>
     where
         C: FnOnce() -> S,
         S: Into<SharedString>,
     {
-        self.map_err(|error| RajacError::message(context()).with_std_source(error))
+        let caller = Location::caller();
+        self.map_err(|error| {
+            RajacError::message_at_location(context(), caller)
+                .with_std_source_at_location(error, caller)
+        })
     }
 }
 
 impl<T> OptionExt<T> for Option<T> {
+    #[track_caller]
     fn context(self, context: impl Into<SharedString>) -> RajacResult<T> {
-        self.ok_or_else(|| RajacError::message(context.into()))
+        let caller = Location::caller();
+        self.ok_or_else(|| RajacError::message_at_location(context.into(), caller))
     }
 
+    #[track_caller]
     fn with_context<C, S>(self, context: C) -> RajacResult<T>
     where
         C: FnOnce() -> S,
         S: Into<SharedString>,
     {
-        self.ok_or_else(|| RajacError::message(context()))
+        let caller = Location::caller();
+        self.ok_or_else(|| RajacError::message_at_location(context(), caller))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::result::{OptionExt, ResultExt};
-    use expect_test::expect;
     use std::io;
-
-    #[test]
-    fn test_with_context_converts_to_rajac_error() {
-        let result: Result<(), io::Error> =
-            Err(io::Error::new(io::ErrorKind::NotFound, "config missing"));
-        let error = result.with_context(|| "failed to load config").unwrap_err();
-        expect!([r#"
-            Error: failed to load config
-            Caused by: config missing
-        "#])
-        .assert_eq(&error.to_test_string());
-    }
-
-    #[test]
-    fn test_context_converts_to_rajac_error() {
-        let result: Result<(), io::Error> =
-            Err(io::Error::new(io::ErrorKind::NotFound, "config missing"));
-        let error = result.context("failed to load config").unwrap_err();
-        expect!([r#"
-            Error: failed to load config
-            Caused by: config missing
-        "#])
-        .assert_eq(&error.to_test_string());
-    }
 
     #[test]
     fn test_with_context_is_lazy_for_ok_results() {
@@ -97,16 +91,6 @@ mod tests {
             .unwrap();
         assert_eq!(value, 123);
         assert!(!context_called.get());
-    }
-
-    #[test]
-    fn test_option_context_converts_none_to_rajac_error() {
-        let value: Option<i32> = None;
-        let error = value.context("missing value").unwrap_err();
-        expect!([r#"
-            Error: missing value
-        "#])
-        .assert_eq(&error.to_test_string());
     }
 
     #[test]

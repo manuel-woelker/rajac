@@ -1,5 +1,6 @@
 use std::error::Error as StdError;
 use std::fmt::{Debug, Display, Formatter};
+use std::panic::Location;
 
 use crate::shared_string::SharedString;
 use crate::unansi;
@@ -23,19 +24,45 @@ impl Display for ErrorKind {
 pub struct RajacError {
     kind: ErrorKind,
     source: Option<Box<RajacError>>,
+    location: &'static Location<'static>,
 }
 
 impl RajacError {
+    #[track_caller]
     pub fn new(kind: ErrorKind) -> Self {
-        Self { kind, source: None }
+        Self::at_location(kind, Location::caller())
     }
 
+    pub fn at_location(kind: ErrorKind, location: &'static Location<'static>) -> Self {
+        Self {
+            kind,
+            source: None,
+            location,
+        }
+    }
+
+    #[track_caller]
     pub fn message(s: impl Into<SharedString>) -> Self {
-        Self::new(ErrorKind::Message(s.into()))
+        Self::message_at_location(s, Location::caller())
     }
 
+    pub fn message_at_location(
+        s: impl Into<SharedString>,
+        location: &'static Location<'static>,
+    ) -> Self {
+        Self::at_location(ErrorKind::Message(s.into()), location)
+    }
+
+    #[track_caller]
     pub fn std(error: impl StdError + Send + Sync + 'static) -> Self {
-        Self::new(ErrorKind::Std(Box::new(error)))
+        Self::std_at_location(error, Location::caller())
+    }
+
+    pub fn std_at_location(
+        error: impl StdError + Send + Sync + 'static,
+        location: &'static Location<'static>,
+    ) -> Self {
+        Self::at_location(ErrorKind::Std(Box::new(error)), location)
     }
 
     pub fn kind(&self) -> &ErrorKind {
@@ -46,20 +73,52 @@ impl RajacError {
         self.source.as_deref()
     }
 
+    pub fn location(&self) -> &'static Location<'static> {
+        self.location
+    }
+
     pub fn with_source(mut self, source: impl Into<RajacError>) -> Self {
         self.source = Some(Box::new(source.into()));
         self
     }
 
-    pub fn with_std_source(self, source: impl StdError + Send + Sync + 'static) -> Self {
-        self.with_source(RajacError::std(source))
+    #[track_caller]
+    pub fn with_std_source(mut self, source: impl StdError + Send + Sync + 'static) -> Self {
+        self.source = Some(Box::new(RajacError::std_at_location(
+            source,
+            Location::caller(),
+        )));
+        self
+    }
+
+    pub fn with_std_source_at_location(
+        mut self,
+        source: impl StdError + Send + Sync + 'static,
+        location: &'static Location<'static>,
+    ) -> Self {
+        self.source = Some(Box::new(RajacError::std_at_location(source, location)));
+        self
     }
 
     pub fn write_to(&self, write: &mut dyn std::fmt::Write) -> std::fmt::Result {
         writeln!(write, "Error: {}", self.kind)?;
+        writeln!(
+            write,
+            "At: {}:{}:{}",
+            self.location.file(),
+            self.location.line(),
+            self.location.column()
+        )?;
         let mut source = self.source.as_deref();
         while let Some(error) = source {
             writeln!(write, "Caused by: {}", error.kind)?;
+            writeln!(
+                write,
+                "At: {}:{}:{}",
+                error.location.file(),
+                error.location.line(),
+                error.location.column()
+            )?;
             source = error.source.as_deref();
         }
         Ok(())
@@ -76,6 +135,7 @@ impl<T> From<T> for RajacError
 where
     T: StdError + Send + Sync + 'static,
 {
+    #[track_caller]
     fn from(value: T) -> Self {
         Self::std(value)
     }
@@ -101,15 +161,15 @@ pub use bail;
 mod tests {
     use std::io;
 
-    use expect_test::expect;
-
     use crate::error::RajacError;
     use crate::result::RajacResult;
 
     #[test]
     fn test_err() {
         let err = err!("test {}", 123);
-        assert_eq!(err.to_test_string(), "Error: test 123\n");
+        let rendered = err.to_test_string();
+        assert!(rendered.contains("Error: test 123\n"));
+        assert!(rendered.contains("At: crates/base/src/error.rs:"));
     }
 
     #[test]
@@ -118,28 +178,28 @@ mod tests {
             bail!("test {}", 123);
         })()
         .unwrap_err();
-        assert_eq!(err.to_test_string(), "Error: test 123\n");
+        let rendered = err.to_test_string();
+        assert!(rendered.contains("Error: test 123\n"));
+        assert!(rendered.contains("At: crates/base/src/error.rs:"));
     }
 
     #[test]
     fn test_error_chaining() {
         let err = RajacError::message("failed to read file")
             .with_source(RajacError::message("missing file"));
-        expect!([r#"
-            Error: failed to read file
-            Caused by: missing file
-        "#])
-        .assert_eq(&err.to_test_string());
+        let rendered = err.to_test_string();
+        assert!(rendered.contains("Error: failed to read file\n"));
+        assert!(rendered.contains("Caused by: missing file\n"));
+        assert_eq!(rendered.matches("At: crates/base/src/error.rs:").count(), 2);
     }
 
     #[test]
     fn test_with_std_source() {
         let io_error = io::Error::new(io::ErrorKind::NotFound, "missing config");
         let err = RajacError::message("cannot initialize").with_std_source(io_error);
-        expect!([r#"
-            Error: cannot initialize
-            Caused by: missing config
-        "#])
-        .assert_eq(&err.to_test_string());
+        let rendered = err.to_test_string();
+        assert!(rendered.contains("Error: cannot initialize\n"));
+        assert!(rendered.contains("Caused by: missing config\n"));
+        assert_eq!(rendered.matches("At: crates/base/src/error.rs:").count(), 2);
     }
 }

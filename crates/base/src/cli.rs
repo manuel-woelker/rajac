@@ -75,7 +75,9 @@ mod tests {
         expect!([r#"
             verification failed
             Error: failed to verify
+            At: crates/base/src/cli.rs:72:21
             Caused by: missing reference output
+            At: crates/base/src/cli.rs:73:26
 
             Cause chain:
               1. missing reference output
