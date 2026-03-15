@@ -54,6 +54,10 @@ impl<'a> Parser<'a> {
             | TokenKind::KwDouble
             | TokenKind::KwVoid
             | TokenKind::Ident => {
+                if self.peek() == TokenKind::Ident && self.peek_n(1) == TokenKind::Colon {
+                    return self.parse_label_stmt();
+                }
+
                 // Try to parse as local variable or expression statement
                 if self.is_local_var_decl() {
                     self.parse_local_var_decl()
@@ -293,6 +297,19 @@ impl<'a> Parser<'a> {
 
         let stmt = Stmt::Switch { expr, cases };
         Some(self.arena.alloc_stmt(stmt))
+    }
+
+    fn parse_label_stmt(&mut self) -> Option<StmtId> {
+        let name = if self.peek() == TokenKind::Ident {
+            Ident::new(self.ident_text())
+        } else {
+            return None;
+        };
+        self.bump();
+        self.expect(TokenKind::Colon);
+        let body = self.parse_statement()?;
+
+        Some(self.arena.alloc_stmt(Stmt::Label(name, body)))
     }
 
     fn parse_return_stmt(&mut self) -> Option<StmtId> {

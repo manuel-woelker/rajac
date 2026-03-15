@@ -52,7 +52,8 @@ impl<'a> Parser<'a> {
     /// Move to the next token
     pub fn bump(&mut self) {
         if self.current.kind != TokenKind::Eof {
-            if let Some(token) = self.lexer.next() {
+            self.fill_lookahead(1);
+            if let Some(token) = self.tokens.pop_front() {
                 self.current = token;
             } else {
                 self.current = Token {
@@ -66,6 +67,19 @@ impl<'a> Parser<'a> {
     /// Peek at the current token without consuming it
     pub fn peek(&self) -> TokenKind {
         self.current.kind
+    }
+
+    /// Peek ahead by `n` tokens without consuming them.
+    pub fn peek_n(&mut self, n: usize) -> TokenKind {
+        if n == 0 {
+            return self.peek();
+        }
+
+        self.fill_lookahead(n);
+        self.tokens
+            .get(n - 1)
+            .map(|token| token.kind)
+            .unwrap_or(TokenKind::Eof)
     }
 
     /// Get the span of the current token
@@ -99,6 +113,15 @@ impl<'a> Parser<'a> {
             true
         } else {
             false
+        }
+    }
+
+    fn fill_lookahead(&mut self, count: usize) {
+        while self.tokens.len() < count {
+            let Some(token) = self.lexer.next() else {
+                break;
+            };
+            self.tokens.push_back(token);
         }
     }
 
@@ -1119,6 +1142,22 @@ mod tests {
                             break;
                         default:
                             System.out.println("Other day");
+                    }
+                }
+            }
+        "#;
+        let result = parse_src(source);
+        assert_eq!(result.ast.classes.len(), 1);
+    }
+
+    #[test]
+    fn test_labeled_statement() {
+        let source = r#"
+            class Test {
+                void test(int limit) {
+                    outer: while (limit > 0) {
+                        limit--;
+                        continue outer;
                     }
                 }
             }

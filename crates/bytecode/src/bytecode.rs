@@ -1,12 +1,12 @@
 use rajac_ast::{
     AstArena, AstType, Expr as AstExpr, ExprId, Literal, LiteralKind, ParamId, PrimitiveType, Stmt,
-    StmtId,
+    StmtId, SwitchCase, SwitchLabel,
 };
 use rajac_base::result::RajacResult;
 use rajac_symbols::SymbolTable;
 use rajac_types::{Ident, Type, TypeArena, TypeId};
 use ristretto_classfile::ConstantPool;
-use ristretto_classfile::attributes::Instruction;
+use ristretto_classfile::attributes::{Instruction, LookupSwitch, TableSwitch};
 
 pub struct BytecodeEmitter {
     code_items: Vec<CodeItem>,
@@ -34,6 +34,10 @@ impl BytecodeEmitter {
         self.code_items.push(CodeItem::Label(label));
     }
 
+    fn emit_switch(&mut self, switch: SwitchItem) {
+        self.code_items.push(CodeItem::Switch(switch));
+    }
+
     fn is_empty(&self) -> bool {
         self.code_items
             .iter()
@@ -43,7 +47,7 @@ impl BytecodeEmitter {
     fn last_instruction(&self) -> Option<&Instruction> {
         self.code_items.iter().rev().find_map(|item| match item {
             CodeItem::Instruction(instruction) => Some(instruction),
-            CodeItem::Branch { .. } | CodeItem::Label(_) => None,
+            CodeItem::Branch { .. } | CodeItem::Switch(_) | CodeItem::Label(_) => None,
         })
     }
 
@@ -54,6 +58,9 @@ impl BytecodeEmitter {
         for item in &self.code_items {
             match item {
                 CodeItem::Instruction(_) | CodeItem::Branch { .. } => {
+                    offset = offset.saturating_add(1);
+                }
+                CodeItem::Switch(_) => {
                     offset = offset.saturating_add(1);
                 }
                 CodeItem::Label(label) => {
@@ -73,6 +80,9 @@ impl BytecodeEmitter {
         */
         let needs_terminal_nop = self.code_items.iter().any(|item| match item {
             CodeItem::Branch { target, .. } => labels.get(target).copied() == Some(terminal_offset),
+            CodeItem::Switch(switch) => switch
+                .targets()
+                .any(|target| labels.get(&target).copied() == Some(terminal_offset)),
             CodeItem::Instruction(_) | CodeItem::Label(_) => false,
         });
 
@@ -82,6 +92,9 @@ impl BytecodeEmitter {
                 CodeItem::Branch { kind, target } => {
                     let offset = labels.get(target).copied().unwrap_or_default();
                     instructions.push(branch_instruction(*kind, offset));
+                }
+                CodeItem::Switch(switch) => {
+                    instructions.push(switch_instruction(switch, &labels));
                 }
                 CodeItem::Label(_) => {}
             }
@@ -112,6 +125,7 @@ pub struct CodeGenerator<'arena> {
     max_locals: u16,
     next_local_slot: u16,
     local_vars: std::collections::HashMap<String, LocalVar>,
+    control_flow_stack: Vec<ControlFlowFrame>,
     next_label_id: u32,
 }
 
@@ -133,6 +147,7 @@ impl<'arena> CodeGenerator<'arena> {
             max_locals: 1,
             next_local_slot: 1, // slot 0 is for 'this'
             local_vars: std::collections::HashMap::new(),
+            control_flow_stack: Vec::new(),
             next_label_id: 0,
         }
     }
@@ -224,6 +239,11 @@ impl<'arena> CodeGenerator<'arena> {
         self.emitter.emit_branch(kind, label);
     }
 
+    fn emit_switch_instruction(&mut self, switch: SwitchItem) {
+        self.current_stack = (self.current_stack - 1).max(0);
+        self.emitter.emit_switch(switch);
+    }
+
     pub fn emit_statement(&mut self, stmt_id: StmtId) -> RajacResult<()> {
         let stmt = self.arena.stmt(stmt_id);
         match stmt {
@@ -281,39 +301,18 @@ impl<'arena> CodeGenerator<'arena> {
                     self.bind_label(else_label);
                     self.emit_statement(*else_branch)?;
                 } else {
-                    let then_label = self.new_label();
                     let end_label = self.new_label();
 
-                    self.emit_condition(*condition, then_label, end_label)?;
-                    self.bind_label(then_label);
+                    self.emit_false_branch_condition(*condition, end_label)?;
                     self.emit_statement(*then_branch)?;
                     self.bind_label(end_label);
                 }
             }
             Stmt::While { condition, body } => {
-                let loop_head = self.new_label();
-                let loop_end = self.new_label();
-
-                self.bind_label(loop_head);
-                self.emit_false_branch_condition(*condition, loop_end)?;
-                self.emit_statement(*body)?;
-
-                if !self.statement_terminates(*body) {
-                    self.emit_branch(BranchKind::Goto, loop_head);
-                    self.current_stack = 0;
-                }
-
-                self.bind_label(loop_end);
+                self.emit_while_statement(*condition, *body, None)?;
             }
             Stmt::DoWhile { body, condition } => {
-                let loop_body = self.new_label();
-
-                self.bind_label(loop_body);
-                self.emit_statement(*body)?;
-
-                if !self.statement_terminates(*body) {
-                    self.emit_true_branch_condition(*condition, loop_body)?;
-                }
+                self.emit_do_while_statement(*body, *condition, None)?;
             }
             Stmt::For {
                 init,
@@ -321,36 +320,280 @@ impl<'arena> CodeGenerator<'arena> {
                 update,
                 body,
             } => {
-                if let Some(init) = init {
-                    self.emit_for_init(init)?;
-                }
-
-                let loop_head = self.new_label();
-                let loop_end = self.new_label();
-
-                self.bind_label(loop_head);
-
-                if let Some(condition) = condition {
-                    self.emit_false_branch_condition(*condition, loop_end)?;
-                }
-
-                self.emit_statement(*body)?;
-
-                if !self.statement_terminates(*body) {
-                    if let Some(update) = update {
-                        self.emit_expression(*update)?;
-                    }
-                    self.emit_branch(BranchKind::Goto, loop_head);
-                    self.current_stack = 0;
-                }
-
-                self.bind_label(loop_end);
+                self.emit_for_statement(init.clone(), *condition, *update, *body, None)?;
             }
-            Stmt::Break(_) | Stmt::Continue(_) | Stmt::Label(_, _) | Stmt::Switch { .. } => {}
+            Stmt::Switch { expr, cases } => {
+                self.emit_switch_statement(*expr, cases)?;
+            }
+            Stmt::Break(label) => {
+                self.emit_break_statement(label.as_ref());
+            }
+            Stmt::Continue(label) => {
+                self.emit_continue_statement(label.as_ref());
+            }
+            Stmt::Label(name, body) => match self.arena.stmt(*body).clone() {
+                Stmt::While { condition, body } => {
+                    self.emit_while_statement(condition, body, Some(name.clone()))?;
+                }
+                Stmt::DoWhile { body, condition } => {
+                    self.emit_do_while_statement(body, condition, Some(name.clone()))?;
+                }
+                Stmt::For {
+                    init,
+                    condition,
+                    update,
+                    body,
+                } => {
+                    self.emit_for_statement(init, condition, update, body, Some(name.clone()))?;
+                }
+                _ => {
+                    let end_label = self.new_label();
+                    self.push_control_flow(ControlFlowFrame {
+                        label_name: Some(name.clone()),
+                        break_label: end_label,
+                        continue_label: None,
+                        supports_unlabeled_break: false,
+                    });
+                    self.emit_statement(*body)?;
+                    self.pop_control_flow();
+                    self.bind_label(end_label);
+                }
+            },
             Stmt::Throw(_) => {}
             Stmt::Try { .. } | Stmt::Synchronized { .. } => {}
         }
         Ok(())
+    }
+
+    fn emit_while_statement(
+        &mut self,
+        condition: ExprId,
+        body: StmtId,
+        label_name: Option<Ident>,
+    ) -> RajacResult<()> {
+        let loop_head = self.new_label();
+        let loop_end = self.new_label();
+
+        self.push_control_flow(ControlFlowFrame {
+            label_name,
+            break_label: loop_end,
+            continue_label: Some(loop_head),
+            supports_unlabeled_break: true,
+        });
+
+        self.bind_label(loop_head);
+        self.emit_false_branch_condition(condition, loop_end)?;
+        self.emit_statement(body)?;
+
+        if !self.statement_terminates(body) {
+            self.emit_branch(BranchKind::Goto, loop_head);
+            self.current_stack = 0;
+        }
+
+        self.pop_control_flow();
+        self.bind_label(loop_end);
+        Ok(())
+    }
+
+    fn emit_do_while_statement(
+        &mut self,
+        body: StmtId,
+        condition: ExprId,
+        label_name: Option<Ident>,
+    ) -> RajacResult<()> {
+        let loop_body = self.new_label();
+        let loop_continue = self.new_label();
+        let loop_end = self.new_label();
+
+        self.push_control_flow(ControlFlowFrame {
+            label_name,
+            break_label: loop_end,
+            continue_label: Some(loop_continue),
+            supports_unlabeled_break: true,
+        });
+
+        self.bind_label(loop_body);
+        self.emit_statement(body)?;
+
+        if !self.statement_terminates(body) {
+            self.bind_label(loop_continue);
+            self.emit_true_branch_condition(condition, loop_body)?;
+        }
+
+        self.pop_control_flow();
+        self.bind_label(loop_end);
+        Ok(())
+    }
+
+    fn emit_for_statement(
+        &mut self,
+        init: Option<rajac_ast::ForInit>,
+        condition: Option<ExprId>,
+        update: Option<ExprId>,
+        body: StmtId,
+        label_name: Option<Ident>,
+    ) -> RajacResult<()> {
+        if let Some(init) = init.as_ref() {
+            self.emit_for_init(init)?;
+        }
+
+        let loop_head = self.new_label();
+        let loop_continue = self.new_label();
+        let loop_end = self.new_label();
+
+        self.push_control_flow(ControlFlowFrame {
+            label_name,
+            break_label: loop_end,
+            continue_label: Some(loop_continue),
+            supports_unlabeled_break: true,
+        });
+
+        self.bind_label(loop_head);
+
+        if let Some(condition) = condition {
+            self.emit_false_branch_condition(condition, loop_end)?;
+        }
+
+        self.emit_statement(body)?;
+
+        if !self.statement_terminates(body) {
+            self.bind_label(loop_continue);
+            if let Some(update) = update {
+                self.emit_expression(update)?;
+            }
+            self.emit_branch(BranchKind::Goto, loop_head);
+            self.current_stack = 0;
+        }
+
+        self.pop_control_flow();
+        self.bind_label(loop_end);
+        Ok(())
+    }
+
+    fn emit_switch_statement(&mut self, expr: ExprId, cases: &[SwitchCase]) -> RajacResult<()> {
+        let end_label = self.new_label();
+        let mut case_labels = Vec::with_capacity(cases.len());
+        let mut default_label = end_label;
+        let mut switch_pairs = Vec::new();
+
+        for case in cases {
+            let case_label = self.new_label();
+            case_labels.push(case_label);
+
+            for label in &case.labels {
+                match label {
+                    SwitchLabel::Case(expr_id) => {
+                        if let Some(value) = self.switch_case_value(*expr_id) {
+                            switch_pairs.push((value, case_label));
+                        }
+                    }
+                    SwitchLabel::Default => {
+                        default_label = case_label;
+                    }
+                }
+            }
+        }
+
+        switch_pairs.sort_by_key(|(value, _)| *value);
+
+        self.emit_expression(expr)?;
+        self.emit_switch_instruction(choose_switch_item(default_label, &switch_pairs));
+        self.push_control_flow(ControlFlowFrame {
+            label_name: None,
+            break_label: end_label,
+            continue_label: None,
+            supports_unlabeled_break: true,
+        });
+
+        for (case, case_label) in cases.iter().zip(case_labels.iter().copied()) {
+            self.bind_label(case_label);
+            for &stmt_id in &case.body {
+                self.emit_statement(stmt_id)?;
+            }
+        }
+
+        self.pop_control_flow();
+        self.bind_label(end_label);
+        Ok(())
+    }
+
+    fn emit_break_statement(&mut self, label: Option<&Ident>) {
+        if let Some(target) = self.resolve_break_target(label) {
+            self.emit_branch(BranchKind::Goto, target);
+            self.current_stack = 0;
+        }
+    }
+
+    fn emit_continue_statement(&mut self, label: Option<&Ident>) {
+        if let Some(target) = self.resolve_continue_target(label) {
+            self.emit_branch(BranchKind::Goto, target);
+            self.current_stack = 0;
+        }
+    }
+
+    fn push_control_flow(&mut self, frame: ControlFlowFrame) {
+        self.control_flow_stack.push(frame);
+    }
+
+    fn pop_control_flow(&mut self) {
+        let _ = self.control_flow_stack.pop();
+    }
+
+    fn resolve_break_target(&self, label: Option<&Ident>) -> Option<LabelId> {
+        match label {
+            Some(label) => self
+                .control_flow_stack
+                .iter()
+                .rev()
+                .find(|frame| {
+                    frame
+                        .label_name
+                        .as_ref()
+                        .is_some_and(|name| name.name == label.name)
+                })
+                .map(|frame| frame.break_label),
+            None => self
+                .control_flow_stack
+                .iter()
+                .rev()
+                .find(|frame| frame.supports_unlabeled_break)
+                .map(|frame| frame.break_label),
+        }
+    }
+
+    fn resolve_continue_target(&self, label: Option<&Ident>) -> Option<LabelId> {
+        match label {
+            Some(label) => self
+                .control_flow_stack
+                .iter()
+                .rev()
+                .find(|frame| {
+                    frame.continue_label.is_some()
+                        && frame
+                            .label_name
+                            .as_ref()
+                            .is_some_and(|name| name.name == label.name)
+                })
+                .and_then(|frame| frame.continue_label),
+            None => self
+                .control_flow_stack
+                .iter()
+                .rev()
+                .find_map(|frame| frame.continue_label),
+        }
+    }
+
+    fn switch_case_value(&self, expr_id: ExprId) -> Option<i32> {
+        match self.arena.expr(expr_id) {
+            AstExpr::Literal(literal) => match literal.kind {
+                LiteralKind::Int => parse_int_literal(literal.value.as_str()),
+                LiteralKind::Char => {
+                    parse_char_literal(literal.value.as_str()).map(|value| value as i32)
+                }
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     pub fn emit_expression(&mut self, expr_id: ExprId) -> RajacResult<()> {
@@ -1682,6 +1925,14 @@ struct LocalVar {
     kind: LocalVarKind,
 }
 
+#[derive(Clone, Debug)]
+struct ControlFlowFrame {
+    label_name: Option<Ident>,
+    break_label: LabelId,
+    continue_label: Option<LabelId>,
+    supports_unlabeled_break: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 struct LabelId(u32);
 
@@ -1689,7 +1940,41 @@ struct LabelId(u32);
 enum CodeItem {
     Instruction(Instruction),
     Branch { kind: BranchKind, target: LabelId },
+    Switch(SwitchItem),
     Label(LabelId),
+}
+
+#[derive(Clone, Debug)]
+enum SwitchItem {
+    Table {
+        default: LabelId,
+        low: i32,
+        high: i32,
+        offsets: Vec<LabelId>,
+    },
+    Lookup {
+        default: LabelId,
+        pairs: Vec<(i32, LabelId)>,
+    },
+}
+
+impl SwitchItem {
+    fn targets(&self) -> impl Iterator<Item = LabelId> + '_ {
+        let mut targets = Vec::new();
+        match self {
+            SwitchItem::Table {
+                default, offsets, ..
+            } => {
+                targets.push(*default);
+                targets.extend(offsets.iter().copied());
+            }
+            SwitchItem::Lookup { default, pairs } => {
+                targets.push(*default);
+                targets.extend(pairs.iter().map(|(_, label)| *label));
+            }
+        }
+        targets.into_iter()
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1773,6 +2058,74 @@ fn branch_instruction(kind: BranchKind, target: u16) -> Instruction {
         BranchKind::IfNull => Instruction::Ifnull(target),
         BranchKind::IfNonNull => Instruction::Ifnonnull(target),
         BranchKind::Goto => Instruction::Goto(target),
+    }
+}
+
+fn choose_switch_item(default: LabelId, pairs: &[(i32, LabelId)]) -> SwitchItem {
+    if pairs.is_empty() {
+        return SwitchItem::Lookup {
+            default,
+            pairs: Vec::new(),
+        };
+    }
+
+    let low = pairs.first().map(|(value, _)| *value).unwrap_or_default();
+    let high = pairs.last().map(|(value, _)| *value).unwrap_or_default();
+    let table_space_cost = 4 + (high - low + 1);
+    let table_time_cost = 3;
+    let lookup_space_cost = 3 + 2 * pairs.len() as i32;
+    let lookup_time_cost = pairs.len() as i32;
+
+    if table_space_cost + 3 * table_time_cost <= lookup_space_cost + 3 * lookup_time_cost {
+        let mut offsets = vec![default; (high - low + 1) as usize];
+        for (value, label) in pairs {
+            offsets[(value - low) as usize] = *label;
+        }
+        SwitchItem::Table {
+            default,
+            low,
+            high,
+            offsets,
+        }
+    } else {
+        SwitchItem::Lookup {
+            default,
+            pairs: pairs.to_vec(),
+        }
+    }
+}
+
+fn switch_instruction(
+    switch: &SwitchItem,
+    labels: &std::collections::HashMap<LabelId, u16>,
+) -> Instruction {
+    match switch {
+        SwitchItem::Table {
+            default,
+            low,
+            high,
+            offsets,
+        } => Instruction::Tableswitch(TableSwitch {
+            default: labels.get(default).copied().unwrap_or_default() as i32,
+            low: *low,
+            high: *high,
+            offsets: offsets
+                .iter()
+                .map(|label| labels.get(label).copied().unwrap_or_default() as i32)
+                .collect(),
+        }),
+        SwitchItem::Lookup { default, pairs } => Instruction::Lookupswitch(LookupSwitch {
+            default: labels.get(default).copied().unwrap_or_default() as i32,
+            pairs: pairs
+                .iter()
+                .map(|(value, label)| {
+                    (
+                        *value,
+                        labels.get(label).copied().unwrap_or_default() as i32,
+                    )
+                })
+                .collect(),
+        }),
     }
 }
 
@@ -2099,6 +2452,7 @@ fn stack_effect(instr: &Instruction) -> i32 {
         Ifeq(_) | Ifne(_) | Iflt(_) | Ifge(_) | Ifgt(_) | Ifle(_) | Ifnull(_) | Ifnonnull(_) => -1,
         If_icmpeq(_) | If_icmpne(_) | If_icmplt(_) | If_icmpge(_) | If_icmpgt(_) | If_icmple(_)
         | If_acmpeq(_) | If_acmpne(_) => -2,
+        Tableswitch(_) | Lookupswitch(_) => -1,
         _ => 0,
     }
 }
