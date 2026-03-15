@@ -3,6 +3,10 @@ name = "rajac-compiler"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "rajac-compiler"
+path = "src/rajac_compiler_main.rs"
+
 [dependencies]
 rajac-parser = { path = "../parser" }
 rajac-ast = { path = "../ast" }

@@ -3,5 +3,9 @@ name = "ballpit"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "ballpit"
+path = "src/ballpit_main.rs"
+
 [dependencies]
 rayon = "1.10"
