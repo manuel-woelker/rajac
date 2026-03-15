@@ -169,17 +169,28 @@ impl<'arena> CodeGenerator<'arena> {
 
     pub fn generate_constructor_body(
         &mut self,
+        params: &[ParamId],
+        body_id: Option<StmtId>,
         super_internal_name: &str,
     ) -> RajacResult<(Vec<Instruction>, u16, u16)> {
-        self.max_locals = 1;
+        self.initialize_method_locals(false, params);
 
-        self.emit(Instruction::Aload_0);
-        let super_class = self.constant_pool.add_class(super_internal_name)?;
-        let super_init = self
-            .constant_pool
-            .add_method_ref(super_class, "<init>", "()V")?;
-        self.emit(Instruction::Invokespecial(super_init));
+        if let Some(body_id) = body_id {
+            if let Some((super_args, remaining_stmts)) = self.constructor_body_parts(body_id) {
+                self.emit_super_constructor_call(super_internal_name, &super_args)?;
 
+                for stmt_id in remaining_stmts {
+                    self.emit_statement(stmt_id)?;
+                }
+            } else {
+                self.emit_super_constructor_call(super_internal_name, &[])?;
+                self.emit_statement(body_id)?;
+            }
+        } else {
+            self.emit_super_constructor_call(super_internal_name, &[])?;
+        }
+
+        self.ensure_clean_stack("implicit return at end of constructor body")?;
         self.emit(Instruction::Return);
 
         Ok((self.emitter.finalize(), self.max_stack, self.max_locals))
@@ -570,6 +581,33 @@ impl<'arena> CodeGenerator<'arena> {
         } else {
             self.emit(Instruction::Ldc_w(constant_index));
         }
+    }
+
+    fn emit_super_constructor_call(
+        &mut self,
+        super_internal_name: &str,
+        args: &[ExprId],
+    ) -> RajacResult<()> {
+        self.emit(Instruction::Aload_0);
+        for &arg in args {
+            self.emit_expression(arg)?;
+        }
+
+        let super_class = self.constant_pool.add_class(super_internal_name)?;
+        let descriptor = method_descriptor_from_parts(
+            args.iter()
+                .map(|arg| self.expression_type_id(*arg))
+                .collect(),
+            self.symbol_table
+                .primitive_type_id("void")
+                .unwrap_or(TypeId::INVALID),
+            self.symbol_table.type_arena(),
+        );
+        let super_init = self
+            .constant_pool
+            .add_method_ref(super_class, "<init>", &descriptor)?;
+        self.emit(Instruction::Invokespecial(super_init));
+        Ok(())
     }
 
     fn discard_expression_result(&mut self, expr_id: ExprId) {
@@ -1318,6 +1356,21 @@ impl<'arena> CodeGenerator<'arena> {
             self.local_vars
                 .insert(param.name.as_str().to_string(), LocalVar { slot, kind });
         }
+    }
+
+    fn constructor_body_parts(&self, body_id: StmtId) -> Option<(Vec<ExprId>, Vec<StmtId>)> {
+        let Stmt::Block(statements) = self.arena.stmt(body_id) else {
+            return None;
+        };
+        let first_stmt = statements.first()?;
+        let Stmt::Expr(expr_id) = self.arena.stmt(*first_stmt) else {
+            return None;
+        };
+        let AstExpr::SuperCall { args, .. } = self.arena.expr(*expr_id) else {
+            return None;
+        };
+
+        Some((args.clone(), statements.iter().skip(1).copied().collect()))
     }
 
     fn allocate_local(&mut self, kind: LocalVarKind) -> u16 {

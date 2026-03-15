@@ -1,7 +1,8 @@
 use crate::bytecode::CodeGenerator;
 use rajac_ast::{
-    Ast, AstArena, AstType, ClassDecl, ClassDeclId, ClassKind, ClassMember, Field as AstField,
-    Method as AstMethod, Modifiers, PrimitiveType,
+    Ast, AstArena, AstType, ClassDecl, ClassDeclId, ClassKind, ClassMember,
+    Constructor as AstConstructor, Field as AstField, Method as AstMethod, Modifiers,
+    PrimitiveType,
 };
 use rajac_base::result::{RajacResult, ResultExt};
 use rajac_base::shared_string::SharedString;
@@ -169,9 +170,17 @@ fn classfile_from_class_decl_with_context(
                     methods.push(method_info);
                 }
             }
-            ClassMember::Constructor(_) => {
+            ClassMember::Constructor(constructor) => {
                 has_constructor = true;
-                // TODO: Process actual constructors
+                methods.push(constructor_from_ast(
+                    arena,
+                    &mut constant_pool,
+                    constructor,
+                    &class.modifiers,
+                    &super_internal_name,
+                    type_arena,
+                    symbol_table,
+                )?);
             }
             ClassMember::StaticBlock(_)
             | ClassMember::NestedClass(_)
@@ -185,12 +194,22 @@ fn classfile_from_class_decl_with_context(
     }
 
     // Add default constructor if no constructors are defined and this is a class (not an interface)
-    if !has_constructor
-        && matches!(class.kind, ClassKind::Class)
-        && let Some(default_constructor) =
-            create_default_constructor(&mut constant_pool, &class.modifiers, &super_internal_name)?
-    {
-        methods.push(default_constructor);
+    if !has_constructor && matches!(class.kind, ClassKind::Class) {
+        methods.push(constructor_from_ast(
+            arena,
+            &mut constant_pool,
+            &AstConstructor {
+                name: class.name.clone(),
+                params: vec![],
+                body: None,
+                throws: vec![],
+                modifiers: class.modifiers.clone(),
+            },
+            &class.modifiers,
+            &super_internal_name,
+            type_arena,
+            symbol_table,
+        )?);
     }
 
     let mut attributes = Vec::new();
@@ -598,6 +617,55 @@ fn method_access_flags(modifiers: &Modifiers) -> MethodAccessFlags {
     flags
 }
 
+fn constructor_from_ast(
+    arena: &AstArena,
+    constant_pool: &mut ConstantPool,
+    constructor: &AstConstructor,
+    class_modifiers: &Modifiers,
+    super_internal_name: &str,
+    type_arena: &rajac_types::TypeArena,
+    symbol_table: &SymbolTable,
+) -> RajacResult<Method> {
+    let name_index = constant_pool.add_utf8("<init>")?;
+    let descriptor = constructor_to_descriptor(arena, constructor, type_arena)?;
+    let descriptor_index = constant_pool.add_utf8(&descriptor)?;
+
+    let mut access_flags = MethodAccessFlags::default();
+    if constructor.modifiers.is_public() || class_modifiers.is_public() {
+        access_flags |= MethodAccessFlags::PUBLIC;
+    }
+    if constructor.modifiers.is_protected() {
+        access_flags |= MethodAccessFlags::PROTECTED;
+    }
+    if constructor.modifiers.is_private() {
+        access_flags |= MethodAccessFlags::PRIVATE;
+    }
+
+    let mut code_gen = CodeGenerator::new(arena, type_arena, symbol_table, constant_pool);
+    let (instructions, max_stack, max_locals) = code_gen.generate_constructor_body(
+        &constructor.params,
+        constructor.body,
+        super_internal_name,
+    )?;
+
+    let code_name = constant_pool.add_utf8("Code")?;
+    let code_attribute = ristretto_classfile::attributes::Attribute::Code {
+        name_index: code_name,
+        max_stack,
+        max_locals,
+        code: instructions,
+        exception_table: vec![],
+        attributes: vec![],
+    };
+
+    Ok(Method {
+        access_flags,
+        name_index,
+        descriptor_index,
+        attributes: vec![code_attribute],
+    })
+}
+
 fn method_to_descriptor(
     arena: &AstArena,
     method: &AstMethod,
@@ -611,6 +679,22 @@ fn method_to_descriptor(
     }
     s.push(')');
     s.push_str(&type_to_descriptor(arena, method.return_ty, type_arena)?);
+    Ok(s)
+}
+
+fn constructor_to_descriptor(
+    arena: &AstArena,
+    constructor: &AstConstructor,
+    type_arena: &rajac_types::TypeArena,
+) -> RajacResult<String> {
+    let mut s = String::new();
+    s.push('(');
+    for param_id in &constructor.params {
+        let param = arena.param(*param_id);
+        s.push_str(&type_to_descriptor(arena, param.ty, type_arena)?);
+    }
+    s.push(')');
+    s.push('V');
     Ok(s)
 }
 
@@ -691,53 +775,6 @@ fn type_to_internal_class_name(
         }
         _ => "java/lang/Object".to_string(),
     })
-}
-
-fn create_default_constructor(
-    constant_pool: &mut ConstantPool,
-    modifiers: &Modifiers,
-    super_internal_name: &str,
-) -> RajacResult<Option<Method>> {
-    let name_index = constant_pool.add_utf8("<init>")?;
-    let descriptor_index = constant_pool.add_utf8("()V")?;
-
-    let mut access_flags = MethodAccessFlags::default();
-    if modifiers.is_public() {
-        access_flags |= MethodAccessFlags::PUBLIC;
-    }
-    if modifiers.is_protected() {
-        access_flags |= MethodAccessFlags::PROTECTED;
-    }
-
-    // Create Code attribute for default constructor
-    let code_name = constant_pool.add_utf8("Code")?;
-
-    // Add superclass class reference for invokespecial
-    let super_class = constant_pool.add_class(super_internal_name)?;
-    let super_init = constant_pool.add_method_ref(super_class, "<init>", "()V")?;
-
-    // Generate bytecode: aload_0, invokespecial Object.<init>, return
-    let code = vec![
-        ristretto_classfile::attributes::Instruction::Aload_0,
-        ristretto_classfile::attributes::Instruction::Invokespecial(super_init),
-        ristretto_classfile::attributes::Instruction::Return,
-    ];
-
-    let code_attribute = ristretto_classfile::attributes::Attribute::Code {
-        name_index: code_name,
-        max_stack: 1,  // Need stack for aload_0 and invokespecial
-        max_locals: 1, // Need local variable for 'this'
-        code,
-        exception_table: vec![],
-        attributes: vec![],
-    };
-
-    Ok(Some(Method {
-        access_flags,
-        name_index,
-        descriptor_index,
-        attributes: vec![code_attribute],
-    }))
 }
 
 #[cfg(test)]
@@ -994,6 +1031,72 @@ mod tests {
         assert_eq!(
             inner.constant_pool.try_get_utf8(inner_entry.name_index)?,
             "Inner"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn emits_explicit_constructors_as_init_methods() -> RajacResult<()> {
+        let mut arena = AstArena::new();
+        let mut ast = Ast::new(SharedString::new("test"));
+        let type_arena = rajac_types::TypeArena::new();
+        let symbol_table = SymbolTable::new();
+
+        let int_ty = arena.alloc_type(AstType::Primitive {
+            kind: PrimitiveType::Int,
+            ty: rajac_types::TypeId::INVALID,
+        });
+        let param_id = arena.alloc_param(Param {
+            ty: int_ty,
+            name: Ident::new(SharedString::new("x")),
+            varargs: false,
+        });
+        let body = arena.alloc_stmt(rajac_ast::Stmt::Block(vec![]));
+        let constructor = AstConstructor {
+            name: Ident::new(SharedString::new("Foo")),
+            params: vec![param_id],
+            body: Some(body),
+            throws: vec![],
+            modifiers: Modifiers(Modifiers::PUBLIC),
+        };
+        let ctor_member_id = arena.alloc_class_member(ClassMember::Constructor(constructor));
+
+        let class_id = arena.alloc_class_decl(ClassDecl {
+            kind: ClassKind::Class,
+            name: Ident::new(SharedString::new("Foo")),
+            type_params: vec![],
+            extends: None,
+            implements: vec![],
+            permits: vec![],
+            members: vec![ctor_member_id],
+            modifiers: Modifiers(Modifiers::PUBLIC),
+        });
+        ast.classes.push(class_id);
+
+        let mut class_files = generate_classfiles(&ast, &arena, &type_arena, &symbol_table)?;
+        let class_file = class_files.pop().unwrap();
+        class_file.verify()?;
+
+        assert_eq!(class_file.methods.len(), 1);
+        let constructor = &class_file.methods[0];
+        assert_eq!(
+            class_file
+                .constant_pool
+                .try_get_utf8(constructor.name_index)?,
+            "<init>"
+        );
+        assert_eq!(
+            class_file
+                .constant_pool
+                .try_get_utf8(constructor.descriptor_index)?,
+            "(I)V"
+        );
+        assert!(
+            constructor
+                .attributes
+                .iter()
+                .any(|attribute| matches!(attribute, Attribute::Code { .. }))
         );
 
         Ok(())
