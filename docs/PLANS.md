@@ -47,6 +47,7 @@ A good plan should usually include:
 
 Use a Markdown checklist for concrete implementation and verification work.
 The checklist should make it obvious what is done, what is still pending, and how completion will be judged.
+Update the checklist as work lands so implemented tasks are marked complete instead of leaving the plan stale.
 
 Include verification tasks in the checklist rather than leaving verification implicit.
 For example, include items for adding fixtures, running verification, and running repository-wide checks when those are part of the work.

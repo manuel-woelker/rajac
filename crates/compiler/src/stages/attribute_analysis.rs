@@ -79,9 +79,29 @@ struct SemanticAnalyzer<'a> {
     symbol_table: &'a SymbolTable,
     diagnostics: Diagnostics,
     scopes: Vec<HashMap<SharedString, TypeId>>,
+    control_flow_contexts: Vec<ControlFlowContext>,
+    active_labels: Vec<ActiveLabel>,
     current_package: SharedString,
     current_class_type_id: Option<TypeId>,
     current_return_type: Option<TypeId>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ControlFlowContext {
+    Loop,
+    Switch,
+}
+
+#[derive(Clone, Debug)]
+struct ActiveLabel {
+    name: SharedString,
+    kind: LabeledStatementKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LabeledStatementKind {
+    Iteration,
+    NonIteration,
 }
 
 impl<'a> SemanticAnalyzer<'a> {
@@ -99,6 +119,8 @@ impl<'a> SemanticAnalyzer<'a> {
             symbol_table,
             diagnostics: Diagnostics::new(),
             scopes: Vec::new(),
+            control_flow_contexts: Vec::new(),
+            active_labels: Vec::new(),
             current_package,
             current_class_type_id: None,
             current_return_type: None,
@@ -226,7 +248,9 @@ impl<'a> SemanticAnalyzer<'a> {
 
     fn analyze_stmt(&mut self, stmt_id: StmtId) {
         match self.arena.stmt(stmt_id).clone() {
-            Stmt::Empty | Stmt::Break(_) | Stmt::Continue(_) => {}
+            Stmt::Empty => {}
+            Stmt::Break(label) => self.analyze_break(label.as_ref()),
+            Stmt::Continue(label) => self.analyze_continue(label.as_ref()),
             Stmt::Block(statements) => {
                 self.push_scope();
                 for nested_stmt_id in statements {
@@ -250,10 +274,14 @@ impl<'a> SemanticAnalyzer<'a> {
             }
             Stmt::While { condition, body } => {
                 self.require_boolean_condition(condition, "while");
-                self.analyze_stmt(body);
+                self.with_control_flow_context(ControlFlowContext::Loop, |analyzer| {
+                    analyzer.analyze_stmt(body);
+                });
             }
             Stmt::DoWhile { body, condition } => {
-                self.analyze_stmt(body);
+                self.with_control_flow_context(ControlFlowContext::Loop, |analyzer| {
+                    analyzer.analyze_stmt(body);
+                });
                 self.require_boolean_condition(condition, "do-while");
             }
             Stmt::For {
@@ -283,23 +311,27 @@ impl<'a> SemanticAnalyzer<'a> {
                 if let Some(update) = update {
                     self.analyze_expr(update);
                 }
-                self.analyze_stmt(body);
+                self.with_control_flow_context(ControlFlowContext::Loop, |analyzer| {
+                    analyzer.analyze_stmt(body);
+                });
                 self.pop_scope();
             }
             Stmt::Switch { expr, cases } => {
                 self.analyze_expr(expr);
-                for case in cases {
-                    for label in case.labels {
-                        if let rajac_ast::SwitchLabel::Case(expr_id) = label {
-                            self.analyze_expr(expr_id);
+                self.with_control_flow_context(ControlFlowContext::Switch, |analyzer| {
+                    for case in cases {
+                        for label in case.labels {
+                            if let rajac_ast::SwitchLabel::Case(expr_id) = label {
+                                analyzer.analyze_expr(expr_id);
+                            }
                         }
+                        analyzer.push_scope();
+                        for body_stmt_id in case.body {
+                            analyzer.analyze_stmt(body_stmt_id);
+                        }
+                        analyzer.pop_scope();
                     }
-                    self.push_scope();
-                    for body_stmt_id in case.body {
-                        self.analyze_stmt(body_stmt_id);
-                    }
-                    self.pop_scope();
-                }
+                });
             }
             Stmt::Return(expr) => {
                 let Some(expected_ty) = self.current_return_type else {
@@ -346,7 +378,15 @@ impl<'a> SemanticAnalyzer<'a> {
                     }
                 }
             }
-            Stmt::Label(_, stmt_id) => self.analyze_stmt(stmt_id),
+            Stmt::Label(name, stmt_id) => {
+                self.with_active_label(
+                    &name.name,
+                    labeled_statement_kind(stmt_id, self.arena),
+                    |analyzer| {
+                        analyzer.analyze_stmt(stmt_id);
+                    },
+                );
+            }
             Stmt::Try {
                 try_block,
                 catches,
@@ -1264,6 +1304,100 @@ impl<'a> SemanticAnalyzer<'a> {
         scope.insert(name, ty);
     }
 
+    fn analyze_break(&mut self, label: Option<&Ident>) {
+        match label {
+            Some(label) => {
+                if self.lookup_label(&label.name).is_none() {
+                    self.emit_error(
+                        format!("undefined label '{}'", label.as_str()),
+                        Some(label.as_str()),
+                    );
+                }
+            }
+            None => {
+                if !self.can_break() {
+                    self.emit_error("break outside switch or loop", Some("break"));
+                }
+            }
+        }
+    }
+
+    fn analyze_continue(&mut self, label: Option<&Ident>) {
+        match label {
+            Some(label) => match self.lookup_label(&label.name) {
+                Some(LabeledStatementKind::Iteration) => {}
+                Some(LabeledStatementKind::NonIteration) => {
+                    self.emit_error(
+                        format!(
+                            "continue label '{}' must reference an iteration statement",
+                            label.as_str()
+                        ),
+                        Some(label.as_str()),
+                    );
+                }
+                None => {
+                    self.emit_error(
+                        format!("undefined label '{}'", label.as_str()),
+                        Some(label.as_str()),
+                    );
+                }
+            },
+            None => {
+                if !self.can_continue() {
+                    self.emit_error("continue outside loop", Some("continue"));
+                }
+            }
+        }
+    }
+
+    fn can_break(&self) -> bool {
+        self.control_flow_contexts.iter().rev().any(|context| {
+            matches!(
+                context,
+                ControlFlowContext::Loop | ControlFlowContext::Switch
+            )
+        })
+    }
+
+    fn can_continue(&self) -> bool {
+        self.control_flow_contexts
+            .iter()
+            .rev()
+            .any(|context| *context == ControlFlowContext::Loop)
+    }
+
+    fn lookup_label(&self, name: &SharedString) -> Option<LabeledStatementKind> {
+        self.active_labels
+            .iter()
+            .rev()
+            .find(|label| &label.name == name)
+            .map(|label| label.kind)
+    }
+
+    fn with_control_flow_context(
+        &mut self,
+        context: ControlFlowContext,
+        analyze: impl FnOnce(&mut Self),
+    ) {
+        self.control_flow_contexts.push(context);
+        analyze(self);
+        self.control_flow_contexts.pop();
+    }
+
+    fn with_active_label(
+        &mut self,
+        name: &SharedString,
+        kind: LabeledStatementKind,
+        analyze: impl FnOnce(&mut Self),
+    ) {
+        self.active_labels.push(ActiveLabel {
+            name: name.clone(),
+            kind,
+        });
+        analyze(self);
+        self.active_labels.pop();
+    }
+
     fn push_scope(&mut self) {
         self.scopes.push(HashMap::new());
     }
@@ -2088,6 +2222,17 @@ fn binary_op_for_assign(op: rajac_ast::AssignOp) -> BinaryOp {
     }
 }
 
+fn labeled_statement_kind(stmt_id: StmtId, arena: &AstArena) -> LabeledStatementKind {
+    if matches!(
+        arena.stmt(stmt_id),
+        Stmt::While { .. } | Stmt::DoWhile { .. } | Stmt::For { .. }
+    ) {
+        LabeledStatementKind::Iteration
+    } else {
+        LabeledStatementKind::NonIteration
+    }
+}
+
 fn source_chunk_for_marker(
     source_file: &FilePath,
     source: &str,
@@ -2353,6 +2498,111 @@ class Example {
                 .iter()
                 .any(|diagnostic| diagnostic.message.as_str().contains("incompatible types"))
         );
+    }
+
+    #[test]
+    fn reports_break_outside_loop_or_switch() {
+        let source = r#"
+class Example {
+    void run() {
+        break;
+    }
+}
+"#;
+
+        let (mut units, mut symbol_table) = resolved_units(source);
+        let diagnostics = analyze_attributes(&mut units, &mut symbol_table);
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .as_str()
+                .contains("break outside switch or loop")
+        }));
+    }
+
+    #[test]
+    fn reports_continue_outside_loop() {
+        let source = r#"
+class Example {
+    void run() {
+        continue;
+    }
+}
+"#;
+
+        let (mut units, mut symbol_table) = resolved_units(source);
+        let diagnostics = analyze_attributes(&mut units, &mut symbol_table);
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .as_str()
+                .contains("continue outside loop")
+        }));
+    }
+
+    #[test]
+    fn accepts_labeled_continue_to_enclosing_loop() {
+        let source = r#"
+class Example {
+    void run() {
+        outer:
+        while (true) {
+            continue outer;
+        }
+    }
+}
+"#;
+
+        let (mut units, mut symbol_table) = resolved_units(source);
+        let diagnostics = analyze_attributes(&mut units, &mut symbol_table);
+
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn reports_continue_to_non_iteration_label() {
+        let source = r#"
+class Example {
+    void run() {
+        outer: {
+            continue outer;
+        }
+    }
+}
+"#;
+
+        let (mut units, mut symbol_table) = resolved_units(source);
+        let diagnostics = analyze_attributes(&mut units, &mut symbol_table);
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .as_str()
+                .contains("must reference an iteration statement")
+        }));
+    }
+
+    #[test]
+    fn reports_undefined_break_label() {
+        let source = r#"
+class Example {
+    void run() {
+        break outer;
+    }
+}
+"#;
+
+        let (mut units, mut symbol_table) = resolved_units(source);
+        let diagnostics = analyze_attributes(&mut units, &mut symbol_table);
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .as_str()
+                .contains("undefined label 'outer'")
+        }));
     }
 
     #[test]

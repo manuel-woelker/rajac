@@ -214,13 +214,13 @@ This control-flow semantic-validation milestone should be considered complete wh
 
 ## What checklist tracks the work?
 
-- [ ] Add a control-flow context stack to attribute analysis.
-- [ ] Add a label environment for active labeled statements.
-- [ ] Add semantic diagnostic helpers for invalid `break`, `continue`, and missing labels.
-- [ ] Reject unlabeled `break` outside loop or `switch`.
-- [ ] Reject unlabeled `continue` outside loops.
-- [ ] Resolve labeled `break` targets.
-- [ ] Resolve labeled `continue` targets and reject non-loop targets.
+- [x] Add a control-flow context stack to attribute analysis.
+- [x] Add a label environment for active labeled statements.
+- [x] Add semantic diagnostic helpers for invalid `break`, `continue`, and missing labels.
+- [x] Reject unlabeled `break` outside loop or `switch`.
+- [x] Reject unlabeled `continue` outside loops.
+- [x] Resolve labeled `break` targets.
+- [x] Resolve labeled `continue` targets and reject non-loop targets.
 - [ ] Detect duplicate active labels where the language subset requires rejection.
 - [ ] Validate `switch` selector types.
 - [ ] Validate `case` labels against the selector type and supported constant-expression rules.
@@ -228,7 +228,7 @@ This control-flow semantic-validation milestone should be considered complete wh
 - [ ] Reject multiple `default` labels.
 - [ ] Add a minimal statement-outcome model for abrupt completion.
 - [ ] Diagnose straightforward unreachable statements after unconditional abrupt completion.
-- [ ] Add colocated tests for control-flow semantic diagnostics.
+- [x] Add colocated tests for control-flow semantic diagnostics.
 - [ ] Add or update invalid verification fixtures and any error-message overrides.
 - [ ] Run `cargo run -p verification --bin verification`.
 - [ ] Run `./scripts/check-code.sh`.
