@@ -331,7 +331,7 @@ impl<'a> Parser<'a> {
         self.in_interface = matches!(kind, ClassKind::Interface);
 
         self.expect(TokenKind::LBrace);
-        let members = self.parse_class_members();
+        let members = self.parse_class_members(&name);
         self.expect(TokenKind::RBrace);
 
         // Restore previous context
@@ -389,7 +389,7 @@ impl<'a> Parser<'a> {
         params
     }
 
-    fn parse_class_members(&mut self) -> Vec<ClassMemberId> {
+    fn parse_class_members(&mut self, class_name: &Ident) -> Vec<ClassMemberId> {
         let mut members = Vec::new();
 
         while !self.is(TokenKind::RBrace) && !self.is(TokenKind::Eof) {
@@ -450,6 +450,16 @@ impl<'a> Parser<'a> {
 
             // Parse field or method
             if let Some(ty) = self.parse_type() {
+                if self.is(TokenKind::LParen) && self.type_matches_constructor_name(ty, class_name)
+                {
+                    if let Some(constructor) = self.parse_constructor(class_name.clone(), modifiers)
+                    {
+                        let member = ClassMember::Constructor(constructor);
+                        members.push(self.arena.alloc_class_member(member));
+                    }
+                    continue;
+                }
+
                 if self.peek() == TokenKind::Ident {
                     let name = Ident::new(self.ident_text());
                     self.bump();
@@ -542,7 +552,7 @@ impl<'a> Parser<'a> {
         self.in_interface = matches!(kind, ClassKind::Interface);
 
         self.expect(TokenKind::LBrace);
-        let members = self.parse_class_members();
+        let members = self.parse_class_members(&name);
         self.expect(TokenKind::RBrace);
 
         // Restore previous context
@@ -626,7 +636,7 @@ impl<'a> Parser<'a> {
         // Optional member declarations in enum
         let mut members = Vec::new();
         if self.consume(TokenKind::Semi) {
-            members = self.parse_class_members();
+            members = self.parse_class_members(&name);
         }
 
         self.expect(TokenKind::RBrace);
@@ -749,6 +759,13 @@ impl<'a> Parser<'a> {
         }
 
         params
+    }
+
+    fn type_matches_constructor_name(&self, ty: AstTypeId, class_name: &Ident) -> bool {
+        matches!(
+            self.arena.ty(ty),
+            AstType::Simple { name, .. } if name == &class_name.name
+        )
     }
 
     pub fn parse_type(&mut self) -> Option<AstTypeId> {
@@ -950,6 +967,11 @@ mod tests {
         "#;
         let result = parse_src(source);
         assert_eq!(result.ast.classes.len(), 1);
+        let class = result.arena.class_decl(result.ast.classes[0]);
+        assert!(class.members.iter().any(|member_id| matches!(
+            result.arena.class_member(*member_id),
+            ClassMember::Constructor(_)
+        )));
     }
 
     #[test]
