@@ -63,6 +63,18 @@ impl BytecodeEmitter {
         }
 
         let mut instructions = Vec::new();
+        let terminal_offset = offset;
+        /* 📖 # Why append a terminal nop for some label targets?
+        The classfile library expects branch targets to resolve to an actual instruction index.
+        Control-flow lowering can bind a label after the last emitted instruction, for example when
+        both `if` branches return but the shared end label is still referenced by a `goto`.
+        Appending a `nop` turns that terminal label into a concrete instruction boundary without
+        changing program behavior, which keeps serialization valid.
+        */
+        let needs_terminal_nop = self.code_items.iter().any(|item| match item {
+            CodeItem::Branch { target, .. } => labels.get(target).copied() == Some(terminal_offset),
+            CodeItem::Instruction(_) | CodeItem::Label(_) => false,
+        });
 
         for item in &self.code_items {
             match item {
@@ -73,6 +85,10 @@ impl BytecodeEmitter {
                 }
                 CodeItem::Label(_) => {}
             }
+        }
+
+        if needs_terminal_nop {
+            instructions.push(Instruction::Nop);
         }
 
         instructions
@@ -1684,5 +1700,44 @@ fn stack_effect(instr: &Instruction) -> i32 {
         If_icmpeq(_) | If_icmpne(_) | If_icmplt(_) | If_icmpge(_) | If_icmpgt(_) | If_icmple(_)
         | If_acmpeq(_) | If_acmpne(_) => -2,
         _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finalize_adds_nop_for_branch_to_terminal_label() {
+        let mut emitter = BytecodeEmitter::new();
+        let end_label = LabelId(0);
+
+        emitter.emit(Instruction::Iconst_0);
+        emitter.emit_branch(BranchKind::Goto, end_label);
+        emitter.bind_label(end_label);
+
+        let instructions = emitter.finalize();
+
+        assert_eq!(
+            instructions,
+            vec![
+                Instruction::Iconst_0,
+                Instruction::Goto(2),
+                Instruction::Nop
+            ]
+        );
+    }
+
+    #[test]
+    fn finalize_does_not_add_nop_for_unreferenced_terminal_label() {
+        let mut emitter = BytecodeEmitter::new();
+        let end_label = LabelId(0);
+
+        emitter.emit(Instruction::Iconst_0);
+        emitter.bind_label(end_label);
+
+        let instructions = emitter.finalize();
+
+        assert_eq!(instructions, vec![Instruction::Iconst_0]);
     }
 }
