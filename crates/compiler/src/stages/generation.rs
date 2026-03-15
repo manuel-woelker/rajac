@@ -56,8 +56,8 @@ output without affecting other compilation phases.
 use crate::CompilationUnit;
 use rajac_base::file_path::FilePath;
 use rajac_base::logging::instrument;
-use rajac_base::shared_string::SharedString;
 use rajac_base::result::{RajacResult, ResultExt};
+use rajac_base::shared_string::SharedString;
 use rajac_bytecode::classfile::generate_classfiles_with_report as bytecode_generate_classfiles;
 use rajac_diagnostics::{Annotation, Diagnostic, Diagnostics, Severity, SourceChunk, Span};
 use ristretto_classfile::attributes::Attribute;
@@ -308,7 +308,11 @@ fn line_bounds_for_offset(source: &str, offset: usize) -> (usize, usize, usize) 
     let line_end = source[offset..]
         .find('\n')
         .map_or(source.len(), |index| offset + index);
-    let line = source[..line_start].bytes().filter(|byte| *byte == b'\n').count() + 1;
+    let line = source[..line_start]
+        .bytes()
+        .filter(|byte| *byte == b'\n')
+        .count()
+        + 1;
     (line, line_start, line_end)
 }
 

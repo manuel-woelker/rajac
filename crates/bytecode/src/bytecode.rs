@@ -2,8 +2,8 @@ use rajac_ast::{
     AstArena, AstType, Expr as AstExpr, ExprId, Literal, LiteralKind, ParamId, PrimitiveType, Stmt,
     StmtId, SwitchCase, SwitchLabel,
 };
-use rajac_base::shared_string::SharedString;
 use rajac_base::result::RajacResult;
+use rajac_base::shared_string::SharedString;
 use rajac_symbols::SymbolTable;
 use rajac_types::{Ident, Type, TypeArena, TypeId};
 use ristretto_classfile::ConstantPool;
@@ -2428,16 +2428,6 @@ fn infer_method_descriptor(
     None
 }
 
-fn type_to_internal_class_name(type_id: rajac_ast::AstTypeId) -> String {
-    let _ = type_id;
-    "java/lang/Object".to_string()
-}
-
-fn type_to_descriptor(type_id: rajac_ast::AstTypeId) -> String {
-    let _ = type_id;
-    "Ljava/lang/Object;".to_string()
-}
-
 fn type_id_to_descriptor(type_id: TypeId, type_arena: &TypeArena) -> String {
     if type_id == TypeId::INVALID {
         return "Ljava/lang/Object;".to_string();
@@ -2902,6 +2892,53 @@ mod tests {
             "unsupported bytecode generation feature: try statements"
         );
         assert_eq!(unsupported_features[0].marker.as_str(), "try");
+        assert!(matches!(instructions[0], Instruction::New(_)));
+        assert!(matches!(instructions[1], Instruction::Dup));
+        assert!(matches!(
+            instructions[2],
+            Instruction::Ldc(_) | Instruction::Ldc_w(_)
+        ));
+        assert!(matches!(instructions[3], Instruction::Invokespecial(_)));
+        assert!(matches!(instructions[4], Instruction::Athrow));
+
+        Ok(())
+    }
+
+    #[test]
+    fn unsupported_instanceof_expressions_emit_runtime_exception_and_report() -> RajacResult<()> {
+        let mut arena = AstArena::new();
+        let type_arena = TypeArena::new();
+        let symbol_table = SymbolTable::new();
+        let mut constant_pool = ConstantPool::new();
+
+        let null_expr = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Null,
+            value: "null".into(),
+        }));
+        let object_ty = arena.alloc_type(AstType::Simple {
+            name: SharedString::new("Object"),
+            ty: TypeId::INVALID,
+            type_args: vec![],
+        });
+        let instanceof_expr = arena.alloc_expr(AstExpr::InstanceOf {
+            expr: null_expr,
+            ty: object_ty,
+        });
+        let expr_stmt = arena.alloc_stmt(Stmt::Expr(instanceof_expr));
+        let body = arena.alloc_stmt(Stmt::Block(vec![expr_stmt]));
+
+        let mut generator =
+            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
+        let (instructions, _max_stack, _max_locals) =
+            generator.generate_method_body(false, &[], body)?;
+        let unsupported_features = generator.take_unsupported_features();
+
+        assert_eq!(unsupported_features.len(), 1);
+        assert_eq!(
+            unsupported_features[0].message.as_str(),
+            "unsupported bytecode generation feature: instanceof expressions"
+        );
+        assert_eq!(unsupported_features[0].marker.as_str(), "instanceof");
         assert!(matches!(instructions[0], Instruction::New(_)));
         assert!(matches!(instructions[1], Instruction::Dup));
         assert!(matches!(

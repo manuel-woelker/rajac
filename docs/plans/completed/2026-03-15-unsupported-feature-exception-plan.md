@@ -94,6 +94,9 @@ The implementation should also review any remaining `unreachable!()` in bytecode
 - true internal invariants that should stay hard assertions
 - or unsupported source-feature states that should be converted to the shared unsupported-feature path
 
+That review is complete for the current bytecode generator.
+The remaining `unreachable!()` branches are restricted to comparison-operator and promoted-kind invariants that are already guarded by earlier match filters, so they remain internal assertions rather than user-facing unsupported-feature paths.
+
 ## What should be avoided?
 
 The first implementation should not silently “recover” by skipping code generation for unsupported constructs.
@@ -151,6 +154,8 @@ The verification plan should consider:
 - pretty-printed class-file inspection only for cases where rajac intentionally still emits a runtime-throwing stub
 
 If verification coverage is intentionally limited because generation now aborts before classfile emission, the plan should say so explicitly in the implementation updates.
+At the current checkpoint, that limitation still applies in a slightly different form:
+rajac now emits runtime stubs and generation diagnostics for unsupported constructs that still compile successfully under OpenJDK, so adding verification fixtures for those cases would produce intentional compatibility failures rather than useful regression coverage.
 
 ## What assumptions and scope boundaries should stay explicit?
 
@@ -183,8 +188,8 @@ This unsupported-feature handling milestone should be considered complete when:
 - [x] Add or extend generation-stage diagnostics for unsupported features.
 - [x] Replace unsupported statement no-op handlers with the shared helper.
 - [x] Replace unsupported expression placeholder paths with the shared helper where appropriate.
-- [ ] Review user-reachable `unreachable!()` sites in bytecode generation and convert the unsupported ones.
+- [x] Review user-reachable `unreachable!()` sites in bytecode generation and convert the unsupported ones.
 - [x] Add colocated tests for unsupported-feature exception emission and reporting.
-- [ ] Add or update verification fixtures or explicitly document why verification is limited for generation-stage failures.
-- [ ] Run `cargo run -p verification --bin verification` if applicable.
-- [ ] Run `./scripts/check-code.sh`.
+- [x] Add or update verification fixtures or explicitly document why verification is limited for generation-stage failures.
+- [x] Run `cargo run -p verification --bin verification` if applicable.
+- [x] Run `./scripts/check-code.sh`.

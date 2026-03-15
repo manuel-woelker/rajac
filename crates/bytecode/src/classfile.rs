@@ -23,6 +23,12 @@ struct NestedClassInfo {
     kind: ClassKind,
 }
 
+struct ClassfileGenerationContext<'a> {
+    type_arena: &'a rajac_types::TypeArena,
+    symbol_table: &'a SymbolTable,
+    unsupported_features: &'a mut Vec<UnsupportedFeature>,
+}
+
 pub fn generate_classfiles(
     ast: &Ast,
     arena: &AstArena,
@@ -45,6 +51,11 @@ pub fn generate_classfiles_with_report(
 ) -> RajacResult<GeneratedClassFiles> {
     let mut class_files = Vec::new();
     let mut unsupported_features = Vec::new();
+    let mut generation_context = ClassfileGenerationContext {
+        type_arena,
+        symbol_table,
+        unsupported_features: &mut unsupported_features,
+    };
     for class_id in &ast.classes {
         let class = arena.class_decl(*class_id);
         let internal_name = internal_class_name(ast, &class.name, symbol_table);
@@ -54,9 +65,7 @@ pub fn generate_classfiles_with_report(
             internal_name.into(),
             None,
             &mut class_files,
-            &mut unsupported_features,
-            type_arena,
-            symbol_table,
+            &mut generation_context,
         )
         .with_context(|| format!("failed to generate bytecode for class '{}'", class.name))?;
     }
@@ -75,15 +84,19 @@ pub fn classfile_from_class_decl(
 ) -> RajacResult<ClassFile> {
     let class = arena.class_decl(class_id);
     let this_internal_name = internal_class_name(ast, &class.name, symbol_table);
+    let mut unsupported_features = Vec::new();
+    let mut generation_context = ClassfileGenerationContext {
+        type_arena,
+        symbol_table,
+        unsupported_features: &mut unsupported_features,
+    };
     classfile_from_class_decl_with_context(
         arena,
         class_id,
         &this_internal_name,
         None,
         &[],
-        &mut Vec::new(),
-        type_arena,
-        symbol_table,
+        &mut generation_context,
     )
 }
 
@@ -93,9 +106,7 @@ fn emit_classfiles_for_class(
     this_internal_name: SharedString,
     outer_internal_name: Option<SharedString>,
     class_files: &mut Vec<ClassFile>,
-    unsupported_features: &mut Vec<UnsupportedFeature>,
-    type_arena: &rajac_types::TypeArena,
-    _symbol_table: &SymbolTable,
+    generation_context: &mut ClassfileGenerationContext<'_>,
 ) -> RajacResult<()> {
     let class = arena.class_decl(class_id);
     let nested_classes = collect_nested_class_infos(arena, class, &this_internal_name);
@@ -106,9 +117,7 @@ fn emit_classfiles_for_class(
         &this_internal_name,
         outer_internal_name.as_deref(),
         &nested_classes,
-        unsupported_features,
-        type_arena,
-        _symbol_table,
+        generation_context,
     )
     .with_context(|| format!("failed to build classfile for class '{}'", class.name))?;
     class_files.push(class_file);
@@ -121,9 +130,7 @@ fn emit_classfiles_for_class(
             nested.internal_name,
             Some(this_internal_name.clone()),
             class_files,
-            unsupported_features,
-            type_arena,
-            _symbol_table,
+            generation_context,
         )
         .with_context(|| {
             format!(
@@ -142,9 +149,7 @@ fn classfile_from_class_decl_with_context(
     this_internal_name: &str,
     outer_internal_name: Option<&str>,
     nested_classes: &[NestedClassInfo],
-    unsupported_features: &mut Vec<UnsupportedFeature>,
-    type_arena: &rajac_types::TypeArena,
-    symbol_table: &SymbolTable,
+    generation_context: &mut ClassfileGenerationContext<'_>,
 ) -> RajacResult<ClassFile> {
     let class = arena.class_decl(class_id);
 
@@ -157,7 +162,9 @@ fn classfile_from_class_decl_with_context(
         })?;
 
     let super_internal_name = match class.extends {
-        Some(type_id) => type_to_internal_class_name(arena, type_id, type_arena)?,
+        Some(type_id) => {
+            type_to_internal_class_name(arena, type_id, generation_context.type_arena)?
+        }
         None => "java/lang/Object".to_string(),
     };
 
@@ -175,9 +182,12 @@ fn classfile_from_class_decl_with_context(
         let member = arena.class_member(*member_id);
         match member {
             ClassMember::Field(field) => {
-                if let Some(field_info) =
-                    field_from_ast(arena, &mut constant_pool, field, type_arena)?
-                {
+                if let Some(field_info) = field_from_ast(
+                    arena,
+                    &mut constant_pool,
+                    field,
+                    generation_context.type_arena,
+                )? {
                     fields.push(field_info);
                 }
             }
@@ -188,9 +198,7 @@ fn classfile_from_class_decl_with_context(
                     class.kind.clone(),
                     &class.modifiers,
                     method,
-                    unsupported_features,
-                    type_arena,
-                    symbol_table,
+                    generation_context,
                 )? {
                     methods.push(method_info);
                 }
@@ -203,9 +211,7 @@ fn classfile_from_class_decl_with_context(
                     constructor,
                     &class.modifiers,
                     &super_internal_name,
-                    unsupported_features,
-                    type_arena,
-                    symbol_table,
+                    generation_context,
                 )?);
             }
             ClassMember::StaticBlock(_)
@@ -233,9 +239,7 @@ fn classfile_from_class_decl_with_context(
             },
             &class.modifiers,
             &super_internal_name,
-            unsupported_features,
-            type_arena,
-            symbol_table,
+            generation_context,
         )?);
     }
 
@@ -548,12 +552,10 @@ fn method_from_ast(
     class_kind: ClassKind,
     class_modifiers: &Modifiers,
     method: &AstMethod,
-    unsupported_features: &mut Vec<UnsupportedFeature>,
-    type_arena: &rajac_types::TypeArena,
-    symbol_table: &SymbolTable,
+    generation_context: &mut ClassfileGenerationContext<'_>,
 ) -> RajacResult<Option<Method>> {
     let name_index = constant_pool.add_utf8(method.name.as_str())?;
-    let descriptor = method_to_descriptor(arena, method, type_arena)?;
+    let descriptor = method_to_descriptor(arena, method, generation_context.type_arena)?;
     let descriptor_index = constant_pool.add_utf8(&descriptor)?;
 
     let mut access_flags = method_access_flags(&method.modifiers);
@@ -562,12 +564,12 @@ fn method_from_ast(
         // Generate bytecode for method with body
         generate_method_bytecode(
             arena,
-            type_arena,
-            symbol_table,
+            generation_context.type_arena,
+            generation_context.symbol_table,
             constant_pool,
             method,
             body_id,
-            unsupported_features,
+            generation_context.unsupported_features,
         )?
     } else {
         // Handle abstract methods
@@ -587,9 +589,12 @@ fn method_from_ast(
         vec![]
     };
 
-    if let Some(exceptions_attribute) =
-        exceptions_attribute_from_ast_types(constant_pool, &method.throws, arena, type_arena)?
-    {
+    if let Some(exceptions_attribute) = exceptions_attribute_from_ast_types(
+        constant_pool,
+        &method.throws,
+        arena,
+        generation_context.type_arena,
+    )? {
         attributes.push(exceptions_attribute);
     }
 
@@ -660,12 +665,10 @@ fn constructor_from_ast(
     constructor: &AstConstructor,
     class_modifiers: &Modifiers,
     super_internal_name: &str,
-    unsupported_features: &mut Vec<UnsupportedFeature>,
-    type_arena: &rajac_types::TypeArena,
-    symbol_table: &SymbolTable,
+    generation_context: &mut ClassfileGenerationContext<'_>,
 ) -> RajacResult<Method> {
     let name_index = constant_pool.add_utf8("<init>")?;
-    let descriptor = constructor_to_descriptor(arena, constructor, type_arena)?;
+    let descriptor = constructor_to_descriptor(arena, constructor, generation_context.type_arena)?;
     let descriptor_index = constant_pool.add_utf8(&descriptor)?;
 
     let mut access_flags = MethodAccessFlags::default();
@@ -679,13 +682,20 @@ fn constructor_from_ast(
         access_flags |= MethodAccessFlags::PRIVATE;
     }
 
-    let mut code_gen = CodeGenerator::new(arena, type_arena, symbol_table, constant_pool);
+    let mut code_gen = CodeGenerator::new(
+        arena,
+        generation_context.type_arena,
+        generation_context.symbol_table,
+        constant_pool,
+    );
     let (instructions, max_stack, max_locals) = code_gen.generate_constructor_body(
         &constructor.params,
         constructor.body,
         super_internal_name,
     )?;
-    unsupported_features.extend(code_gen.take_unsupported_features());
+    generation_context
+        .unsupported_features
+        .extend(code_gen.take_unsupported_features());
 
     let code_name = constant_pool.add_utf8("Code")?;
     let code_attribute = ristretto_classfile::attributes::Attribute::Code {
@@ -698,9 +708,12 @@ fn constructor_from_ast(
     };
 
     let mut attributes = vec![code_attribute];
-    if let Some(exceptions_attribute) =
-        exceptions_attribute_from_ast_types(constant_pool, &constructor.throws, arena, type_arena)?
-    {
+    if let Some(exceptions_attribute) = exceptions_attribute_from_ast_types(
+        constant_pool,
+        &constructor.throws,
+        arena,
+        generation_context.type_arena,
+    )? {
         attributes.push(exceptions_attribute);
     }
 
