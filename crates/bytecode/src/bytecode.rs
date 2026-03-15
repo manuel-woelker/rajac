@@ -1551,9 +1551,14 @@ impl<'arena> CodeGenerator<'arena> {
         method_id: Option<rajac_types::MethodId>,
         return_type: TypeId,
     ) -> RajacResult<()> {
+        let resolved_method =
+            method_id.map(|method_id| self.symbol_table.method_arena().get(method_id));
+        let is_static_call =
+            resolved_method.is_some_and(|signature| signature.modifiers.is_static());
+
         if let Some(target_expr_id) = target {
             self.emit_expression(*target_expr_id)?;
-        } else {
+        } else if !is_static_call {
             self.emit(Instruction::Aload_0);
         }
 
@@ -1576,19 +1581,43 @@ impl<'arena> CodeGenerator<'arena> {
                     self.type_arena,
                 )
             });
-        let owner = target
-            .map(|expr_id| self.expression_type_id(*expr_id))
-            .map(|type_id| type_id_to_internal_name(type_id, self.type_arena))
-            .unwrap_or_else(|| "java/lang/Object".to_string());
+        let owner = if let Some(expr_id) = target {
+            type_id_to_internal_name(self.expression_type_id(*expr_id), self.type_arena)
+        } else if let Some(method_id) = method_id {
+            self.method_owner_internal_name(method_id)
+                .unwrap_or_else(|| "java/lang/Object".to_string())
+        } else {
+            "java/lang/Object".to_string()
+        };
 
         let owner_class = self.constant_pool.add_class(&owner)?;
         let method_ref =
             self.constant_pool
                 .add_method_ref(owner_class, name.as_str(), &descriptor)?;
-        self.emit(Instruction::Invokevirtual(method_ref));
-        self.adjust_method_call_stack(&descriptor, true);
+        if is_static_call {
+            self.emit(Instruction::Invokestatic(method_ref));
+            self.adjust_method_call_stack(&descriptor, false);
+        } else {
+            self.emit(Instruction::Invokevirtual(method_ref));
+            self.adjust_method_call_stack(&descriptor, true);
+        }
 
         Ok(())
+    }
+
+    fn method_owner_internal_name(&self, method_id: rajac_types::MethodId) -> Option<String> {
+        for index in 0..self.type_arena.len() {
+            let type_id = TypeId(index as u32);
+            if let Type::Class(class_type) = self.type_arena.get(type_id)
+                && class_type
+                    .methods
+                    .values()
+                    .any(|method_ids| method_ids.contains(&method_id))
+            {
+                return Some(class_type.internal_name());
+            }
+        }
+        None
     }
 
     fn initialize_method_locals(&mut self, is_static: bool, params: &[ParamId]) {
