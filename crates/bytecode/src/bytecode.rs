@@ -260,22 +260,36 @@ impl<'arena> CodeGenerator<'arena> {
                 then_branch,
                 else_branch,
             } => {
-                let then_label = self.new_label();
-                let end_label = self.new_label();
-                let else_label = else_branch.map(|_| self.new_label()).unwrap_or(end_label);
-
-                self.emit_condition(*condition, then_label, else_label)?;
-                self.bind_label(then_label);
-                self.emit_statement(*then_branch)?;
-
                 if let Some(else_branch) = else_branch {
-                    self.emit_branch(BranchKind::Goto, end_label);
-                    self.current_stack = 0;
+                    let else_label = self.new_label();
+                    let then_terminates = self.statement_terminates(*then_branch);
+
+                    self.emit_false_branch_condition(*condition, else_label)?;
+                    self.emit_statement(*then_branch)?;
+
+                    if then_terminates {
+                        self.current_stack = 0;
+                    } else {
+                        let end_label = self.new_label();
+                        self.emit_branch(BranchKind::Goto, end_label);
+                        self.current_stack = 0;
+                        self.bind_label(else_label);
+                        self.emit_statement(*else_branch)?;
+                        self.bind_label(end_label);
+                        return Ok(());
+                    }
+
                     self.bind_label(else_label);
                     self.emit_statement(*else_branch)?;
-                }
+                } else {
+                    let then_label = self.new_label();
+                    let end_label = self.new_label();
 
-                self.bind_label(end_label);
+                    self.emit_condition(*condition, then_label, end_label)?;
+                    self.bind_label(then_label);
+                    self.emit_statement(*then_branch)?;
+                    self.bind_label(end_label);
+                }
             }
             Stmt::While { .. } | Stmt::For { .. } | Stmt::DoWhile { .. } => {}
             Stmt::Break(_) | Stmt::Continue(_) | Stmt::Label(_, _) | Stmt::Switch { .. } => {}
@@ -569,6 +583,42 @@ impl<'arena> CodeGenerator<'arena> {
         Ok(())
     }
 
+    fn emit_false_branch_condition(
+        &mut self,
+        expr_id: ExprId,
+        false_label: LabelId,
+    ) -> RajacResult<()> {
+        let typed_expr = self.arena.expr_typed(expr_id);
+        let expr = &typed_expr.expr;
+
+        match expr {
+            AstExpr::Literal(literal) if matches!(literal.kind, LiteralKind::Bool) => {
+                if literal.value.as_str() == "false" {
+                    self.emit_branch(BranchKind::Goto, false_label);
+                }
+            }
+            AstExpr::Binary { op, lhs, rhs }
+                if matches!(
+                    op,
+                    rajac_ast::BinaryOp::EqEq
+                        | rajac_ast::BinaryOp::BangEq
+                        | rajac_ast::BinaryOp::Lt
+                        | rajac_ast::BinaryOp::LtEq
+                        | rajac_ast::BinaryOp::Gt
+                        | rajac_ast::BinaryOp::GtEq
+                ) =>
+            {
+                self.emit_comparison_false_branch(op.clone(), *lhs, *rhs, false_label)?;
+            }
+            _ => {
+                self.emit_expression(expr_id)?;
+                self.emit_branch(BranchKind::IfEq, false_label);
+            }
+        }
+
+        Ok(())
+    }
+
     fn emit_comparison_condition(
         &mut self,
         op: rajac_ast::BinaryOp,
@@ -702,6 +752,24 @@ impl<'arena> CodeGenerator<'arena> {
         }
 
         Ok(())
+    }
+
+    fn statement_terminates(&self, stmt_id: StmtId) -> bool {
+        match self.arena.stmt(stmt_id) {
+            Stmt::Return(_) => true,
+            Stmt::Block(stmts) => stmts
+                .last()
+                .copied()
+                .is_some_and(|last_stmt| self.statement_terminates(last_stmt)),
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => else_branch.as_ref().is_some_and(|else_branch| {
+                self.statement_terminates(*then_branch) && self.statement_terminates(*else_branch)
+            }),
+            _ => false,
+        }
     }
 
     fn emit_binary_op(
