@@ -918,21 +918,24 @@ fn resolve_expr(
             expr_ty = superclass_type_id(current_class_type_id, symbol_table);
         }
         rajac_ast::Expr::SuperCall {
-            name,
-            method_id,
-            args,
-            ..
+            method_id, args, ..
         } => {
             let receiver_ty = superclass_type_id(current_class_type_id, symbol_table);
             let arg_types = args
                 .iter()
                 .map(|arg| arena.expr_typed(*arg).ty)
                 .collect::<Vec<_>>();
+            let constructor_name = match symbol_table.type_arena().get(receiver_ty) {
+                Type::Class(class_type) => class_type.name.clone(),
+                _ => SharedString::new("super"),
+            };
             if let Some(method) =
-                resolve_method_in_type(receiver_ty, &name.name, &arg_types, symbol_table)
+                resolve_method_in_type(receiver_ty, &constructor_name, &arg_types, symbol_table)
             {
                 *method_id = Some(method);
-                expr_ty = symbol_table.method_arena().get(method).return_type;
+                expr_ty = symbol_table
+                    .primitive_type_id("void")
+                    .unwrap_or(TypeId::INVALID);
             }
         }
     }

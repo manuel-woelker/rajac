@@ -84,6 +84,7 @@ struct SemanticAnalyzer<'a> {
     current_package: SharedString,
     current_class_type_id: Option<TypeId>,
     current_return_type: Option<TypeId>,
+    current_member_is_constructor: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -130,6 +131,7 @@ impl<'a> SemanticAnalyzer<'a> {
             current_package,
             current_class_type_id: None,
             current_return_type: None,
+            current_member_is_constructor: false,
         }
     }
 
@@ -212,7 +214,9 @@ impl<'a> SemanticAnalyzer<'a> {
 
     fn analyze_method(&mut self, method: &Method) {
         let previous_return_type = self.current_return_type;
+        let previous_member_is_constructor = self.current_member_is_constructor;
         self.current_return_type = Some(self.arena.ty(method.return_ty).ty());
+        self.current_member_is_constructor = false;
         self.push_scope();
 
         for param_id in &method.params {
@@ -227,15 +231,18 @@ impl<'a> SemanticAnalyzer<'a> {
 
         self.pop_scope();
         self.current_return_type = previous_return_type;
+        self.current_member_is_constructor = previous_member_is_constructor;
     }
 
     fn analyze_constructor(&mut self, constructor: &Constructor) {
         let previous_return_type = self.current_return_type;
+        let previous_member_is_constructor = self.current_member_is_constructor;
         self.current_return_type = Some(
             self.symbol_table
                 .primitive_type_id("void")
                 .unwrap_or(TypeId::INVALID),
         );
+        self.current_member_is_constructor = true;
         self.push_scope();
 
         for param_id in &constructor.params {
@@ -245,11 +252,13 @@ impl<'a> SemanticAnalyzer<'a> {
         }
 
         if let Some(body) = constructor.body {
+            self.validate_super_constructor_invocations(body);
             self.analyze_stmt(body);
         }
 
         self.pop_scope();
         self.current_return_type = previous_return_type;
+        self.current_member_is_constructor = previous_member_is_constructor;
     }
 
     fn analyze_stmt(&mut self, stmt_id: StmtId) -> StatementOutcome {
@@ -1080,35 +1089,77 @@ impl<'a> SemanticAnalyzer<'a> {
     fn analyze_super_call_expr(
         &mut self,
         expr_id: ExprId,
-        name: Ident,
+        _name: Ident,
         args: Vec<ExprId>,
         method_id: Option<MethodId>,
     ) -> TypeId {
+        if !self.current_member_is_constructor {
+            let _ = method_id;
+            self.emit_error(
+                "super constructor invocation is only allowed in constructors".to_string(),
+                Some("super"),
+            );
+            return TypeId::INVALID;
+        }
+
         let receiver_ty = self.superclass_type_id();
         let arg_types = args
             .iter()
             .map(|arg| self.analyze_expr(*arg))
             .collect::<Vec<_>>();
+        let constructor_name = match self.symbol_table.type_arena().get(receiver_ty) {
+            Type::Class(class_type) => class_type.name.clone(),
+            _ => SharedString::new("super"),
+        };
 
-        if let Some(resolved_method_id) =
-            resolve_method_in_type(receiver_ty, &name.name, &arg_types, self.symbol_table)
-        {
+        if let Some(resolved_method_id) = resolve_method_in_type(
+            receiver_ty,
+            &constructor_name,
+            &arg_types,
+            self.symbol_table,
+        ) {
             if let Expr::SuperCall { method_id, .. } = self.arena.expr_mut(expr_id) {
                 *method_id = Some(resolved_method_id);
             }
             return self
                 .symbol_table
-                .method_arena()
-                .get(resolved_method_id)
-                .return_type;
+                .primitive_type_id("void")
+                .unwrap_or(TypeId::INVALID);
         }
 
         let _ = method_id;
         self.emit_error(
-            format!("cannot find super method '{}'", name.name.as_str()),
-            Some(name.name.as_str()),
+            format!(
+                "no applicable superclass constructor for {}({})",
+                self.type_display_name(receiver_ty),
+                arg_types
+                    .iter()
+                    .map(|ty| self.type_display_name(*ty))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Some("super"),
         );
         TypeId::INVALID
+    }
+
+    fn validate_super_constructor_invocations(&mut self, body: StmtId) {
+        let Stmt::Block(statements) = self.arena.stmt(body).clone() else {
+            return;
+        };
+
+        for (index, stmt_id) in statements.iter().enumerate() {
+            let Stmt::Expr(expr_id) = self.arena.stmt(*stmt_id).clone() else {
+                continue;
+            };
+            if matches!(self.arena.expr(expr_id), Expr::SuperCall { .. }) && index != 0 {
+                self.emit_error(
+                    "super constructor invocation must be the first statement in a constructor"
+                        .to_string(),
+                    Some("super"),
+                );
+            }
+        }
     }
 
     fn require_boolean_condition(&mut self, expr_id: ExprId, construct: &str) {
@@ -3176,6 +3227,60 @@ class Example extends Base {
                 ..
             } if matches!(unit.arena.expr(*receiver), Expr::Super)
         )));
+    }
+
+    #[test]
+    fn accepts_explicit_super_constructor_invocation() {
+        let source = r#"
+class Base {
+    Base(int value) {}
+}
+
+class Example extends Base {
+    Example() {
+        super(3);
+    }
+}
+"#;
+
+        let (mut units, mut symbol_table) = resolved_units(source);
+        let diagnostics = analyze_attributes(&mut units, &mut symbol_table);
+
+        assert!(diagnostics.is_empty());
+        let unit = &units[0];
+        assert!(unit.arena.exprs.iter().any(|expr| matches!(
+            &expr.expr,
+            Expr::SuperCall {
+                method_id: Some(_),
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn reports_super_constructor_invocation_after_other_statements() {
+        let source = r#"
+class Base {
+    Base(int value) {}
+}
+
+class Example extends Base {
+    Example() {
+        int value = 1;
+        super(value);
+    }
+}
+"#;
+
+        let (mut units, mut symbol_table) = resolved_units(source);
+        let diagnostics = analyze_attributes(&mut units, &mut symbol_table);
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .as_str()
+                .contains("super constructor invocation must be the first statement")
+        }));
     }
 
     fn root_expr_id(unit: &CompilationUnit) -> rajac_ast::ExprId {
