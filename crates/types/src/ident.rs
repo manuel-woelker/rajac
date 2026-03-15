@@ -1,5 +1,6 @@
 use crate::TypeId;
 use rajac_base::shared_string::SharedString;
+use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ident {
@@ -13,6 +14,12 @@ impl Ident {
 
     pub fn as_str(&self) -> &str {
         self.name.as_str()
+    }
+}
+
+impl Display for Ident {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
