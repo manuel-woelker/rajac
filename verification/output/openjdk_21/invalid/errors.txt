@@ -36,10 +36,22 @@
         System.out.println( "Hello, World! );
                             ^
 13 errors
+/data/projects/rajac/verification/sources_invalid/typecheck/BreakOutsideLoop.java:3: error: break outside switch or loop
+        break;
+        ^
+/data/projects/rajac/verification/sources_invalid/typecheck/ContinueOutsideLoop.java:3: error: continue outside of loop
+        continue;
+        ^
+/data/projects/rajac/verification/sources_invalid/typecheck/DuplicateActiveLabel.java:5: error: label outer already in use
+            outer:
+            ^
+/data/projects/rajac/verification/sources_invalid/typecheck/DuplicateSwitchDefault.java:6: error: duplicate default label
+            default:
+            ^
 /data/projects/rajac/verification/sources_invalid/typecheck/NonBooleanWhile.java:3: error: incompatible types: int cannot be converted to boolean
         while (1) {
                ^
 /data/projects/rajac/verification/sources_invalid/typecheck/ReturnTypeMismatch.java:3: error: incompatible types: boolean cannot be converted to int
         return true;
                ^
-2 errors
+6 errors

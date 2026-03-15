@@ -35,6 +35,8 @@ fn get_error_message_overrides() -> HashMap<&'static str, &'static str> {
         "ReturnTypeMismatch",
         "incompatible types: found boolean, required int",
     );
+    overrides.insert("ContinueOutsideLoop", "continue outside loop");
+    overrides.insert("DuplicateActiveLabel", "duplicate label 'outer'");
 
     overrides
 }

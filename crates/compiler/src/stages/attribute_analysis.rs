@@ -1390,6 +1390,7 @@ impl<'a> SemanticAnalyzer<'a> {
 
         let mut seen_case_values = HashSet::new();
         let mut has_default = false;
+        let mut default_count = 0;
         let mut can_complete_normally = cases.is_empty();
         self.with_control_flow_context(ControlFlowContext::Switch, |analyzer| {
             for case in cases {
@@ -1402,8 +1403,13 @@ impl<'a> SemanticAnalyzer<'a> {
                                 &mut seen_case_values,
                             ),
                         rajac_ast::SwitchLabel::Default => {
+                            default_count += 1;
                             if has_default {
-                                analyzer.emit_error("duplicate default label", Some("default"));
+                                analyzer.emit_error_occurrence(
+                                    "duplicate default label",
+                                    "default",
+                                    default_count,
+                                );
                             } else {
                                 has_default = true;
                             }
@@ -1513,6 +1519,21 @@ impl<'a> SemanticAnalyzer<'a> {
         kind: LabeledStatementKind,
         analyze: impl FnOnce(&mut Self),
     ) {
+        if self.lookup_label(name).is_some() {
+            let occurrence = self
+                .active_labels
+                .iter()
+                .filter(|label| &label.name == name)
+                .count()
+                + 1;
+            self.emit_error_occurrence(
+                format!("duplicate label '{}'", name.as_str()),
+                name.as_str(),
+                occurrence,
+            );
+            analyze(self);
+            return;
+        }
         self.active_labels.push(ActiveLabel {
             name: name.clone(),
             kind,
@@ -1698,6 +1719,22 @@ impl<'a> SemanticAnalyzer<'a> {
             "unreachable statement",
             stmt_marker(self.arena.stmt(stmt_id)),
         );
+    }
+
+    fn emit_error_occurrence(
+        &mut self,
+        message: impl Into<String>,
+        marker: &str,
+        occurrence: usize,
+    ) {
+        let message = message.into();
+        let chunk =
+            source_chunk_for_marker_occurrence(self.source_file, self.source, marker, occurrence);
+        self.diagnostics.add(Diagnostic {
+            severity: Severity::Error,
+            message: SharedString::new(&message),
+            chunks: vec![chunk],
+        });
     }
 }
 
@@ -2405,7 +2442,9 @@ fn source_chunk_for_marker(
     source: &str,
     marker: Option<&str>,
 ) -> SourceChunk {
-    let offset = marker.and_then(|marker| source.find(marker)).unwrap_or(0);
+    let offset = marker
+        .and_then(|marker| marker_offset(source, marker, 1))
+        .unwrap_or(0);
     let (line, line_start, line_end) = line_bounds_for_offset(source, offset);
     let fragment = &source[line_start..line_end];
     let annotation_start = marker.and_then(|marker| fragment.find(marker)).unwrap_or(0);
@@ -2423,6 +2462,49 @@ fn source_chunk_for_marker(
             message: SharedString::new(""),
         }],
     }
+}
+
+fn source_chunk_for_marker_occurrence(
+    source_file: &FilePath,
+    source: &str,
+    marker: &str,
+    occurrence: usize,
+) -> SourceChunk {
+    let offset = marker_offset(source, marker, occurrence).unwrap_or(0);
+    let (line, line_start, line_end) = line_bounds_for_offset(source, offset);
+    let fragment = &source[line_start..line_end];
+    let annotation_start = fragment.find(marker).unwrap_or(0);
+    let annotation_end = annotation_start + marker.len().max(1);
+
+    SourceChunk {
+        path: source_file.clone(),
+        fragment: SharedString::new(fragment),
+        offset: line_start,
+        line,
+        annotations: vec![Annotation {
+            span: Span(annotation_start..annotation_end),
+            message: SharedString::new(""),
+        }],
+    }
+}
+
+fn marker_offset(source: &str, marker: &str, occurrence: usize) -> Option<usize> {
+    if marker.is_empty() || occurrence == 0 {
+        return None;
+    }
+
+    let mut search_start = 0;
+    let mut seen = 0;
+    while let Some(relative_index) = source[search_start..].find(marker) {
+        let absolute_index = search_start + relative_index;
+        seen += 1;
+        if seen == occurrence {
+            return Some(absolute_index);
+        }
+        search_start = absolute_index + marker.len();
+    }
+
+    None
 }
 
 fn line_bounds_for_offset(source: &str, offset: usize) -> (usize, usize, usize) {
@@ -2769,6 +2851,33 @@ class Example {
                 .message
                 .as_str()
                 .contains("undefined label 'outer'")
+        }));
+    }
+
+    #[test]
+    fn reports_duplicate_active_labels() {
+        let source = r#"
+class Example {
+    void run() {
+        outer:
+        while (true) {
+            outer:
+            while (true) {
+                break outer;
+            }
+        }
+    }
+}
+"#;
+
+        let (mut units, mut symbol_table) = resolved_units(source);
+        let diagnostics = analyze_attributes(&mut units, &mut symbol_table);
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .as_str()
+                .contains("duplicate label 'outer'")
         }));
     }
 
