@@ -103,6 +103,7 @@ pub(crate) fn classfile_from_class_decl_with_context(
                 if let Some(method_info) = method_from_ast(
                     arena,
                     &mut constant_pool,
+                    this_internal_name,
                     class.kind.clone(),
                     &class.modifiers,
                     method,
@@ -116,6 +117,7 @@ pub(crate) fn classfile_from_class_decl_with_context(
                 methods.push(constructor_from_ast(
                     arena,
                     &mut constant_pool,
+                    this_internal_name,
                     constructor,
                     &class.modifiers,
                     &super_internal_name,
@@ -135,6 +137,7 @@ pub(crate) fn classfile_from_class_decl_with_context(
         methods.push(constructor_from_ast(
             arena,
             &mut constant_pool,
+            this_internal_name,
             &AstConstructor {
                 name: class.name.clone(),
                 params: vec![],

@@ -8,7 +8,7 @@ use rajac_ast::{
     Modifiers,
 };
 use rajac_base::result::{RajacResult, ResultExt};
-use rajac_symbols::SymbolTable;
+use rajac_base::shared_string::SharedString;
 use ristretto_classfile::attributes::Attribute;
 use ristretto_classfile::{
     ConstantPool, Field, FieldAccessFlags, FieldType, Method, MethodAccessFlags,
@@ -67,6 +67,7 @@ fn field_access_flags(modifiers: &Modifiers) -> FieldAccessFlags {
 pub(crate) fn method_from_ast(
     arena: &AstArena,
     constant_pool: &mut ConstantPool,
+    this_internal_name: &str,
     class_kind: ClassKind,
     class_modifiers: &Modifiers,
     method: &AstMethod,
@@ -81,12 +82,11 @@ pub(crate) fn method_from_ast(
     let mut attributes = if let Some(body_id) = method.body {
         generate_method_bytecode(
             arena,
-            generation_context.type_arena,
-            generation_context.symbol_table,
             constant_pool,
+            this_internal_name,
             method,
             body_id,
-            generation_context.unsupported_features,
+            generation_context,
         )?
     } else {
         let method_can_be_bodyless = match class_kind {
@@ -124,19 +124,26 @@ pub(crate) fn method_from_ast(
 
 pub(crate) fn generate_method_bytecode(
     arena: &AstArena,
-    type_arena: &rajac_types::TypeArena,
-    symbol_table: &SymbolTable,
     constant_pool: &mut ConstantPool,
+    this_internal_name: &str,
     method: &AstMethod,
     body_id: rajac_ast::StmtId,
-    unsupported_features: &mut Vec<crate::bytecode::UnsupportedFeature>,
+    generation_context: &mut ClassfileGenerationContext<'_>,
 ) -> RajacResult<Vec<Attribute>> {
     let is_static = method.modifiers.0 & Modifiers::STATIC != 0;
 
-    let mut code_gen = CodeGenerator::new(arena, type_arena, symbol_table, constant_pool);
+    let mut code_gen = CodeGenerator::new(
+        arena,
+        generation_context.type_arena,
+        generation_context.symbol_table,
+        constant_pool,
+        Some(SharedString::new(this_internal_name)),
+    );
     let (instructions, max_stack, max_locals) =
         code_gen.generate_method_body(is_static, &method.params, body_id)?;
-    unsupported_features.extend(code_gen.take_unsupported_features());
+    generation_context
+        .unsupported_features
+        .extend(code_gen.take_unsupported_features());
 
     let code_name = constant_pool.add_utf8("Code")?;
 
@@ -178,6 +185,7 @@ fn method_access_flags(modifiers: &Modifiers) -> MethodAccessFlags {
 pub(crate) fn constructor_from_ast(
     arena: &AstArena,
     constant_pool: &mut ConstantPool,
+    this_internal_name: &str,
     constructor: &AstConstructor,
     class_modifiers: &Modifiers,
     super_internal_name: &str,
@@ -203,6 +211,7 @@ pub(crate) fn constructor_from_ast(
         generation_context.type_arena,
         generation_context.symbol_table,
         constant_pool,
+        Some(SharedString::new(this_internal_name)),
     );
     let (instructions, max_stack, max_locals) = code_gen.generate_constructor_body(
         &constructor.params,

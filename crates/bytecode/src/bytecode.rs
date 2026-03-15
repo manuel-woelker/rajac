@@ -4,8 +4,8 @@ use rajac_ast::{
 };
 use rajac_base::result::RajacResult;
 use rajac_base::shared_string::SharedString;
-use rajac_symbols::SymbolTable;
-use rajac_types::{Ident, Type, TypeArena, TypeId};
+use rajac_symbols::{SymbolKind, SymbolTable};
+use rajac_types::{Ident, MethodId, Type, TypeArena, TypeId};
 use ristretto_classfile::ConstantPool;
 use ristretto_classfile::attributes::{Instruction, LookupSwitch, TableSwitch};
 
@@ -128,6 +128,7 @@ pub struct CodeGenerator<'arena> {
     type_arena: &'arena TypeArena,
     symbol_table: &'arena SymbolTable,
     constant_pool: &'arena mut ConstantPool,
+    current_class_internal_name: Option<SharedString>,
     emitter: BytecodeEmitter,
     max_stack: u16,
     current_stack: i32,
@@ -145,12 +146,14 @@ impl<'arena> CodeGenerator<'arena> {
         type_arena: &'arena TypeArena,
         symbol_table: &'arena SymbolTable,
         constant_pool: &'arena mut ConstantPool,
+        current_class_internal_name: Option<SharedString>,
     ) -> Self {
         Self {
             arena,
             type_arena,
             symbol_table,
             constant_pool,
+            current_class_internal_name,
             emitter: BytecodeEmitter::new(),
             max_stack: 0,
             current_stack: 0,
@@ -757,9 +760,13 @@ impl<'arena> CodeGenerator<'arena> {
             AstExpr::Super => {
                 self.emit(Instruction::Aload_0);
             }
-            AstExpr::SuperCall { name, args, .. } => {
-                let _ = (name, args);
-                self.emit_unsupported_feature("super method calls", "super")?;
+            AstExpr::SuperCall {
+                name,
+                args,
+                method_id,
+                ..
+            } => {
+                self.emit_super_method_call(name, args, *method_id, expr_ty)?;
             }
         }
         Ok(())
@@ -904,10 +911,6 @@ impl<'arena> CodeGenerator<'arena> {
         args: &[ExprId],
     ) -> RajacResult<()> {
         self.emit(Instruction::Aload_0);
-        for &arg in args {
-            self.emit_expression(arg)?;
-        }
-
         let super_class = self.constant_pool.add_class(super_internal_name)?;
         let descriptor = method_descriptor_from_parts(
             args.iter()
@@ -918,11 +921,37 @@ impl<'arena> CodeGenerator<'arena> {
                 .unwrap_or(TypeId::INVALID),
             self.symbol_table.type_arena(),
         );
-        let super_init = self
+        let invocation = ResolvedInvocation::special(
+            SharedString::new(super_internal_name),
+            SharedString::new("<init>"),
+            SharedString::new(descriptor),
+        );
+        self.emit_invocation(&invocation, super_class, args)?;
+        Ok(())
+    }
+
+    fn emit_super_method_call(
+        &mut self,
+        name: &Ident,
+        args: &[ExprId],
+        method_id: Option<MethodId>,
+        return_type: TypeId,
+    ) -> RajacResult<()> {
+        let Some(method_id) = method_id else {
+            return self.emit_unsupported_feature("unresolved super method calls", "super");
+        };
+        let Some(mut invocation) =
+            self.resolve_method_invocation(None, name, args, Some(method_id), return_type)?
+        else {
+            return self
+                .emit_unsupported_feature("super method calls without resolved owners", "super");
+        };
+        invocation.kind = InvocationKind::Special;
+        let owner_class = self
             .constant_pool
-            .add_method_ref(super_class, "<init>", &descriptor)?;
-        self.emit(Instruction::Invokespecial(super_init));
-        self.adjust_method_call_stack(&descriptor, true);
+            .add_class(invocation.owner_internal_name.as_str())?;
+        self.emit(Instruction::Aload_0);
+        self.emit_invocation(&invocation, owner_class, args)?;
         Ok(())
     }
 
@@ -1619,76 +1648,179 @@ impl<'arena> CodeGenerator<'arena> {
         target: Option<&ExprId>,
         name: &Ident,
         args: &[ExprId],
-        method_id: Option<rajac_types::MethodId>,
+        method_id: Option<MethodId>,
         return_type: TypeId,
     ) -> RajacResult<()> {
-        let resolved_method =
-            method_id.map(|method_id| self.symbol_table.method_arena().get(method_id));
-        let is_static_call =
-            resolved_method.is_some_and(|signature| signature.modifiers.is_static());
+        let Some(invocation) =
+            self.resolve_method_invocation(target, name, args, method_id, return_type)?
+        else {
+            return self.emit_unsupported_feature("unresolved method calls", name.as_str());
+        };
 
         if let Some(target_expr_id) = target {
             self.emit_expression(*target_expr_id)?;
-        } else if !is_static_call {
+        } else if invocation.has_receiver() {
             self.emit(Instruction::Aload_0);
         }
 
-        for arg in args {
-            self.emit_expression(*arg)?;
-        }
+        let owner_class = self
+            .constant_pool
+            .add_class(invocation.owner_internal_name.as_str())?;
+        self.emit_invocation(&invocation, owner_class, args)?;
+        Ok(())
+    }
 
-        let descriptor = method_id
-            .map(|method_id| {
-                let signature = self.symbol_table.method_arena().get(method_id);
-                method_descriptor_from_signature(signature, self.type_arena)
-            })
-            .or_else(|| infer_method_descriptor(name, args, self.symbol_table, self.type_arena))
-            .unwrap_or_else(|| {
-                method_descriptor_from_parts(
+    fn resolve_method_invocation(
+        &self,
+        target: Option<&ExprId>,
+        name: &Ident,
+        args: &[ExprId],
+        method_id: Option<MethodId>,
+        return_type: TypeId,
+    ) -> RajacResult<Option<ResolvedInvocation>> {
+        let Some(method_id) = method_id else {
+            if let Some(descriptor) =
+                infer_method_descriptor(name, args, self.symbol_table, self.type_arena)
+            {
+                return Ok(Some(ResolvedInvocation {
+                    kind: InvocationKind::Virtual,
+                    owner_internal_name: SharedString::new("java/lang/Object"),
+                    name: SharedString::new(name.as_str()),
+                    descriptor: SharedString::new(descriptor),
+                    interface_arg_count: None,
+                }));
+            }
+            return Ok(Some(ResolvedInvocation {
+                kind: InvocationKind::Virtual,
+                owner_internal_name: SharedString::new("java/lang/Object"),
+                name: SharedString::new(name.as_str()),
+                descriptor: SharedString::new(method_descriptor_from_parts(
                     args.iter()
                         .map(|arg| self.expression_type_id(*arg))
                         .collect(),
                     return_type,
                     self.type_arena,
-                )
-            });
-        let owner = if let Some(expr_id) = target {
-            type_id_to_internal_name(self.expression_type_id(*expr_id), self.type_arena)
-        } else if let Some(method_id) = method_id {
-            self.method_owner_internal_name(method_id)
-                .unwrap_or_else(|| "java/lang/Object".to_string())
-        } else {
-            "java/lang/Object".to_string()
+                )),
+                interface_arg_count: None,
+            }));
         };
 
-        let owner_class = self.constant_pool.add_class(&owner)?;
-        let method_ref =
-            self.constant_pool
-                .add_method_ref(owner_class, name.as_str(), &descriptor)?;
-        if is_static_call {
-            self.emit(Instruction::Invokestatic(method_ref));
-            self.adjust_method_call_stack(&descriptor, false);
-        } else {
-            self.emit(Instruction::Invokevirtual(method_ref));
-            self.adjust_method_call_stack(&descriptor, true);
-        }
+        let signature = self.symbol_table.method_arena().get(method_id);
+        let descriptor =
+            SharedString::new(method_descriptor_from_signature(signature, self.type_arena));
+        let Some(owner) = self.resolve_method_owner(method_id) else {
+            return Ok(None);
+        };
+        let is_implicit_current_class_call = target.is_none()
+            && self
+                .current_class_internal_name
+                .as_ref()
+                .is_some_and(|current| current.as_str() == owner.internal_name.as_str());
 
-        Ok(())
+        let kind = if signature.modifiers.is_static() {
+            InvocationKind::Static
+        } else if signature.modifiers.0 & rajac_types::MethodModifiers::PRIVATE != 0
+            && is_implicit_current_class_call
+        {
+            InvocationKind::Special
+        } else if matches!(owner.kind, SymbolKind::Interface) {
+            InvocationKind::Interface
+        } else {
+            InvocationKind::Virtual
+        };
+
+        let interface_arg_count = matches!(kind, InvocationKind::Interface)
+            .then(|| interface_arg_count(descriptor.as_str()));
+
+        Ok(Some(ResolvedInvocation {
+            kind,
+            owner_internal_name: owner.internal_name,
+            name: SharedString::new(signature.name.as_str()),
+            descriptor,
+            interface_arg_count,
+        }))
     }
 
-    fn method_owner_internal_name(&self, method_id: rajac_types::MethodId) -> Option<String> {
-        for index in 0..self.type_arena.len() {
+    fn resolve_method_owner(&self, method_id: MethodId) -> Option<ResolvedMethodOwner> {
+        let type_arena = self.symbol_table.type_arena();
+        for index in 0..type_arena.len() {
             let type_id = TypeId(index as u32);
-            if let Type::Class(class_type) = self.type_arena.get(type_id)
-                && class_type
-                    .methods
-                    .values()
-                    .any(|method_ids| method_ids.contains(&method_id))
+            let Type::Class(class_type) = type_arena.get(type_id) else {
+                continue;
+            };
+            if !class_type
+                .methods
+                .values()
+                .any(|method_ids| method_ids.contains(&method_id))
             {
-                return Some(class_type.internal_name());
+                continue;
+            }
+
+            let internal_name = SharedString::new(class_type.internal_name());
+            let kind = self.lookup_symbol_kind_for_type(type_id)?;
+            return Some(ResolvedMethodOwner {
+                internal_name,
+                kind,
+            });
+        }
+        None
+    }
+
+    fn lookup_symbol_kind_for_type(&self, type_id: TypeId) -> Option<SymbolKind> {
+        for (_package_name, package) in self.symbol_table.iter() {
+            for (_name, symbol) in package.iter() {
+                if symbol.ty == type_id {
+                    return Some(symbol.kind);
+                }
             }
         }
         None
+    }
+
+    fn emit_invocation(
+        &mut self,
+        invocation: &ResolvedInvocation,
+        owner_class: u16,
+        args: &[ExprId],
+    ) -> RajacResult<()> {
+        for &arg in args {
+            self.emit_expression(arg)?;
+        }
+
+        let method_ref = match invocation.kind {
+            InvocationKind::Interface => self.constant_pool.add_interface_method_ref(
+                owner_class,
+                invocation.name.as_str(),
+                invocation.descriptor.as_str(),
+            )?,
+            InvocationKind::Static | InvocationKind::Virtual | InvocationKind::Special => {
+                self.constant_pool.add_method_ref(
+                    owner_class,
+                    invocation.name.as_str(),
+                    invocation.descriptor.as_str(),
+                )?
+            }
+        };
+
+        match invocation.kind {
+            InvocationKind::Static => {
+                self.emit(Instruction::Invokestatic(method_ref));
+            }
+            InvocationKind::Virtual => {
+                self.emit(Instruction::Invokevirtual(method_ref));
+            }
+            InvocationKind::Special => {
+                self.emit(Instruction::Invokespecial(method_ref));
+            }
+            InvocationKind::Interface => {
+                self.emit(Instruction::Invokeinterface(
+                    method_ref,
+                    invocation.interface_arg_count.unwrap_or(1),
+                ));
+            }
+        }
+        self.adjust_method_call_stack(invocation.descriptor.as_str(), invocation.has_receiver());
+        Ok(())
     }
 
     fn initialize_method_locals(&mut self, is_static: bool, params: &[ParamId]) {
@@ -2023,6 +2155,49 @@ impl<'arena> CodeGenerator<'arena> {
 struct LocalVar {
     slot: u16,
     kind: LocalVarKind,
+}
+
+#[derive(Clone, Debug)]
+struct ResolvedMethodOwner {
+    internal_name: SharedString,
+    kind: SymbolKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InvocationKind {
+    Static,
+    Virtual,
+    Special,
+    Interface,
+}
+
+#[derive(Clone, Debug)]
+struct ResolvedInvocation {
+    kind: InvocationKind,
+    owner_internal_name: SharedString,
+    name: SharedString,
+    descriptor: SharedString,
+    interface_arg_count: Option<u8>,
+}
+
+impl ResolvedInvocation {
+    fn special(
+        owner_internal_name: SharedString,
+        name: SharedString,
+        descriptor: SharedString,
+    ) -> Self {
+        Self {
+            kind: InvocationKind::Special,
+            owner_internal_name,
+            name,
+            descriptor,
+            interface_arg_count: None,
+        }
+    }
+
+    fn has_receiver(&self) -> bool {
+        !matches!(self.kind, InvocationKind::Static)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -2525,6 +2700,7 @@ fn stack_effect(instr: &Instruction) -> i32 {
         Getfield(_) => 0,
         Putfield(_) => -2,
         Invokevirtual(_) => -1,
+        Invokeinterface(_, _) => -1,
         Invokespecial(_) => -1,
         Invokestatic(_) => 0,
         New(_) => 1,
@@ -2567,6 +2743,13 @@ fn method_call_stack_delta(descriptor: &str, has_receiver: bool) -> Option<i32> 
     }
 
     Some(return_slots - arg_slots)
+}
+
+fn interface_arg_count(descriptor: &str) -> u8 {
+    method_call_stack_delta(descriptor, true)
+        .and_then(i32::checked_neg)
+        .and_then(|count| u8::try_from(count).ok())
+        .unwrap_or(1)
 }
 
 fn parse_return_descriptor_slots<I>(chars: &mut std::iter::Peekable<I>) -> Option<i32>
@@ -2615,7 +2798,32 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rajac_types::{ClassType, MethodModifiers, MethodSignature, Type};
     use ristretto_classfile::ConstantPool;
+
+    fn add_owner_method(
+        symbol_table: &mut SymbolTable,
+        package_name: &str,
+        class_name: &str,
+        kind: SymbolKind,
+        signature: MethodSignature,
+    ) -> MethodId {
+        let type_id = symbol_table.add_class(
+            package_name,
+            class_name,
+            Type::class(
+                ClassType::new(SharedString::new(class_name))
+                    .with_package(SharedString::new(package_name)),
+            ),
+            kind,
+        );
+        let method_id = symbol_table.method_arena_mut().alloc(signature);
+        let method_name = symbol_table.method_arena().get(method_id).name.clone();
+        if let Type::Class(class_type) = symbol_table.type_arena_mut().get_mut(type_id) {
+            class_type.add_method(method_name, method_id);
+        }
+        method_id
+    }
 
     #[test]
     fn finalize_adds_nop_for_branch_to_terminal_label() {
@@ -2658,7 +2866,7 @@ mod tests {
         let symbol_table = SymbolTable::new();
         let mut constant_pool = ConstantPool::new();
         let mut generator =
-            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
+            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool, None);
 
         generator.emit_literal(&Literal {
             kind: LiteralKind::Int,
@@ -2704,7 +2912,7 @@ mod tests {
         let symbol_table = SymbolTable::new();
         let mut constant_pool = ConstantPool::new();
         let mut generator =
-            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
+            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool, None);
 
         generator.emit_literal(&Literal {
             kind: LiteralKind::Char,
@@ -2742,7 +2950,7 @@ mod tests {
         let body = arena.alloc_stmt(Stmt::Block(vec![expr_stmt]));
 
         let mut generator =
-            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
+            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool, None);
         let (instructions, _max_stack, _max_locals) =
             generator.generate_method_body(false, &[], body)?;
 
@@ -2792,7 +3000,7 @@ mod tests {
         let body = arena.alloc_stmt(Stmt::Block(vec![local_var, expr_stmt]));
 
         let mut generator =
-            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
+            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool, None);
         let (instructions, _max_stack, _max_locals) =
             generator.generate_method_body(false, &[], body)?;
 
@@ -2825,7 +3033,7 @@ mod tests {
         let body = arena.alloc_stmt(Stmt::Block(vec![throw_stmt]));
 
         let mut generator =
-            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
+            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool, None);
         let (instructions, _max_stack, _max_locals) =
             generator.generate_method_body(false, &[], body)?;
 
@@ -2852,7 +3060,7 @@ mod tests {
         let body = arena.alloc_stmt(Stmt::Block(vec![throw_stmt]));
 
         let mut generator =
-            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
+            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool, None);
         let (instructions, _max_stack, _max_locals) =
             generator.generate_constructor_body(&[], Some(body), "java/lang/Object")?;
 
@@ -2881,7 +3089,7 @@ mod tests {
         let body = arena.alloc_stmt(Stmt::Block(vec![try_stmt]));
 
         let mut generator =
-            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
+            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool, None);
         let (instructions, _max_stack, _max_locals) =
             generator.generate_method_body(false, &[], body)?;
         let unsupported_features = generator.take_unsupported_features();
@@ -2928,7 +3136,7 @@ mod tests {
         let body = arena.alloc_stmt(Stmt::Block(vec![expr_stmt]));
 
         let mut generator =
-            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
+            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool, None);
         let (instructions, _max_stack, _max_locals) =
             generator.generate_method_body(false, &[], body)?;
         let unsupported_features = generator.take_unsupported_features();
@@ -2960,5 +3168,144 @@ mod tests {
         assert_eq!(method_call_stack_delta("()I", true), Some(0));
         assert_eq!(method_call_stack_delta("(JD)J", true), Some(-3));
         assert_eq!(method_call_stack_delta("(I)V", false), Some(-1));
+    }
+
+    #[test]
+    fn resolved_static_method_calls_emit_invokestatic() -> RajacResult<()> {
+        let arena = AstArena::new();
+        let mut symbol_table = SymbolTable::new();
+        let mut constant_pool = ConstantPool::new();
+        let void_type = symbol_table
+            .primitive_type_id_by_kind(rajac_types::PrimitiveType::Void)
+            .expect("void type");
+        let method_id = add_owner_method(
+            &mut symbol_table,
+            "example",
+            "Util",
+            SymbolKind::Class,
+            MethodSignature::new(
+                SharedString::new("ping"),
+                vec![],
+                void_type,
+                MethodModifiers(MethodModifiers::STATIC | MethodModifiers::PUBLIC),
+            ),
+        );
+
+        let mut generator = CodeGenerator::new(
+            &arena,
+            symbol_table.type_arena(),
+            &symbol_table,
+            &mut constant_pool,
+            None,
+        );
+        generator.emit_method_call(
+            None,
+            &Ident::new("ping".into()),
+            &[],
+            Some(method_id),
+            void_type,
+        )?;
+
+        assert!(matches!(
+            generator.emitter.code_items.as_slice(),
+            [CodeItem::Instruction(Instruction::Invokestatic(_))]
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn resolved_interface_method_calls_emit_invokeinterface() -> RajacResult<()> {
+        let mut arena = AstArena::new();
+        let mut symbol_table = SymbolTable::new();
+        let mut constant_pool = ConstantPool::new();
+        let void_type = symbol_table
+            .primitive_type_id_by_kind(rajac_types::PrimitiveType::Void)
+            .expect("void type");
+        let method_id = add_owner_method(
+            &mut symbol_table,
+            "example",
+            "RunnableLike",
+            SymbolKind::Interface,
+            MethodSignature::new(
+                SharedString::new("run"),
+                vec![],
+                void_type,
+                MethodModifiers(MethodModifiers::PUBLIC),
+            ),
+        );
+        let receiver_expr = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Null,
+            value: "null".into(),
+        }));
+
+        let mut generator = CodeGenerator::new(
+            &arena,
+            symbol_table.type_arena(),
+            &symbol_table,
+            &mut constant_pool,
+            None,
+        );
+        generator.emit_method_call(
+            Some(&receiver_expr),
+            &Ident::new("run".into()),
+            &[],
+            Some(method_id),
+            void_type,
+        )?;
+
+        assert!(matches!(
+            generator.emitter.code_items.as_slice(),
+            [
+                CodeItem::Instruction(Instruction::Aconst_null),
+                CodeItem::Instruction(Instruction::Invokeinterface(_, 1))
+            ]
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn implicit_private_method_calls_emit_invokespecial() -> RajacResult<()> {
+        let arena = AstArena::new();
+        let mut symbol_table = SymbolTable::new();
+        let mut constant_pool = ConstantPool::new();
+        let void_type = symbol_table
+            .primitive_type_id_by_kind(rajac_types::PrimitiveType::Void)
+            .expect("void type");
+        let method_id = add_owner_method(
+            &mut symbol_table,
+            "example",
+            "Widget",
+            SymbolKind::Class,
+            MethodSignature::new(
+                SharedString::new("tick"),
+                vec![],
+                void_type,
+                MethodModifiers(MethodModifiers::PRIVATE),
+            ),
+        );
+
+        let mut generator = CodeGenerator::new(
+            &arena,
+            symbol_table.type_arena(),
+            &symbol_table,
+            &mut constant_pool,
+            Some(SharedString::new("example/Widget")),
+        );
+        generator.emit_method_call(
+            None,
+            &Ident::new("tick".into()),
+            &[],
+            Some(method_id),
+            void_type,
+        )?;
+
+        assert!(matches!(
+            generator.emitter.code_items.as_slice(),
+            [
+                CodeItem::Instruction(Instruction::Aload_0),
+                CodeItem::Instruction(Instruction::Invokespecial(_))
+            ]
+        ));
+        Ok(())
     }
 }
