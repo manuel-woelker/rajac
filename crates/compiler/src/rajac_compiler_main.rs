@@ -38,7 +38,6 @@
 
 use rajac_base::file_path::FilePath;
 use rajac_compiler::{Compiler, CompilerConfig};
-use rajac_diagnostics::Severity;
 use std::path::Path;
 
 fn main() {
@@ -53,18 +52,16 @@ fn main() {
         classpaths: vec!["/usr/lib/jvm/java-8-openjdk/jre/lib/rt.jar".into()],
         emit_timing_statistics: false,
     };
-    let mut compiler = Compiler::new(config);
+    let compiler = Compiler::new(config);
+    let result = match compiler.compile() {
+        Ok(result) => result,
+        Err(e) => {
+            eprintln!("Compilation failed: {:?}", e);
+            std::process::exit(1);
+        }
+    };
 
-    if let Err(e) = compiler.compile_directory() {
-        eprintln!("Compilation failed: {:?}", e);
-        std::process::exit(1);
-    }
-
-    if compiler
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.severity == Severity::Error)
-    {
+    if result.has_errors() {
         eprintln!("Compilation failed: error diagnostics were emitted");
         std::process::exit(1);
     }

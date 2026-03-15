@@ -131,9 +131,9 @@ fn compile_with_rajac(
         classpaths: classpaths.to_vec(),
         emit_timing_statistics: false,
     };
-    let mut compiler = Compiler::new_with_symbol_table(config, prepopulated_symbol_table.clone());
-    debug!("starting compiler.compile_directory for valid sources");
-    compiler.compile_directory()?;
+    let compiler = Compiler::new_with_symbol_table(config, prepopulated_symbol_table.clone());
+    debug!("starting compiler.compile for valid sources");
+    compiler.compile()?;
     info!("finished compiling valid sources");
 
     Ok(())
@@ -414,10 +414,10 @@ fn verify_invalid_sources(
         emit_timing_statistics: false,
     };
 
-    let mut compiler = Compiler::new_with_symbol_table(config, prepopulated_symbol_table.clone());
-    compiler.compile_directory().ok();
-
-    let diagnostics = &compiler.diagnostics;
+    let diagnostics = Compiler::new_with_symbol_table(config, prepopulated_symbol_table.clone())
+        .compile()
+        .map(|result| result.diagnostics)
+        .unwrap_or_default();
     info!(
         diagnostics = diagnostics.len(),
         "finished compiling invalid sources"
@@ -438,7 +438,7 @@ fn verify_invalid_sources(
         Vec<&rajac_diagnostics::Diagnostic>,
     > = std::collections::HashMap::new();
 
-    for diagnostic in diagnostics {
+    for diagnostic in &diagnostics {
         // Find which file this diagnostic belongs to
         for chunk in &diagnostic.chunks {
             let file_path = chunk.path.as_str();

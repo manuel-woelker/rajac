@@ -38,12 +38,18 @@ responsibilities and well-defined inputs/outputs.
 //!     source_dirs: vec![FilePath::new("src/main/java")],
 //!     target_dir: FilePath::new("target/classes"),
 //! };
-//! let mut compiler = Compiler::new(config);
+//! let compiler = Compiler::new(config);
 //!
 //! // Compile entire directory
-//! compiler.compile_directory()?;
+//! let result = compiler.compile()?;
 //!
 //! // Or execute stages individually
+//! let mut compiler = Compiler::new(CompilerConfig {
+//!     source_dirs: vec![FilePath::new("src/main/java")],
+//!     target_dir: FilePath::new("target/classes"),
+//!     classpaths: Vec::new(),
+//!     emit_timing_statistics: false,
+//! });
 //! compiler.discover_files()?;
 //! compiler.parse_files()?;
 //! compiler.collect_symbols()?;
@@ -53,13 +59,13 @@ responsibilities and well-defined inputs/outputs.
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-use rajac_base::error::RajacError;
 use rajac_base::file_path::FilePath;
 use rajac_base::logging::instrument;
 use rajac_base::result::{RajacResult, ResultExt};
 use rajac_diagnostics::Diagnostics;
 use rajac_symbols::SymbolTable;
 
+use crate::compilation_result::CompilationResult;
 use crate::stages::{attribute_analysis, collection, discovery, generation, parsing, resolution};
 use crate::statistics::{CompilationPhase, CompilationStatistics};
 
@@ -131,13 +137,9 @@ pub struct CompilerConfig {
 /// through bytecode generation. It maintains state across stages and provides
 /// high-level control over the compilation process.
 ///
-/// A compiler instance is single-use. After [`compile_directory()`] runs once,
-/// the instance cannot be reused for a second compilation. This avoids stale
-/// diagnostics, symbols, and timings from leaking across runs.
-///
-/// Compilation success is determined by [`Compiler::diagnostics`]. A completed
-/// pipeline can still be unsuccessful if any emitted diagnostic has error
-/// severity, in which case code generation is skipped.
+/// The compiler is consumed by [`Compiler::compile`], which returns a
+/// [`CompilationResult`] containing the diagnostics and timing statistics for
+/// the completed run.
 ///
 /// # Architecture
 ///
@@ -153,7 +155,7 @@ pub struct CompilerConfig {
 ///
 /// ## High-Level Compilation
 ///
-/// Use [`compile_directory()`] for the complete compilation process:
+/// Use [`compile()`] for the complete compilation process:
 ///
 /// ```rust,no_run,ignore
 /// # use rajac_compiler::{Compiler, CompilerConfig};
@@ -164,8 +166,8 @@ pub struct CompilerConfig {
 /// #     classpaths: Vec::new(),
 /// #     emit_timing_statistics: false,
 /// # };
-/// let mut compiler = Compiler::new(config);
-/// compiler.compile_directory()?;
+/// let compiler = Compiler::new(config);
+/// let result = compiler.compile()?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 ///
@@ -207,12 +209,10 @@ pub struct Compiler {
     pub symbol_table: SymbolTable,
     /// Whether classpath symbols have already been loaded into the symbol table
     pub classpath_symbols_loaded: bool,
-    /// Compilation statistics
-    pub statistics: CompilationStatistics,
+    /// Compilation statistics accumulated during the current run
+    statistics: CompilationStatistics,
     /// Diagnostics collected during compilation
-    pub diagnostics: Diagnostics,
-    /// Whether this compiler instance has already attempted a compilation
-    has_run: bool,
+    diagnostics: Diagnostics,
 }
 
 impl Compiler {
@@ -248,7 +248,6 @@ impl Compiler {
             classpath_symbols_loaded: false,
             statistics: CompilationStatistics::new(),
             diagnostics: Diagnostics::new(),
-            has_run: false,
         }
     }
 
@@ -274,7 +273,6 @@ impl Compiler {
             classpath_symbols_loaded: true,
             statistics: CompilationStatistics::new(),
             diagnostics: Diagnostics::new(),
-            has_run: false,
         }
     }
 
@@ -313,15 +311,14 @@ impl Compiler {
     /// # Errors
     ///
     /// Returns an error if any stage fails, such as:
-    /// - Reusing the same `Compiler` instance for multiple compilations
     /// - Unable to create target directory
     /// - Source file parsing errors
     /// - Symbol collection conflicts
     /// - Bytecode generation failures
     ///
-    /// Semantic compilation errors are reported through [`Compiler::diagnostics`]
-    /// instead of the return value. When any diagnostic has error severity, this
-    /// method returns `Ok(())`, skips classfile generation, and leaves the
+    /// Semantic compilation errors are reported through the returned
+    /// [`CompilationResult`]. When any diagnostic has error severity, this
+    /// method still returns `Ok(_)`, skips classfile generation, and leaves the
     /// diagnostics available for the caller to inspect.
     ///
     /// # Example
@@ -335,12 +332,12 @@ impl Compiler {
     /// #     classpaths: Vec::new(),
     /// #     emit_timing_statistics: false,
     /// # };
-    /// let mut compiler = Compiler::new(config);
-    /// compiler.compile_directory()?;
+    /// let compiler = Compiler::new(config);
+    /// let result = compiler.compile()?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[instrument(
-        name = "compiler.compile_directory",
+        name = "compiler.compile",
         skip(self),
         fields(
             source_dirs = self.config.source_dirs.len(),
@@ -348,14 +345,7 @@ impl Compiler {
             target_dir = %self.config.target_dir.as_str()
         )
     )]
-    pub fn compile_directory(&mut self) -> RajacResult<()> {
-        if self.has_run {
-            return Err(RajacError::message(
-                "Compiler instances are single-use; create a new Compiler for each compilation",
-            ));
-        }
-        self.has_run = true;
-
+    pub fn compile(mut self) -> RajacResult<CompilationResult> {
         std::fs::create_dir_all(self.config.target_dir.as_path()).with_context(|| {
             format!(
                 "Failed to create target directory '{}'",
@@ -369,7 +359,7 @@ impl Compiler {
             if self.config.emit_timing_statistics {
                 self.statistics.print_table();
             }
-            return Ok(());
+            return Ok(self.into_result());
         }
 
         // Stage 2: Parse source files
@@ -421,7 +411,7 @@ impl Compiler {
             if self.config.emit_timing_statistics {
                 self.statistics.print_table();
             }
-            return Ok(());
+            return Ok(self.into_result());
         }
 
         // Stage 6: Generation - Emit bytecode
@@ -433,7 +423,7 @@ impl Compiler {
             self.statistics.print_table();
         }
 
-        Ok(())
+        Ok(self.into_result())
     }
 
     /// Discovers Java source files in the configured source directory.
@@ -673,6 +663,12 @@ impl Compiler {
     }
 }
 
+impl Compiler {
+    fn into_result(self) -> CompilationResult {
+        CompilationResult::new(self.diagnostics, self.statistics)
+    }
+}
+
 impl Default for Compiler {
     /// Creates a compiler instance with default configuration.
     ///
@@ -699,49 +695,5 @@ impl Default for Compiler {
             classpaths: Vec::new(),
             emit_timing_statistics: false,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{Compiler, CompilerConfig};
-    use rajac_base::file_path::FilePath;
-    use std::fs;
-    use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    #[test]
-    fn compiler_instances_are_single_use() {
-        let root = unique_temp_dir("compiler_single_use");
-        let source_dir = root.join("src");
-        let target_dir = root.join("classes");
-        fs::create_dir_all(&source_dir).unwrap();
-
-        let config = CompilerConfig {
-            source_dirs: vec![FilePath::new(&source_dir)],
-            target_dir: FilePath::new(&target_dir),
-            classpaths: Vec::new(),
-            emit_timing_statistics: false,
-        };
-        let mut compiler = Compiler::new(config);
-
-        compiler.compile_directory().unwrap();
-
-        let error = compiler.compile_directory().unwrap_err();
-        assert!(
-            error
-                .to_test_string()
-                .contains("Compiler instances are single-use")
-        );
-
-        fs::remove_dir_all(&root).unwrap();
-    }
-
-    fn unique_temp_dir(name: &str) -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("rajac_{name}_{nanos}"))
     }
 }

@@ -24,8 +24,8 @@
 //!     source_dirs: vec![FilePath::new("src")],
 //!     target_dir: FilePath::new("target/classes"),
 //! };
-//! let mut compiler = Compiler::new(config);
-//! compiler.compile_directory()?;
+//! let compiler = Compiler::new(config);
+//! let result = compiler.compile()?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
@@ -35,8 +35,10 @@
 //! - [`CompilerConfig`] - Configuration for compilation settings
 //! - [`CompilationUnit`] - Represents a single compiled source file
 
+mod compilation_result;
 pub mod compiler;
 mod stages;
 pub mod statistics;
 
+pub use compilation_result::CompilationResult;
 pub use compiler::{CompilationUnit, Compiler, CompilerConfig};
