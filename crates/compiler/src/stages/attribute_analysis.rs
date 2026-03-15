@@ -3147,6 +3147,37 @@ class Example {
         )));
     }
 
+    #[test]
+    fn resolves_super_method_calls() {
+        let source = r#"
+class Base {
+    int value() {
+        return 3;
+    }
+}
+
+class Example extends Base {
+    int value() {
+        return super.value() + 4;
+    }
+}
+"#;
+
+        let (mut units, mut symbol_table) = resolved_units(source);
+        let diagnostics = analyze_attributes(&mut units, &mut symbol_table);
+
+        assert!(diagnostics.is_empty());
+        let unit = &units[0];
+        assert!(unit.arena.exprs.iter().any(|expr| matches!(
+            &expr.expr,
+            Expr::MethodCall {
+                expr: Some(receiver),
+                method_id: Some(_),
+                ..
+            } if matches!(unit.arena.expr(*receiver), Expr::Super)
+        )));
+    }
+
     fn root_expr_id(unit: &CompilationUnit) -> rajac_ast::ExprId {
         let Stmt::Expr(expr_id) = unit.arena.stmt(unit.ast.statements[0]).clone() else {
             panic!("expected expression statement");

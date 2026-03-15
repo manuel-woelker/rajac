@@ -1669,7 +1669,7 @@ impl<'arena> CodeGenerator<'arena> {
 
     fn resolve_method_invocation(
         &self,
-        _target: Option<&ExprId>,
+        target: Option<&ExprId>,
         name: &Ident,
         args: &[ExprId],
         method_id: Option<MethodId>,
@@ -1708,8 +1708,12 @@ impl<'arena> CodeGenerator<'arena> {
         let Some(owner) = self.resolve_method_owner(method_id) else {
             return Ok(None);
         };
+        let is_super_receiver =
+            target.is_some_and(|expr_id| matches!(self.arena.expr(*expr_id), AstExpr::Super));
         let kind = if signature.modifiers.is_static() {
             InvocationKind::Static
+        } else if is_super_receiver {
+            InvocationKind::Special
         } else if matches!(owner.kind, SymbolKind::Interface) {
             InvocationKind::Interface
         } else {
@@ -3290,6 +3294,52 @@ mod tests {
             [
                 CodeItem::Instruction(Instruction::Aload_0),
                 CodeItem::Instruction(Instruction::Invokevirtual(_))
+            ]
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_super_method_calls_emit_invokespecial() -> RajacResult<()> {
+        let mut arena = AstArena::new();
+        let mut symbol_table = SymbolTable::new();
+        let mut constant_pool = ConstantPool::new();
+        let void_type = symbol_table
+            .primitive_type_id_by_kind(rajac_types::PrimitiveType::Void)
+            .expect("void type");
+        let method_id = add_owner_method(
+            &mut symbol_table,
+            "example",
+            "Base",
+            SymbolKind::Class,
+            MethodSignature::new(
+                SharedString::new("tick"),
+                vec![],
+                void_type,
+                MethodModifiers(MethodModifiers::PUBLIC),
+            ),
+        );
+        let super_expr = arena.alloc_expr(AstExpr::Super);
+
+        let mut generator = CodeGenerator::new(
+            &arena,
+            symbol_table.type_arena(),
+            &symbol_table,
+            &mut constant_pool,
+        );
+        generator.emit_method_call(
+            Some(&super_expr),
+            &Ident::new("tick".into()),
+            &[],
+            Some(method_id),
+            void_type,
+        )?;
+
+        assert!(matches!(
+            generator.emitter.code_items.as_slice(),
+            [
+                CodeItem::Instruction(Instruction::Aload_0),
+                CodeItem::Instruction(Instruction::Invokespecial(_))
             ]
         ));
         Ok(())

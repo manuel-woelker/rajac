@@ -231,8 +231,8 @@ fn resolve_class_decl_signatures(
     if let Some(type_id) = extends {
         resolve_type(type_id, arena, symbol_table, context);
     }
-    for type_id in implements {
-        resolve_type(type_id, arena, symbol_table, context);
+    for type_id in &implements {
+        resolve_type(*type_id, arena, symbol_table, context);
     }
     for type_id in permits {
         resolve_type(type_id, arena, symbol_table, context);
@@ -305,11 +305,14 @@ fn resolve_class_decl(
     if let Some(type_id) = extends {
         resolve_type(type_id, arena, symbol_table, context);
     }
-    for type_id in implements {
-        resolve_type(type_id, arena, symbol_table, context);
+    for type_id in &implements {
+        resolve_type(*type_id, arena, symbol_table, context);
     }
     for type_id in permits {
         resolve_type(type_id, arena, symbol_table, context);
+    }
+    if let Some(class_type_id) = current_class_type_id {
+        update_class_hierarchy(class_type_id, extends, &implements, arena, symbol_table);
     }
     for member_id in members {
         resolve_class_member(
@@ -319,6 +322,28 @@ fn resolve_class_decl(
             context,
             current_class_type_id,
         );
+    }
+}
+
+fn update_class_hierarchy(
+    class_type_id: TypeId,
+    extends: Option<AstTypeId>,
+    implements: &[AstTypeId],
+    arena: &AstArena,
+    symbol_table: &mut SymbolTable,
+) {
+    let superclass = extends
+        .map(|type_id| arena.ty(type_id).ty())
+        .filter(|type_id| *type_id != TypeId::INVALID);
+    let interfaces = implements
+        .iter()
+        .map(|type_id| arena.ty(*type_id).ty())
+        .filter(|type_id| *type_id != TypeId::INVALID)
+        .collect::<Vec<_>>();
+
+    if let Type::Class(class_type) = symbol_table.type_arena_mut().get_mut(class_type_id) {
+        class_type.superclass = superclass;
+        class_type.interfaces = interfaces;
     }
 }
 
@@ -1678,5 +1703,36 @@ class Example {
         };
 
         assert!(method_id.is_some(), "expected method call to be resolved");
+    }
+
+    #[test]
+    fn stores_resolved_superclass_on_class_types() {
+        let source = r#"
+class Base {}
+
+class Example extends Base {}
+"#;
+        let parse_result = parse(source, FilePath::new("Example.java"));
+        let mut units = vec![CompilationUnit {
+            source_file: FilePath::new("Example.java"),
+            ast: parse_result.ast,
+            arena: parse_result.arena,
+            diagnostics: parse_result.diagnostics,
+        }];
+        let mut symbol_table = SymbolTable::new();
+        crate::stages::collection::collect_compilation_unit_symbols(&mut symbol_table, &units)
+            .unwrap();
+
+        resolve_identifiers(&mut units, &mut symbol_table);
+
+        let example_type = symbol_table
+            .lookup_type_id("", "Example")
+            .expect("Example type");
+        let base_type = symbol_table.lookup_type_id("", "Base").expect("Base type");
+        let Type::Class(class_type) = symbol_table.type_arena().get(example_type) else {
+            panic!("expected class type");
+        };
+
+        assert_eq!(class_type.superclass, Some(base_type));
     }
 }
