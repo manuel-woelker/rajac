@@ -291,18 +291,13 @@ impl<'arena> CodeGenerator<'arena> {
             }
             Stmt::DoWhile { body, condition } => {
                 let loop_body = self.new_label();
-                let loop_end = self.new_label();
 
                 self.bind_label(loop_body);
                 self.emit_statement(*body)?;
 
                 if !self.statement_terminates(*body) {
-                    self.emit_false_branch_condition(*condition, loop_end)?;
-                    self.emit_branch(BranchKind::Goto, loop_body);
-                    self.current_stack = 0;
+                    self.emit_true_branch_condition(*condition, loop_body)?;
                 }
-
-                self.bind_label(loop_end);
             }
             Stmt::For {
                 init,
@@ -742,6 +737,77 @@ impl<'arena> CodeGenerator<'arena> {
             }
         }
 
+        Ok(())
+    }
+
+    fn emit_true_branch_condition(
+        &mut self,
+        expr_id: ExprId,
+        true_label: LabelId,
+    ) -> RajacResult<()> {
+        let typed_expr = self.arena.expr_typed(expr_id);
+        let expr = &typed_expr.expr;
+
+        match expr {
+            AstExpr::Literal(literal) if matches!(literal.kind, LiteralKind::Bool) => {
+                if literal.value.as_str() == "true" {
+                    self.emit_branch(BranchKind::Goto, true_label);
+                }
+            }
+            AstExpr::Unary {
+                op: rajac_ast::UnaryOp::Bang,
+                expr,
+            } => {
+                let false_label = self.new_label();
+                self.emit_condition(*expr, false_label, true_label)?;
+                self.bind_label(false_label);
+            }
+            AstExpr::Binary { op, lhs, rhs }
+                if matches!(
+                    op,
+                    rajac_ast::BinaryOp::EqEq
+                        | rajac_ast::BinaryOp::BangEq
+                        | rajac_ast::BinaryOp::Lt
+                        | rajac_ast::BinaryOp::LtEq
+                        | rajac_ast::BinaryOp::Gt
+                        | rajac_ast::BinaryOp::GtEq
+                ) =>
+            {
+                self.emit_expression(*lhs)?;
+                self.emit_expression(*rhs)?;
+
+                let lhs_kind = self.kind_for_expr(*lhs, self.arena.expr_typed(*lhs).ty);
+                let rhs_kind = self.kind_for_expr(*rhs, self.arena.expr_typed(*rhs).ty);
+                let comparison_kind = promote_numeric_kind(lhs_kind, rhs_kind);
+
+                match comparison_kind {
+                    LocalVarKind::Long => {
+                        self.emit(Instruction::Lcmp);
+                        self.emit_branch(branch_kind_for_zero_compare(op.clone()), true_label);
+                    }
+                    LocalVarKind::Float => {
+                        self.emit(Instruction::Fcmpl);
+                        self.emit_branch(branch_kind_for_zero_compare(op.clone()), true_label);
+                    }
+                    LocalVarKind::Double => {
+                        self.emit(Instruction::Dcmpl);
+                        self.emit_branch(branch_kind_for_zero_compare(op.clone()), true_label);
+                    }
+                    LocalVarKind::IntLike => {
+                        self.emit_branch(branch_kind_for_int_compare(op.clone()), true_label);
+                    }
+                    LocalVarKind::Reference => {
+                        self.emit_branch(reference_branch_kind(op.clone()), true_label);
+                    }
+                }
+            }
+            _ => {
+                self.emit_expression(expr_id)?;
+                self.emit_branch(BranchKind::IfNe, true_label);
+            }
+        }
+
+        self.current_stack = 0;
         Ok(())
     }
 
@@ -1724,6 +1790,14 @@ fn inverse_reference_branch_kind(op: rajac_ast::BinaryOp) -> BranchKind {
     match op {
         rajac_ast::BinaryOp::EqEq => BranchKind::IfAcmpNe,
         rajac_ast::BinaryOp::BangEq => BranchKind::IfAcmpEq,
+        _ => unreachable!(),
+    }
+}
+
+fn reference_branch_kind(op: rajac_ast::BinaryOp) -> BranchKind {
+    match op {
+        rajac_ast::BinaryOp::EqEq => BranchKind::IfAcmpEq,
+        rajac_ast::BinaryOp::BangEq => BranchKind::IfAcmpNe,
         _ => unreachable!(),
     }
 }
