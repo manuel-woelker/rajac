@@ -266,6 +266,18 @@ fn pretty_print_method(out: &mut String, constant_pool: &ConstantPool, method: &
             // This is a placeholder - we'd need to handle Code sub-attributes
             // but the current structure doesn't expose them directly
         }
+        if let Attribute::Exceptions {
+            exception_indexes, ..
+        } = attribute
+        {
+            out.push_str("    Exceptions:\n");
+            for exception_index in exception_indexes {
+                let exception_name = constant_pool
+                    .try_get_class(*exception_index)
+                    .unwrap_or("<invalid:class>");
+                out.push_str(&format!("     {}\n", exception_name));
+            }
+        }
     }
 }
 

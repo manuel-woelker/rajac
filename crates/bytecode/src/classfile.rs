@@ -530,7 +530,7 @@ fn method_from_ast(
 
     let mut access_flags = method_access_flags(&method.modifiers);
 
-    let attributes = if let Some(body_id) = method.body {
+    let mut attributes = if let Some(body_id) = method.body {
         // Generate bytecode for method with body
         generate_method_bytecode(
             arena,
@@ -557,6 +557,12 @@ fn method_from_ast(
         access_flags |= MethodAccessFlags::ABSTRACT;
         vec![]
     };
+
+    if let Some(exceptions_attribute) =
+        exceptions_attribute_from_ast_types(constant_pool, &method.throws, arena, type_arena)?
+    {
+        attributes.push(exceptions_attribute);
+    }
 
     Ok(Some(Method {
         access_flags,
@@ -658,11 +664,18 @@ fn constructor_from_ast(
         attributes: vec![],
     };
 
+    let mut attributes = vec![code_attribute];
+    if let Some(exceptions_attribute) =
+        exceptions_attribute_from_ast_types(constant_pool, &constructor.throws, arena, type_arena)?
+    {
+        attributes.push(exceptions_attribute);
+    }
+
     Ok(Method {
         access_flags,
         name_index,
         descriptor_index,
-        attributes: vec![code_attribute],
+        attributes,
     })
 }
 
@@ -775,6 +788,29 @@ fn type_to_internal_class_name(
         }
         _ => "java/lang/Object".to_string(),
     })
+}
+
+fn exceptions_attribute_from_ast_types(
+    constant_pool: &mut ConstantPool,
+    throws: &[rajac_ast::AstTypeId],
+    arena: &AstArena,
+    type_arena: &rajac_types::TypeArena,
+) -> RajacResult<Option<Attribute>> {
+    if throws.is_empty() {
+        return Ok(None);
+    }
+
+    let name_index = constant_pool.add_utf8("Exceptions")?;
+    let mut exception_indexes = Vec::with_capacity(throws.len());
+    for thrown_type in throws {
+        let internal_name = type_to_internal_class_name(arena, *thrown_type, type_arena)?;
+        exception_indexes.push(constant_pool.add_class(&internal_name)?);
+    }
+
+    Ok(Some(Attribute::Exceptions {
+        name_index,
+        exception_indexes,
+    }))
 }
 
 #[cfg(test)]
@@ -1097,6 +1133,169 @@ mod tests {
                 .attributes
                 .iter()
                 .any(|attribute| matches!(attribute, Attribute::Code { .. }))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn emits_exceptions_attribute_for_methods() -> RajacResult<()> {
+        let mut arena = AstArena::new();
+        let mut ast = Ast::new(SharedString::new("test"));
+        let mut symbol_table = SymbolTable::new();
+
+        let exception_ty_id = symbol_table.add_class(
+            "java.lang",
+            "Exception",
+            rajac_types::Type::class(
+                rajac_types::ClassType::new(SharedString::new("Exception"))
+                    .with_package(SharedString::new("java.lang")),
+            ),
+            rajac_symbols::SymbolKind::Class,
+        );
+        let type_arena = symbol_table.type_arena().clone();
+        let void_ty = arena.alloc_type(AstType::Primitive {
+            kind: PrimitiveType::Void,
+            ty: rajac_types::TypeId::INVALID,
+        });
+        let throws_ty = arena.alloc_type(AstType::Simple {
+            name: SharedString::new("Exception"),
+            type_args: vec![],
+            ty: exception_ty_id,
+        });
+        let empty_block = arena.alloc_stmt(rajac_ast::Stmt::Block(vec![]));
+
+        let method = Method {
+            name: Ident::new(SharedString::new("g")),
+            params: vec![],
+            return_ty: void_ty,
+            body: Some(empty_block),
+            throws: vec![throws_ty],
+            modifiers: Modifiers(Modifiers::PUBLIC),
+        };
+
+        let member_id = arena.alloc_class_member(ClassMember::Method(method));
+        let class_id = arena.alloc_class_decl(ClassDecl {
+            kind: ClassKind::Class,
+            name: Ident::new(SharedString::new("Foo")),
+            type_params: vec![],
+            extends: None,
+            implements: vec![],
+            permits: vec![],
+            members: vec![member_id],
+            modifiers: Modifiers(Modifiers::PUBLIC),
+        });
+        ast.classes.push(class_id);
+
+        let mut class_files = generate_classfiles(&ast, &arena, &type_arena, &symbol_table)?;
+        let class_file = class_files.pop().unwrap();
+        class_file.verify()?;
+
+        let method = class_file
+            .methods
+            .iter()
+            .find(|method| {
+                class_file
+                    .constant_pool
+                    .try_get_utf8(method.name_index)
+                    .ok()
+                    == Some("g")
+            })
+            .expect("method 'g' should be present");
+
+        let exceptions = method
+            .attributes
+            .iter()
+            .find_map(|attribute| match attribute {
+                Attribute::Exceptions {
+                    exception_indexes, ..
+                } => Some(exception_indexes),
+                _ => None,
+            })
+            .expect("Exceptions attribute should be present");
+
+        assert_eq!(exceptions.len(), 1);
+        assert_eq!(
+            class_file.constant_pool.try_get_class(exceptions[0])?,
+            "java/lang/Exception"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn emits_exceptions_attribute_for_constructors() -> RajacResult<()> {
+        let mut arena = AstArena::new();
+        let mut ast = Ast::new(SharedString::new("test"));
+        let mut symbol_table = SymbolTable::new();
+
+        let exception_ty_id = symbol_table.add_class(
+            "java.lang",
+            "Exception",
+            rajac_types::Type::class(
+                rajac_types::ClassType::new(SharedString::new("Exception"))
+                    .with_package(SharedString::new("java.lang")),
+            ),
+            rajac_symbols::SymbolKind::Class,
+        );
+        let type_arena = symbol_table.type_arena().clone();
+        let throws_ty = arena.alloc_type(AstType::Simple {
+            name: SharedString::new("Exception"),
+            type_args: vec![],
+            ty: exception_ty_id,
+        });
+        let body = arena.alloc_stmt(rajac_ast::Stmt::Block(vec![]));
+        let constructor = AstConstructor {
+            name: Ident::new(SharedString::new("Foo")),
+            params: vec![],
+            body: Some(body),
+            throws: vec![throws_ty],
+            modifiers: Modifiers(Modifiers::PUBLIC),
+        };
+        let ctor_member_id = arena.alloc_class_member(ClassMember::Constructor(constructor));
+
+        let class_id = arena.alloc_class_decl(ClassDecl {
+            kind: ClassKind::Class,
+            name: Ident::new(SharedString::new("Foo")),
+            type_params: vec![],
+            extends: None,
+            implements: vec![],
+            permits: vec![],
+            members: vec![ctor_member_id],
+            modifiers: Modifiers(Modifiers::PUBLIC),
+        });
+        ast.classes.push(class_id);
+
+        let mut class_files = generate_classfiles(&ast, &arena, &type_arena, &symbol_table)?;
+        let class_file = class_files.pop().unwrap();
+        class_file.verify()?;
+
+        let constructor = class_file
+            .methods
+            .iter()
+            .find(|method| {
+                class_file
+                    .constant_pool
+                    .try_get_utf8(method.name_index)
+                    .ok()
+                    == Some("<init>")
+            })
+            .expect("constructor should be present");
+
+        let exceptions = constructor
+            .attributes
+            .iter()
+            .find_map(|attribute| match attribute {
+                Attribute::Exceptions {
+                    exception_indexes, ..
+                } => Some(exception_indexes),
+                _ => None,
+            })
+            .expect("Exceptions attribute should be present");
+
+        assert_eq!(exceptions.len(), 1);
+        assert_eq!(
+            class_file.constant_pool.try_get_class(exceptions[0])?,
+            "java/lang/Exception"
         );
 
         Ok(())
