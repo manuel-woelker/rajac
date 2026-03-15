@@ -234,8 +234,9 @@ impl<'arena> CodeGenerator<'arena> {
                 }
             }
             Stmt::Expr(expr_id) => {
+                let initial_stack = self.current_stack;
                 self.emit_expression(*expr_id)?;
-                self.discard_expression_result(*expr_id);
+                self.discard_statement_expression_result(initial_stack)?;
             }
             Stmt::Return(None) => {
                 self.ensure_clean_stack("void return")?;
@@ -607,19 +608,26 @@ impl<'arena> CodeGenerator<'arena> {
             .constant_pool
             .add_method_ref(super_class, "<init>", &descriptor)?;
         self.emit(Instruction::Invokespecial(super_init));
+        self.adjust_method_call_stack(&descriptor, true);
         Ok(())
     }
 
-    fn discard_expression_result(&mut self, expr_id: ExprId) {
-        let expr_ty = self.expression_type_id(expr_id);
-        if expr_ty == TypeId::INVALID && matches!(self.arena.expr(expr_id), AstExpr::Error) {
-            return;
-        }
-
-        let kind = self.kind_for_expr(expr_id, expr_ty);
-        match kind.slot_size() {
-            2 => self.emit(Instruction::Pop2),
-            _ => self.emit(Instruction::Pop),
+    fn discard_statement_expression_result(&mut self, initial_stack: i32) -> RajacResult<()> {
+        let leftover = self.current_stack - initial_stack;
+        match leftover {
+            0 => Ok(()),
+            1 => {
+                self.emit(Instruction::Pop);
+                Ok(())
+            }
+            2 => {
+                self.emit(Instruction::Pop2);
+                Ok(())
+            }
+            _ => Err(rajac_base::err!(
+                "internal bytecode error: statement expression left operand stack delta {}",
+                leftover
+            )),
         }
     }
 
@@ -1335,6 +1343,7 @@ impl<'arena> CodeGenerator<'arena> {
             self.constant_pool
                 .add_method_ref(owner_class, name.as_str(), &descriptor)?;
         self.emit(Instruction::Invokevirtual(method_ref));
+        self.adjust_method_call_stack(&descriptor, true);
 
         Ok(())
     }
@@ -1371,6 +1380,14 @@ impl<'arena> CodeGenerator<'arena> {
         };
 
         Some((args.clone(), statements.iter().skip(1).copied().collect()))
+    }
+
+    fn adjust_method_call_stack(&mut self, descriptor: &str, has_receiver: bool) {
+        let actual_delta =
+            method_call_stack_delta(descriptor, has_receiver).unwrap_or(-i32::from(has_receiver));
+        let generic_delta = -i32::from(has_receiver);
+        self.current_stack += actual_delta - generic_delta;
+        self.max_stack = self.max_stack.max(self.current_stack.max(0) as u16);
     }
 
     fn allocate_local(&mut self, kind: LocalVarKind) -> u16 {
@@ -2086,6 +2103,76 @@ fn stack_effect(instr: &Instruction) -> i32 {
     }
 }
 
+fn method_call_stack_delta(descriptor: &str, has_receiver: bool) -> Option<i32> {
+    let mut chars = descriptor.chars().peekable();
+    if chars.next()? != '(' {
+        return None;
+    }
+
+    let mut arg_slots = if has_receiver { 1 } else { 0 };
+    loop {
+        match chars.peek().copied()? {
+            ')' => {
+                chars.next();
+                break;
+            }
+            _ => {
+                arg_slots += parse_descriptor_type_slots(&mut chars)?;
+            }
+        }
+    }
+
+    let return_slots = parse_return_descriptor_slots(&mut chars)?;
+    if chars.next().is_some() {
+        return None;
+    }
+
+    Some(return_slots - arg_slots)
+}
+
+fn parse_return_descriptor_slots<I>(chars: &mut std::iter::Peekable<I>) -> Option<i32>
+where
+    I: Iterator<Item = char>,
+{
+    match chars.peek().copied()? {
+        'V' => {
+            chars.next();
+            Some(0)
+        }
+        _ => parse_descriptor_type_slots(chars),
+    }
+}
+
+fn parse_descriptor_type_slots<I>(chars: &mut std::iter::Peekable<I>) -> Option<i32>
+where
+    I: Iterator<Item = char>,
+{
+    match chars.next()? {
+        'B' | 'C' | 'F' | 'I' | 'S' | 'Z' => Some(1),
+        'D' | 'J' => Some(2),
+        'L' => {
+            while chars.next()? != ';' {}
+            Some(1)
+        }
+        '[' => {
+            while matches!(chars.peek().copied(), Some('[')) {
+                chars.next();
+            }
+            match chars.peek().copied()? {
+                'L' => {
+                    chars.next();
+                    while chars.next()? != ';' {}
+                }
+                _ => {
+                    chars.next();
+                }
+            }
+            Some(1)
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2230,5 +2317,68 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn assignment_expression_statements_do_not_emit_extra_pop() -> RajacResult<()> {
+        let mut arena = AstArena::new();
+        let type_arena = TypeArena::new();
+        let symbol_table = SymbolTable::new();
+        let mut constant_pool = ConstantPool::new();
+
+        let int_ty = arena.alloc_type(AstType::Primitive {
+            kind: PrimitiveType::Int,
+            ty: TypeId::INVALID,
+        });
+        let initializer = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Int,
+            value: "0".into(),
+        }));
+        let local_var = arena.alloc_stmt(Stmt::LocalVar {
+            ty: int_ty,
+            name: Ident::new("value".into()),
+            initializer: Some(initializer),
+        });
+        let assigned = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Int,
+            value: "1".into(),
+        }));
+        let lhs = arena.alloc_expr(AstExpr::Ident(Ident::new("value".into())));
+        let assign_expr = arena.alloc_expr(AstExpr::Assign {
+            op: rajac_ast::AssignOp::Eq,
+            lhs,
+            rhs: assigned,
+        });
+        let expr_stmt = arena.alloc_stmt(Stmt::Expr(assign_expr));
+        let body = arena.alloc_stmt(Stmt::Block(vec![local_var, expr_stmt]));
+
+        let mut generator =
+            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
+        let (instructions, _max_stack, _max_locals) =
+            generator.generate_method_body(false, &[], body)?;
+
+        assert_eq!(
+            instructions,
+            vec![
+                Instruction::Iconst_0,
+                Instruction::Istore_1,
+                Instruction::Iconst_1,
+                Instruction::Istore_1,
+                Instruction::Return
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn method_call_stack_delta_handles_void_and_wide_descriptors() {
+        assert_eq!(
+            method_call_stack_delta("(Ljava/lang/String;)V", true),
+            Some(-2)
+        );
+        assert_eq!(method_call_stack_delta("()I", true), Some(0));
+        assert_eq!(method_call_stack_delta("(JD)J", true), Some(-3));
+        assert_eq!(method_call_stack_delta("(I)V", false), Some(-1));
     }
 }
