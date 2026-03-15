@@ -1040,6 +1040,32 @@ mod tests {
     }
 
     #[test]
+    fn test_assignment_expression_statement() {
+        let source = r#"
+            class Test {
+                void test() {
+                    int sum = 0;
+                    sum = sum + 1;
+                }
+            }
+        "#;
+        let result = parse_src(source);
+        let class_decl = result.arena.class_decl(result.ast.classes[0]);
+        let ClassMember::Method(method) = result.arena.class_member(class_decl.members[0]) else {
+            panic!("expected method");
+        };
+        let body_id = method.body.expect("expected method body");
+        let Stmt::Block(stmts) = result.arena.stmt(body_id) else {
+            panic!("expected block body");
+        };
+        let Stmt::Expr(expr_id) = result.arena.stmt(stmts[1]) else {
+            panic!("expected expression statement");
+        };
+
+        assert!(matches!(result.arena.expr(*expr_id), Expr::Assign { .. }));
+    }
+
+    #[test]
     fn test_if_statement() {
         let source = r#"
             class Test {

@@ -229,7 +229,7 @@ impl<'arena> CodeGenerator<'arena> {
             }
             Stmt::Return(Some(expr_id)) => {
                 self.emit_expression(*expr_id)?;
-                let expr_ty = self.arena.expr_typed(*expr_id).ty;
+                let expr_ty = self.expression_type_id(*expr_id);
                 let expr_kind = self.kind_for_expr(*expr_id, expr_ty);
                 self.emit(self.return_instruction_for_kind(expr_kind));
             }
@@ -237,24 +237,7 @@ impl<'arena> CodeGenerator<'arena> {
                 ty,
                 name,
                 initializer,
-            } => {
-                if let Some(expr_id) = initializer {
-                    self.emit_expression(*expr_id)?;
-                    let ty = self.arena.ty(*ty);
-                    let kind = local_kind_from_ast_type(ty);
-                    let local_ty = ty.ty();
-                    let slot = self.allocate_local(kind);
-                    self.local_vars.insert(
-                        name.as_str().to_string(),
-                        LocalVar {
-                            slot,
-                            kind,
-                            ty: local_ty,
-                        },
-                    );
-                    self.emit_store(slot, kind);
-                }
-            }
+            } => self.emit_local_var_declaration(*ty, name, *initializer)?,
             Stmt::If {
                 condition,
                 then_branch,
@@ -291,7 +274,67 @@ impl<'arena> CodeGenerator<'arena> {
                     self.bind_label(end_label);
                 }
             }
-            Stmt::While { .. } | Stmt::For { .. } | Stmt::DoWhile { .. } => {}
+            Stmt::While { condition, body } => {
+                let loop_head = self.new_label();
+                let loop_end = self.new_label();
+
+                self.bind_label(loop_head);
+                self.emit_false_branch_condition(*condition, loop_end)?;
+                self.emit_statement(*body)?;
+
+                if !self.statement_terminates(*body) {
+                    self.emit_branch(BranchKind::Goto, loop_head);
+                    self.current_stack = 0;
+                }
+
+                self.bind_label(loop_end);
+            }
+            Stmt::DoWhile { body, condition } => {
+                let loop_body = self.new_label();
+                let loop_end = self.new_label();
+
+                self.bind_label(loop_body);
+                self.emit_statement(*body)?;
+
+                if !self.statement_terminates(*body) {
+                    self.emit_false_branch_condition(*condition, loop_end)?;
+                    self.emit_branch(BranchKind::Goto, loop_body);
+                    self.current_stack = 0;
+                }
+
+                self.bind_label(loop_end);
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(init) = init {
+                    self.emit_for_init(init)?;
+                }
+
+                let loop_head = self.new_label();
+                let loop_end = self.new_label();
+
+                self.bind_label(loop_head);
+
+                if let Some(condition) = condition {
+                    self.emit_false_branch_condition(*condition, loop_end)?;
+                }
+
+                self.emit_statement(*body)?;
+
+                if !self.statement_terminates(*body) {
+                    if let Some(update) = update {
+                        self.emit_expression(*update)?;
+                    }
+                    self.emit_branch(BranchKind::Goto, loop_head);
+                    self.current_stack = 0;
+                }
+
+                self.bind_label(loop_end);
+            }
             Stmt::Break(_) | Stmt::Continue(_) | Stmt::Label(_, _) | Stmt::Switch { .. } => {}
             Stmt::Throw(_) => {}
             Stmt::Try { .. } | Stmt::Synchronized { .. } => {}
@@ -337,7 +380,9 @@ impl<'arena> CodeGenerator<'arena> {
                     self.emit_binary_op(op, *lhs, *rhs, expr_kind)?;
                 }
             },
-            AstExpr::Assign { .. } => {}
+            AstExpr::Assign { lhs, rhs, .. } => {
+                self.emit_assignment(*lhs, *rhs)?;
+            }
             AstExpr::Ternary {
                 condition,
                 then_expr,
@@ -542,6 +587,59 @@ impl<'arena> CodeGenerator<'arena> {
         self.emit(Instruction::Iconst_0);
         self.bind_label(end_label);
 
+        Ok(())
+    }
+
+    fn emit_local_var_declaration(
+        &mut self,
+        ty: rajac_ast::AstTypeId,
+        name: &Ident,
+        initializer: Option<ExprId>,
+    ) -> RajacResult<()> {
+        let ty = self.arena.ty(ty);
+        let kind = local_kind_from_ast_type(ty);
+        let local_ty = ty.ty();
+        let slot = self.allocate_local(kind);
+
+        self.local_vars.insert(
+            name.as_str().to_string(),
+            LocalVar {
+                slot,
+                kind,
+                ty: local_ty,
+            },
+        );
+
+        if let Some(expr_id) = initializer {
+            self.emit_expression(expr_id)?;
+            self.emit_store(slot, kind);
+        }
+
+        Ok(())
+    }
+
+    fn emit_for_init(&mut self, init: &rajac_ast::ForInit) -> RajacResult<()> {
+        match init {
+            rajac_ast::ForInit::Expr(expr_id) => self.emit_expression(*expr_id),
+            rajac_ast::ForInit::LocalVar {
+                ty,
+                name,
+                initializer,
+            } => self.emit_local_var_declaration(*ty, name, *initializer),
+        }
+    }
+
+    fn emit_assignment(&mut self, lhs: ExprId, rhs: ExprId) -> RajacResult<()> {
+        let AstExpr::Ident(ident) = self.arena.expr(lhs) else {
+            return Ok(());
+        };
+
+        let Some(local) = self.local_vars.get(ident.as_str()).copied() else {
+            return Ok(());
+        };
+
+        self.emit_expression(rhs)?;
+        self.emit_store(local.slot, local.kind);
         Ok(())
     }
 

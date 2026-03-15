@@ -6,7 +6,8 @@ use rajac_types::Ident;
 impl<'a> Parser<'a> {
     /// Parse an expression
     pub fn parse_expression(&mut self) -> Option<ExprId> {
-        self.parse_ternary()
+        let expr = self.parse_ternary()?;
+        self.parse_assignment(expr)
     }
 
     fn parse_ternary(&mut self) -> Option<ExprId> {
