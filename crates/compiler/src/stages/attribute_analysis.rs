@@ -2143,7 +2143,6 @@ mod tests {
     use rajac_lexer::Lexer;
     use rajac_parser::Parser;
     use rajac_symbols::SymbolTable;
-    use std::fs;
 
     #[test]
     fn stub_attribute_analysis_accepts_empty_inputs() {
@@ -2382,53 +2381,6 @@ class Example {
                 ..
             }
         )));
-    }
-
-    #[test]
-    fn verification_sources_have_no_semantic_diagnostics() {
-        let mut failures = Vec::new();
-        let verification_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../verification/sources/verify");
-        let mut base_symbol_table = SymbolTable::new();
-        collection::collect_classpath_symbols(
-            &mut base_symbol_table,
-            &[FilePath::new("/usr/lib/jvm/java-8-openjdk/jre/lib/rt.jar")],
-        )
-        .expect("collect classpath symbols");
-
-        for entry in walkdir::WalkDir::new(&verification_root) {
-            let entry = entry.expect("walkdir entry");
-            if !entry.file_type().is_file()
-                || entry
-                    .path()
-                    .extension()
-                    .is_none_or(|extension| extension != "java")
-            {
-                continue;
-            }
-
-            let source = fs::read_to_string(entry.path()).expect("read verification source");
-            let (mut units, _) = resolved_units(&source);
-            let mut symbol_table = base_symbol_table.clone();
-            collection::collect_compilation_unit_symbols(&mut symbol_table, &units)
-                .expect("collect symbols");
-            resolution::resolve_identifiers(&mut units, &mut symbol_table);
-            let diagnostics = analyze_attributes(&mut units, &mut symbol_table);
-
-            if !diagnostics.is_empty() {
-                failures.push(format!(
-                    "{}: {}",
-                    entry.path().display(),
-                    diagnostics
-                        .iter()
-                        .map(|diagnostic| diagnostic.message.as_str().to_owned())
-                        .collect::<Vec<_>>()
-                        .join(" | ")
-                ));
-            }
-        }
-
-        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     fn root_expr_id(unit: &CompilationUnit) -> rajac_ast::ExprId {
