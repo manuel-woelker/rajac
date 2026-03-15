@@ -64,6 +64,7 @@ Fields on interfaces, structs, and classes should also be documented (including 
 
 Features should always be automatically tested to ensure proper functionality.
 Consult `docs/TESTING.md` when writing tests.
+Consult `docs/VERIFICATION.md` when adding or updating verification fixtures, reference outputs, or verification-specific diagnostics.
 
 Tests should be colocated with the code, i.e. in the same file.
 
