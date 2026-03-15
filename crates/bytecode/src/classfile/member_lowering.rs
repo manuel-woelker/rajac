@@ -8,7 +8,6 @@ use rajac_ast::{
     Modifiers,
 };
 use rajac_base::result::{RajacResult, ResultExt};
-use rajac_base::shared_string::SharedString;
 use ristretto_classfile::attributes::Attribute;
 use ristretto_classfile::{
     ConstantPool, Field, FieldAccessFlags, FieldType, Method, MethodAccessFlags,
@@ -125,7 +124,7 @@ pub(crate) fn method_from_ast(
 pub(crate) fn generate_method_bytecode(
     arena: &AstArena,
     constant_pool: &mut ConstantPool,
-    this_internal_name: &str,
+    _this_internal_name: &str,
     method: &AstMethod,
     body_id: rajac_ast::StmtId,
     generation_context: &mut ClassfileGenerationContext<'_>,
@@ -137,7 +136,6 @@ pub(crate) fn generate_method_bytecode(
         generation_context.type_arena,
         generation_context.symbol_table,
         constant_pool,
-        Some(SharedString::new(this_internal_name)),
     );
     let (instructions, max_stack, max_locals) =
         code_gen.generate_method_body(is_static, &method.params, body_id)?;
@@ -185,7 +183,7 @@ fn method_access_flags(modifiers: &Modifiers) -> MethodAccessFlags {
 pub(crate) fn constructor_from_ast(
     arena: &AstArena,
     constant_pool: &mut ConstantPool,
-    this_internal_name: &str,
+    _this_internal_name: &str,
     constructor: &AstConstructor,
     class_modifiers: &Modifiers,
     super_internal_name: &str,
@@ -211,7 +209,6 @@ pub(crate) fn constructor_from_ast(
         generation_context.type_arena,
         generation_context.symbol_table,
         constant_pool,
-        Some(SharedString::new(this_internal_name)),
     );
     let (instructions, max_stack, max_locals) = code_gen.generate_constructor_body(
         &constructor.params,

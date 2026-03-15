@@ -128,7 +128,6 @@ pub struct CodeGenerator<'arena> {
     type_arena: &'arena TypeArena,
     symbol_table: &'arena SymbolTable,
     constant_pool: &'arena mut ConstantPool,
-    current_class_internal_name: Option<SharedString>,
     emitter: BytecodeEmitter,
     max_stack: u16,
     current_stack: i32,
@@ -146,14 +145,12 @@ impl<'arena> CodeGenerator<'arena> {
         type_arena: &'arena TypeArena,
         symbol_table: &'arena SymbolTable,
         constant_pool: &'arena mut ConstantPool,
-        current_class_internal_name: Option<SharedString>,
     ) -> Self {
         Self {
             arena,
             type_arena,
             symbol_table,
             constant_pool,
-            current_class_internal_name,
             emitter: BytecodeEmitter::new(),
             max_stack: 0,
             current_stack: 0,
@@ -1672,7 +1669,7 @@ impl<'arena> CodeGenerator<'arena> {
 
     fn resolve_method_invocation(
         &self,
-        target: Option<&ExprId>,
+        _target: Option<&ExprId>,
         name: &Ident,
         args: &[ExprId],
         method_id: Option<MethodId>,
@@ -1711,18 +1708,8 @@ impl<'arena> CodeGenerator<'arena> {
         let Some(owner) = self.resolve_method_owner(method_id) else {
             return Ok(None);
         };
-        let is_implicit_current_class_call = target.is_none()
-            && self
-                .current_class_internal_name
-                .as_ref()
-                .is_some_and(|current| current.as_str() == owner.internal_name.as_str());
-
         let kind = if signature.modifiers.is_static() {
             InvocationKind::Static
-        } else if signature.modifiers.0 & rajac_types::MethodModifiers::PRIVATE != 0
-            && is_implicit_current_class_call
-        {
-            InvocationKind::Special
         } else if matches!(owner.kind, SymbolKind::Interface) {
             InvocationKind::Interface
         } else {
@@ -1730,7 +1717,7 @@ impl<'arena> CodeGenerator<'arena> {
         };
 
         let interface_arg_count = matches!(kind, InvocationKind::Interface)
-            .then(|| interface_arg_count(descriptor.as_str()));
+            .then(|| interface_arg_count(signature, self.type_arena));
 
         Ok(Some(ResolvedInvocation {
             kind,
@@ -2745,11 +2732,13 @@ fn method_call_stack_delta(descriptor: &str, has_receiver: bool) -> Option<i32> 
     Some(return_slots - arg_slots)
 }
 
-fn interface_arg_count(descriptor: &str) -> u8 {
-    method_call_stack_delta(descriptor, true)
-        .and_then(i32::checked_neg)
-        .and_then(|count| u8::try_from(count).ok())
-        .unwrap_or(1)
+fn interface_arg_count(signature: &rajac_types::MethodSignature, type_arena: &TypeArena) -> u8 {
+    let parameter_slots: usize = signature
+        .params
+        .iter()
+        .map(|param_ty| local_kind_from_type_id(*param_ty, type_arena).slot_size() as usize)
+        .sum();
+    u8::try_from(parameter_slots + 1).unwrap_or(1)
 }
 
 fn parse_return_descriptor_slots<I>(chars: &mut std::iter::Peekable<I>) -> Option<i32>
@@ -2866,7 +2855,7 @@ mod tests {
         let symbol_table = SymbolTable::new();
         let mut constant_pool = ConstantPool::new();
         let mut generator =
-            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool, None);
+            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
 
         generator.emit_literal(&Literal {
             kind: LiteralKind::Int,
@@ -2912,7 +2901,7 @@ mod tests {
         let symbol_table = SymbolTable::new();
         let mut constant_pool = ConstantPool::new();
         let mut generator =
-            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool, None);
+            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
 
         generator.emit_literal(&Literal {
             kind: LiteralKind::Char,
@@ -2950,7 +2939,7 @@ mod tests {
         let body = arena.alloc_stmt(Stmt::Block(vec![expr_stmt]));
 
         let mut generator =
-            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool, None);
+            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
         let (instructions, _max_stack, _max_locals) =
             generator.generate_method_body(false, &[], body)?;
 
@@ -3000,7 +2989,7 @@ mod tests {
         let body = arena.alloc_stmt(Stmt::Block(vec![local_var, expr_stmt]));
 
         let mut generator =
-            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool, None);
+            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
         let (instructions, _max_stack, _max_locals) =
             generator.generate_method_body(false, &[], body)?;
 
@@ -3033,7 +3022,7 @@ mod tests {
         let body = arena.alloc_stmt(Stmt::Block(vec![throw_stmt]));
 
         let mut generator =
-            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool, None);
+            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
         let (instructions, _max_stack, _max_locals) =
             generator.generate_method_body(false, &[], body)?;
 
@@ -3060,7 +3049,7 @@ mod tests {
         let body = arena.alloc_stmt(Stmt::Block(vec![throw_stmt]));
 
         let mut generator =
-            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool, None);
+            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
         let (instructions, _max_stack, _max_locals) =
             generator.generate_constructor_body(&[], Some(body), "java/lang/Object")?;
 
@@ -3089,7 +3078,7 @@ mod tests {
         let body = arena.alloc_stmt(Stmt::Block(vec![try_stmt]));
 
         let mut generator =
-            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool, None);
+            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
         let (instructions, _max_stack, _max_locals) =
             generator.generate_method_body(false, &[], body)?;
         let unsupported_features = generator.take_unsupported_features();
@@ -3136,7 +3125,7 @@ mod tests {
         let body = arena.alloc_stmt(Stmt::Block(vec![expr_stmt]));
 
         let mut generator =
-            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool, None);
+            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
         let (instructions, _max_stack, _max_locals) =
             generator.generate_method_body(false, &[], body)?;
         let unsupported_features = generator.take_unsupported_features();
@@ -3196,7 +3185,6 @@ mod tests {
             symbol_table.type_arena(),
             &symbol_table,
             &mut constant_pool,
-            None,
         );
         generator.emit_method_call(
             None,
@@ -3243,7 +3231,6 @@ mod tests {
             symbol_table.type_arena(),
             &symbol_table,
             &mut constant_pool,
-            None,
         );
         generator.emit_method_call(
             Some(&receiver_expr),
@@ -3264,7 +3251,7 @@ mod tests {
     }
 
     #[test]
-    fn implicit_private_method_calls_emit_invokespecial() -> RajacResult<()> {
+    fn implicit_private_method_calls_emit_invokevirtual() -> RajacResult<()> {
         let arena = AstArena::new();
         let mut symbol_table = SymbolTable::new();
         let mut constant_pool = ConstantPool::new();
@@ -3289,7 +3276,6 @@ mod tests {
             symbol_table.type_arena(),
             &symbol_table,
             &mut constant_pool,
-            Some(SharedString::new("example/Widget")),
         );
         generator.emit_method_call(
             None,
@@ -3303,7 +3289,7 @@ mod tests {
             generator.emitter.code_items.as_slice(),
             [
                 CodeItem::Instruction(Instruction::Aload_0),
-                CodeItem::Instruction(Instruction::Invokespecial(_))
+                CodeItem::Instruction(Instruction::Invokevirtual(_))
             ]
         ));
         Ok(())
