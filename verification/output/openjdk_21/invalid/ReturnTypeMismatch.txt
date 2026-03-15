@@ -1,0 +1,4 @@
+/data/projects/rajac/verification/sources_invalid/typecheck/ReturnTypeMismatch.java:3: error: incompatible types: boolean cannot be converted to int
+        return true;
+               ^
+1 error

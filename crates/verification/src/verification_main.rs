@@ -27,6 +27,14 @@ fn get_error_message_overrides() -> HashMap<&'static str, &'static str> {
     overrides.insert("IllegalCharacter", "illegal character");
     overrides.insert("InvalidIdentifierStart", "invalid identifier start");
     overrides.insert("MalformedNumber", "malformed number");
+    overrides.insert(
+        "NonBooleanWhile",
+        "while condition must be boolean, found int",
+    );
+    overrides.insert(
+        "ReturnTypeMismatch",
+        "incompatible types: found boolean, required int",
+    );
 
     overrides
 }

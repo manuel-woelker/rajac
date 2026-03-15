@@ -243,19 +243,19 @@ The first robust type-checking milestone should be considered complete when:
 
 ## What checklist tracks the work?
 
-- [ ] Add scoped local and parameter environments to attribute analysis.
-- [ ] Add semantic diagnostic helpers for type errors and missing symbol errors.
-- [ ] Bind `Expr::Ident` against locals, parameters, and members in a deterministic lookup order.
-- [ ] Type local variable declarations and validate initializer compatibility.
-- [ ] Type assignment expressions and reject assignment to non-assignable expressions.
-- [ ] Type unary expressions and validate operand kinds.
-- [ ] Type binary arithmetic, comparison, and boolean expressions.
-- [ ] Validate `if`, `while`, `do-while`, and `for` conditions as boolean.
-- [ ] Validate `return` statements against enclosing method return type.
-- [ ] Type field access and basic method invocation applicability.
-- [ ] Record constant-expression results where that simplifies later passes.
-- [ ] Remove bytecode-generation workarounds that duplicate semantic local typing.
-- [ ] Add colocated tests for semantic typing and diagnostics.
-- [ ] Add or update verification fixtures and error message overrides for semantic diagnostics.
-- [ ] Run `cargo run -p verification --bin verification`.
+- [x] Add scoped local and parameter environments to attribute analysis.
+- [x] Add semantic diagnostic helpers for type errors and missing symbol errors.
+- [x] Bind `Expr::Ident` against locals, parameters, and members in a deterministic lookup order.
+- [x] Type local variable declarations and validate initializer compatibility.
+- [x] Type assignment expressions and reject assignment to non-assignable expressions.
+- [x] Type unary expressions and validate operand kinds.
+- [x] Type binary arithmetic, comparison, and boolean expressions.
+- [x] Validate `if`, `while`, `do-while`, and `for` conditions as boolean.
+- [x] Validate `return` statements against enclosing method return type.
+- [x] Type field access and basic method invocation applicability.
+- [x] Record constant-expression results where that simplifies later passes.
+- [x] Remove bytecode-generation workarounds that duplicate semantic local typing.
+- [x] Add colocated tests for semantic typing and diagnostics.
+- [x] Add or update verification fixtures and error message overrides for semantic diagnostics.
+- [x] Run `cargo run -p verification --bin verification`.
 - [ ] Run `./scripts/check-code.sh`.
