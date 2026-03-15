@@ -17,6 +17,11 @@ Note: All developer documentation should be written in English.
 
 ## Documentation Strategy
 
+Consult `docs/PLANS.md` when creating, updating, or completing plan documents in `docs/plans`.
+
+### Planning
+
+Use `docs/PLANS.md` for plan structure, naming, verification expectations, assumptions, and completion workflow.
 
 ### Question driven documentation
 
