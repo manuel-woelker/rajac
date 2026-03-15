@@ -222,10 +222,10 @@ This control-flow semantic-validation milestone should be considered complete wh
 - [x] Resolve labeled `break` targets.
 - [x] Resolve labeled `continue` targets and reject non-loop targets.
 - [ ] Detect duplicate active labels where the language subset requires rejection.
-- [ ] Validate `switch` selector types.
-- [ ] Validate `case` labels against the selector type and supported constant-expression rules.
-- [ ] Reject duplicate `case` constants.
-- [ ] Reject multiple `default` labels.
+- [x] Validate `switch` selector types.
+- [x] Validate `case` labels against the selector type and supported constant-expression rules.
+- [x] Reject duplicate `case` constants.
+- [x] Reject multiple `default` labels.
 - [ ] Add a minimal statement-outcome model for abrupt completion.
 - [ ] Diagnose straightforward unreachable statements after unconditional abrupt completion.
 - [x] Add colocated tests for control-flow semantic diagnostics.

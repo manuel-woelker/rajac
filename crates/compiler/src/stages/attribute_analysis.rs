@@ -317,21 +317,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 self.pop_scope();
             }
             Stmt::Switch { expr, cases } => {
-                self.analyze_expr(expr);
-                self.with_control_flow_context(ControlFlowContext::Switch, |analyzer| {
-                    for case in cases {
-                        for label in case.labels {
-                            if let rajac_ast::SwitchLabel::Case(expr_id) = label {
-                                analyzer.analyze_expr(expr_id);
-                            }
-                        }
-                        analyzer.push_scope();
-                        for body_stmt_id in case.body {
-                            analyzer.analyze_stmt(body_stmt_id);
-                        }
-                        analyzer.pop_scope();
-                    }
-                });
+                self.analyze_switch_statement(expr, cases);
             }
             Stmt::Return(expr) => {
                 let Some(expected_ty) = self.current_return_type else {
@@ -1347,6 +1333,88 @@ impl<'a> SemanticAnalyzer<'a> {
                     self.emit_error("continue outside loop", Some("continue"));
                 }
             }
+        }
+    }
+
+    fn analyze_switch_statement(&mut self, expr: ExprId, cases: Vec<rajac_ast::SwitchCase>) {
+        let selector_ty = self.analyze_expr(expr);
+        self.validate_switch_selector(expr, selector_ty);
+
+        let mut seen_case_values = HashSet::new();
+        let mut has_default = false;
+        self.with_control_flow_context(ControlFlowContext::Switch, |analyzer| {
+            for case in cases {
+                for label in case.labels {
+                    match label {
+                        rajac_ast::SwitchLabel::Case(expr_id) => analyzer
+                            .validate_switch_case_label(
+                                selector_ty,
+                                expr_id,
+                                &mut seen_case_values,
+                            ),
+                        rajac_ast::SwitchLabel::Default => {
+                            if has_default {
+                                analyzer.emit_error("duplicate default label", Some("default"));
+                            } else {
+                                has_default = true;
+                            }
+                        }
+                    }
+                }
+                analyzer.push_scope();
+                for body_stmt_id in case.body {
+                    analyzer.analyze_stmt(body_stmt_id);
+                }
+                analyzer.pop_scope();
+            }
+        });
+    }
+
+    fn validate_switch_selector(&mut self, expr_id: ExprId, selector_ty: TypeId) {
+        if selector_ty == TypeId::INVALID {
+            return;
+        }
+
+        if !self.is_int_compatible_type(selector_ty) {
+            self.emit_error(
+                format!(
+                    "switch selector must be an integral type, found {}",
+                    self.expr_type_display_name(expr_id, selector_ty)
+                ),
+                Some("switch"),
+            );
+        }
+    }
+
+    fn validate_switch_case_label(
+        &mut self,
+        selector_ty: TypeId,
+        expr_id: ExprId,
+        seen_case_values: &mut HashSet<i128>,
+    ) {
+        let case_ty = self.analyze_expr(expr_id);
+
+        if selector_ty != TypeId::INVALID
+            && self.is_int_compatible_type(selector_ty)
+            && !self.is_assignment_compatible(selector_ty, case_ty, expr_id)
+        {
+            self.emit_error(
+                format!(
+                    "incompatible case label type: found {}, required {}",
+                    self.expr_type_display_name(expr_id, case_ty),
+                    self.type_display_name(selector_ty)
+                ),
+                Some("case"),
+            );
+        }
+
+        let Some(constant_value) = self.constant_integer_value(expr_id) else {
+            self.emit_error("case label must be a constant expression", Some("case"));
+            return;
+        };
+
+        if !seen_case_values.insert(constant_value) {
+            self.emit_error("duplicate case label", Some("case"));
         }
     }
 
@@ -2602,6 +2670,134 @@ class Example {
                 .message
                 .as_str()
                 .contains("undefined label 'outer'")
+        }));
+    }
+
+    #[test]
+    fn accepts_switch_with_integral_constant_cases() {
+        let source = r#"
+class Example {
+    int run(int value) {
+        switch (value) {
+            case 1:
+                return 1;
+            case 2:
+                return 2;
+            default:
+                return 0;
+        }
+    }
+}
+"#;
+
+        let (mut units, mut symbol_table) = resolved_units(source);
+        let diagnostics = analyze_attributes(&mut units, &mut symbol_table);
+
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn reports_invalid_switch_selector_type() {
+        let source = r#"
+class Example {
+    int run(boolean value) {
+        switch (value) {
+            case 1:
+                return 1;
+            default:
+                return 0;
+        }
+    }
+}
+"#;
+
+        let (mut units, mut symbol_table) = resolved_units(source);
+        let diagnostics = analyze_attributes(&mut units, &mut symbol_table);
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .as_str()
+                .contains("switch selector must be an integral type")
+        }));
+    }
+
+    #[test]
+    fn reports_non_constant_switch_case_labels() {
+        let source = r#"
+class Example {
+    int run(int value, int other) {
+        switch (value) {
+            case other:
+                return 1;
+            default:
+                return 0;
+        }
+    }
+}
+"#;
+
+        let (mut units, mut symbol_table) = resolved_units(source);
+        let diagnostics = analyze_attributes(&mut units, &mut symbol_table);
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .as_str()
+                .contains("case label must be a constant expression")
+        }));
+    }
+
+    #[test]
+    fn reports_duplicate_switch_case_labels() {
+        let source = r#"
+class Example {
+    int run(int value) {
+        switch (value) {
+            case 1:
+                return 1;
+            case 1:
+                return 2;
+            default:
+                return 0;
+        }
+    }
+}
+"#;
+
+        let (mut units, mut symbol_table) = resolved_units(source);
+        let diagnostics = analyze_attributes(&mut units, &mut symbol_table);
+
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| { diagnostic.message.as_str().contains("duplicate case label") })
+        );
+    }
+
+    #[test]
+    fn reports_duplicate_switch_default_labels() {
+        let source = r#"
+class Example {
+    int run(int value) {
+        switch (value) {
+            default:
+                return 1;
+            default:
+                return 2;
+        }
+    }
+}
+"#;
+
+        let (mut units, mut symbol_table) = resolved_units(source);
+        let diagnostics = analyze_attributes(&mut units, &mut symbol_table);
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .as_str()
+                .contains("duplicate default label")
         }));
     }
 
