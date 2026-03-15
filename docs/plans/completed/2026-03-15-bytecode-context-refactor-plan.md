@@ -127,6 +127,7 @@ A reasonable target layout is:
 
 The key rule is to split by ownership and mutation boundaries, not mechanically by AST variant count.
 Helpers that fundamentally require `&mut CodeGenerator` should remain methods on that type, even if they live in a focused submodule.
+The audit for this pass may reasonably conclude that `bytecode.rs` should stay as-is for now if no split clearly improves ownership or readability without causing borrow complexity.
 
 ### What should happen in the compiler generation stage?
 
@@ -212,6 +213,9 @@ This plan assumes:
 - the bytecode crate can tolerate some internal API churn as long as behavior and tests remain stable
 - Clippy pressure is a useful signal here, but not the sole design driver
 
+This plan was completed with the `classfile` and compiler generation layers split into smaller responsibility-based modules.
+The `bytecode.rs` audit did not justify an additional file split in this pass, because the remaining high-value seams are still tightly coupled to `CodeGenerator`'s mutable state and would have added borrow complexity without a clear quality win.
+
 ## What completion criteria should define success?
 
 This refactor should be considered complete when:
@@ -226,12 +230,12 @@ This refactor should be considered complete when:
 
 ## What checklist should track the work?
 
-- [ ] Audit high-friction bytecode and classfile helper signatures.
-- [ ] Define the minimum context/result types and module splits needed for the refactor.
-- [ ] Refactor and split `classfile.rs` to align helper boundaries with context ownership.
-- [ ] Replace tuple-style generation-stage results with a named result type if it improves clarity, and split stage helpers if the result is cleaner.
-- [ ] Refactor selected `bytecode.rs` helpers or submodules that materially benefit from context ownership.
-- [ ] Add or update colocated tests affected by the refactor.
-- [ ] Confirm verification fixtures do not need changes, or update them if behavior changed.
-- [ ] Run `cargo run -p verification --bin verification`.
-- [ ] Run `./scripts/check-code.sh`.
+- [x] Audit high-friction bytecode and classfile helper signatures.
+- [x] Define the minimum context/result types and module splits needed for the refactor.
+- [x] Refactor and split `classfile.rs` to align helper boundaries with context ownership.
+- [x] Replace tuple-style generation-stage results with a named result type if it improves clarity, and split stage helpers if the result is cleaner.
+- [x] Refactor selected `bytecode.rs` helpers or submodules that materially benefit from context ownership, or explicitly document why no split is warranted yet.
+- [x] Add or update colocated tests affected by the refactor.
+- [x] Confirm verification fixtures do not need changes, or update them if behavior changed.
+- [x] Run `cargo run -p verification --bin verification`.
+- [x] Run `./scripts/check-code.sh`.
