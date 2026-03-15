@@ -1,4 +1,4 @@
-use crate::bytecode::CodeGenerator;
+use crate::bytecode::{CodeGenerator, UnsupportedFeature};
 use rajac_ast::{
     Ast, AstArena, AstType, ClassDecl, ClassDeclId, ClassKind, ClassMember,
     Constructor as AstConstructor, Field as AstField, Method as AstMethod, Modifiers,
@@ -29,7 +29,22 @@ pub fn generate_classfiles(
     type_arena: &rajac_types::TypeArena,
     symbol_table: &SymbolTable,
 ) -> RajacResult<Vec<ClassFile>> {
+    Ok(generate_classfiles_with_report(ast, arena, type_arena, symbol_table)?.class_files)
+}
+
+pub struct GeneratedClassFiles {
+    pub class_files: Vec<ClassFile>,
+    pub unsupported_features: Vec<UnsupportedFeature>,
+}
+
+pub fn generate_classfiles_with_report(
+    ast: &Ast,
+    arena: &AstArena,
+    type_arena: &rajac_types::TypeArena,
+    symbol_table: &SymbolTable,
+) -> RajacResult<GeneratedClassFiles> {
     let mut class_files = Vec::new();
+    let mut unsupported_features = Vec::new();
     for class_id in &ast.classes {
         let class = arena.class_decl(*class_id);
         let internal_name = internal_class_name(ast, &class.name, symbol_table);
@@ -39,12 +54,16 @@ pub fn generate_classfiles(
             internal_name.into(),
             None,
             &mut class_files,
+            &mut unsupported_features,
             type_arena,
             symbol_table,
         )
         .with_context(|| format!("failed to generate bytecode for class '{}'", class.name))?;
     }
-    Ok(class_files)
+    Ok(GeneratedClassFiles {
+        class_files,
+        unsupported_features,
+    })
 }
 
 pub fn classfile_from_class_decl(
@@ -62,6 +81,7 @@ pub fn classfile_from_class_decl(
         &this_internal_name,
         None,
         &[],
+        &mut Vec::new(),
         type_arena,
         symbol_table,
     )
@@ -73,6 +93,7 @@ fn emit_classfiles_for_class(
     this_internal_name: SharedString,
     outer_internal_name: Option<SharedString>,
     class_files: &mut Vec<ClassFile>,
+    unsupported_features: &mut Vec<UnsupportedFeature>,
     type_arena: &rajac_types::TypeArena,
     _symbol_table: &SymbolTable,
 ) -> RajacResult<()> {
@@ -85,6 +106,7 @@ fn emit_classfiles_for_class(
         &this_internal_name,
         outer_internal_name.as_deref(),
         &nested_classes,
+        unsupported_features,
         type_arena,
         _symbol_table,
     )
@@ -99,6 +121,7 @@ fn emit_classfiles_for_class(
             nested.internal_name,
             Some(this_internal_name.clone()),
             class_files,
+            unsupported_features,
             type_arena,
             _symbol_table,
         )
@@ -119,6 +142,7 @@ fn classfile_from_class_decl_with_context(
     this_internal_name: &str,
     outer_internal_name: Option<&str>,
     nested_classes: &[NestedClassInfo],
+    unsupported_features: &mut Vec<UnsupportedFeature>,
     type_arena: &rajac_types::TypeArena,
     symbol_table: &SymbolTable,
 ) -> RajacResult<ClassFile> {
@@ -164,6 +188,7 @@ fn classfile_from_class_decl_with_context(
                     class.kind.clone(),
                     &class.modifiers,
                     method,
+                    unsupported_features,
                     type_arena,
                     symbol_table,
                 )? {
@@ -178,6 +203,7 @@ fn classfile_from_class_decl_with_context(
                     constructor,
                     &class.modifiers,
                     &super_internal_name,
+                    unsupported_features,
                     type_arena,
                     symbol_table,
                 )?);
@@ -207,6 +233,7 @@ fn classfile_from_class_decl_with_context(
             },
             &class.modifiers,
             &super_internal_name,
+            unsupported_features,
             type_arena,
             symbol_table,
         )?);
@@ -521,6 +548,7 @@ fn method_from_ast(
     class_kind: ClassKind,
     class_modifiers: &Modifiers,
     method: &AstMethod,
+    unsupported_features: &mut Vec<UnsupportedFeature>,
     type_arena: &rajac_types::TypeArena,
     symbol_table: &SymbolTable,
 ) -> RajacResult<Option<Method>> {
@@ -539,6 +567,7 @@ fn method_from_ast(
             constant_pool,
             method,
             body_id,
+            unsupported_features,
         )?
     } else {
         // Handle abstract methods
@@ -579,12 +608,14 @@ fn generate_method_bytecode(
     constant_pool: &mut ConstantPool,
     method: &AstMethod,
     body_id: rajac_ast::StmtId,
+    unsupported_features: &mut Vec<UnsupportedFeature>,
 ) -> RajacResult<Vec<ristretto_classfile::attributes::Attribute>> {
     let is_static = method.modifiers.0 & Modifiers::STATIC != 0;
 
     let mut code_gen = CodeGenerator::new(arena, type_arena, symbol_table, constant_pool);
     let (instructions, max_stack, max_locals) =
         code_gen.generate_method_body(is_static, &method.params, body_id)?;
+    unsupported_features.extend(code_gen.take_unsupported_features());
 
     let code_name = constant_pool.add_utf8("Code")?;
 
@@ -629,6 +660,7 @@ fn constructor_from_ast(
     constructor: &AstConstructor,
     class_modifiers: &Modifiers,
     super_internal_name: &str,
+    unsupported_features: &mut Vec<UnsupportedFeature>,
     type_arena: &rajac_types::TypeArena,
     symbol_table: &SymbolTable,
 ) -> RajacResult<Method> {
@@ -653,6 +685,7 @@ fn constructor_from_ast(
         constructor.body,
         super_internal_name,
     )?;
+    unsupported_features.extend(code_gen.take_unsupported_features());
 
     let code_name = constant_pool.add_utf8("Code")?;
     let code_attribute = ristretto_classfile::attributes::Attribute::Code {

@@ -2,11 +2,20 @@ use rajac_ast::{
     AstArena, AstType, Expr as AstExpr, ExprId, Literal, LiteralKind, ParamId, PrimitiveType, Stmt,
     StmtId, SwitchCase, SwitchLabel,
 };
+use rajac_base::shared_string::SharedString;
 use rajac_base::result::RajacResult;
 use rajac_symbols::SymbolTable;
 use rajac_types::{Ident, Type, TypeArena, TypeId};
 use ristretto_classfile::ConstantPool;
 use ristretto_classfile::attributes::{Instruction, LookupSwitch, TableSwitch};
+
+#[derive(Clone, Debug)]
+pub struct UnsupportedFeature {
+    /// User-facing message shared between diagnostics and runtime stubs.
+    pub message: SharedString,
+    /// Source marker used to anchor the generation-stage diagnostic.
+    pub marker: SharedString,
+}
 
 pub struct BytecodeEmitter {
     code_items: Vec<CodeItem>,
@@ -127,6 +136,7 @@ pub struct CodeGenerator<'arena> {
     local_vars: std::collections::HashMap<String, LocalVar>,
     control_flow_stack: Vec<ControlFlowFrame>,
     next_label_id: u32,
+    unsupported_features: Vec<UnsupportedFeature>,
 }
 
 impl<'arena> CodeGenerator<'arena> {
@@ -149,6 +159,7 @@ impl<'arena> CodeGenerator<'arena> {
             local_vars: std::collections::HashMap::new(),
             control_flow_stack: Vec::new(),
             next_label_id: 0,
+            unsupported_features: Vec::new(),
         }
     }
 
@@ -242,6 +253,10 @@ impl<'arena> CodeGenerator<'arena> {
         let label = LabelId(self.next_label_id);
         self.next_label_id += 1;
         label
+    }
+
+    pub fn take_unsupported_features(&mut self) -> Vec<UnsupportedFeature> {
+        std::mem::take(&mut self.unsupported_features)
     }
 
     fn bind_label(&mut self, label: LabelId) {
@@ -379,7 +394,12 @@ impl<'arena> CodeGenerator<'arena> {
                 self.emit_expression(*expr_id)?;
                 self.emit(Instruction::Athrow);
             }
-            Stmt::Try { .. } | Stmt::Synchronized { .. } => {}
+            Stmt::Try { .. } => {
+                self.emit_unsupported_feature("try statements", "try")?;
+            }
+            Stmt::Synchronized { .. } => {
+                self.emit_unsupported_feature("synchronized statements", "synchronized")?;
+            }
         }
         Ok(())
     }
@@ -679,10 +699,8 @@ impl<'arena> CodeGenerator<'arena> {
                 self.emit_cast(*ty)?;
             }
             AstExpr::InstanceOf { expr, ty } => {
-                self.emit_expression(*expr)?;
-                let class_name = type_to_internal_class_name(*ty);
-                let _ = class_name;
-                self.emit(Instruction::Instanceof(0));
+                let _ = (expr, ty);
+                self.emit_unsupported_feature("instanceof expressions", "instanceof")?;
             }
             AstExpr::FieldAccess { expr, name, .. } => {
                 self.emit_field_access(*expr, name)?;
@@ -721,12 +739,8 @@ impl<'arena> CodeGenerator<'arena> {
                 self.adjust_method_call_stack(&descriptor, true);
             }
             AstExpr::NewArray { ty, dimensions } => {
-                for dim in dimensions {
-                    self.emit_expression(*dim)?;
-                }
-                let element_desc = type_to_descriptor(*ty);
-                let _ = element_desc;
-                self.emit(Instruction::Anewarray(0));
+                let _ = (ty, dimensions);
+                self.emit_unsupported_feature("array creation expressions", "new")?;
             }
             AstExpr::ArrayAccess { array, index } => {
                 self.emit_expression(*array)?;
@@ -744,14 +758,36 @@ impl<'arena> CodeGenerator<'arena> {
                 self.emit(Instruction::Aload_0);
             }
             AstExpr::SuperCall { name, args, .. } => {
-                self.emit(Instruction::Aload_0);
-                for &arg in args {
-                    self.emit_expression(arg)?;
-                }
-                let _ = name;
-                self.emit(Instruction::Invokespecial(0));
+                let _ = (name, args);
+                self.emit_unsupported_feature("super method calls", "super")?;
             }
         }
+        Ok(())
+    }
+
+    fn emit_unsupported_feature(&mut self, feature: &str, marker: &str) -> RajacResult<()> {
+        let message = format!("unsupported bytecode generation feature: {feature}");
+        self.unsupported_features.push(UnsupportedFeature {
+            message: SharedString::new(&message),
+            marker: SharedString::new(marker),
+        });
+
+        let exception_class = self
+            .constant_pool
+            .add_class("java/lang/UnsupportedOperationException")?;
+        let constructor_ref = self.constant_pool.add_method_ref(
+            exception_class,
+            "<init>",
+            "(Ljava/lang/String;)V",
+        )?;
+        let message_index = self.constant_pool.add_string(&message)?;
+
+        self.emit(Instruction::New(exception_class));
+        self.emit(Instruction::Dup);
+        self.emit_loadable_constant(message_index);
+        self.emit(Instruction::Invokespecial(constructor_ref));
+        self.adjust_method_call_stack("(Ljava/lang/String;)V", true);
+        self.emit(Instruction::Athrow);
         Ok(())
     }
 
@@ -2835,6 +2871,45 @@ mod tests {
         assert!(matches!(instructions[1], Instruction::Invokespecial(_)));
         assert!(matches!(instructions[2], Instruction::Aconst_null));
         assert!(matches!(instructions[3], Instruction::Athrow));
+
+        Ok(())
+    }
+
+    #[test]
+    fn unsupported_try_statements_emit_runtime_exception_and_report() -> RajacResult<()> {
+        let mut arena = AstArena::new();
+        let type_arena = TypeArena::new();
+        let symbol_table = SymbolTable::new();
+        let mut constant_pool = ConstantPool::new();
+
+        let try_block = arena.alloc_stmt(Stmt::Block(vec![]));
+        let try_stmt = arena.alloc_stmt(Stmt::Try {
+            try_block,
+            catches: vec![],
+            finally_block: None,
+        });
+        let body = arena.alloc_stmt(Stmt::Block(vec![try_stmt]));
+
+        let mut generator =
+            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
+        let (instructions, _max_stack, _max_locals) =
+            generator.generate_method_body(false, &[], body)?;
+        let unsupported_features = generator.take_unsupported_features();
+
+        assert_eq!(unsupported_features.len(), 1);
+        assert_eq!(
+            unsupported_features[0].message.as_str(),
+            "unsupported bytecode generation feature: try statements"
+        );
+        assert_eq!(unsupported_features[0].marker.as_str(), "try");
+        assert!(matches!(instructions[0], Instruction::New(_)));
+        assert!(matches!(instructions[1], Instruction::Dup));
+        assert!(matches!(
+            instructions[2],
+            Instruction::Ldc(_) | Instruction::Ldc_w(_)
+        ));
+        assert!(matches!(instructions[3], Instruction::Invokespecial(_)));
+        assert!(matches!(instructions[4], Instruction::Athrow));
 
         Ok(())
     }

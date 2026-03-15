@@ -178,13 +178,13 @@ This unsupported-feature handling milestone should be considered complete when:
 
 ## What checklist tracks the work?
 
-- [ ] Audit current bytecode-generation placeholders and silent unsupported paths.
-- [ ] Add a shared bytecode helper for throwing `UnsupportedOperationException` with a message.
-- [ ] Add or extend generation-stage diagnostics for unsupported features.
-- [ ] Replace unsupported statement no-op handlers with the shared helper.
-- [ ] Replace unsupported expression placeholder paths with the shared helper where appropriate.
+- [x] Audit current bytecode-generation placeholders and silent unsupported paths.
+- [x] Add a shared bytecode helper for throwing `UnsupportedOperationException` with a message.
+- [x] Add or extend generation-stage diagnostics for unsupported features.
+- [x] Replace unsupported statement no-op handlers with the shared helper.
+- [x] Replace unsupported expression placeholder paths with the shared helper where appropriate.
 - [ ] Review user-reachable `unreachable!()` sites in bytecode generation and convert the unsupported ones.
-- [ ] Add colocated tests for unsupported-feature exception emission and reporting.
+- [x] Add colocated tests for unsupported-feature exception emission and reporting.
 - [ ] Add or update verification fixtures or explicitly document why verification is limited for generation-stage failures.
 - [ ] Run `cargo run -p verification --bin verification` if applicable.
 - [ ] Run `./scripts/check-code.sh`.

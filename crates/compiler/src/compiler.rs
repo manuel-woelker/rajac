@@ -654,12 +654,14 @@ impl Compiler {
         )
     )]
     fn generate_classfiles(&mut self) -> RajacResult<usize> {
-        generation::generate_classfiles(
-            &self.compilation_units,
+        let (count, diagnostics) = generation::generate_classfiles(
+            &mut self.compilation_units,
             self.symbol_table.type_arena(),
             &self.symbol_table,
             self.config.target_dir.as_path(),
-        )
+        )?;
+        self.diagnostics.extend(diagnostics);
+        Ok(count)
     }
 }
 

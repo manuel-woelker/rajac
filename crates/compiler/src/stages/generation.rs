@@ -56,8 +56,10 @@ output without affecting other compilation phases.
 use crate::CompilationUnit;
 use rajac_base::file_path::FilePath;
 use rajac_base::logging::instrument;
+use rajac_base::shared_string::SharedString;
 use rajac_base::result::{RajacResult, ResultExt};
-use rajac_bytecode::classfile::generate_classfiles as bytecode_generate_classfiles;
+use rajac_bytecode::classfile::generate_classfiles_with_report as bytecode_generate_classfiles;
+use rajac_diagnostics::{Annotation, Diagnostic, Diagnostics, Severity, SourceChunk, Span};
 use ristretto_classfile::attributes::Attribute;
 use std::fs;
 use std::path::Path;
@@ -134,15 +136,16 @@ use std::path::Path;
     )
 )]
 pub fn generate_classfiles(
-    compilation_units: &[CompilationUnit],
+    compilation_units: &mut [CompilationUnit],
     type_arena: &rajac_types::TypeArena,
     symbol_table: &rajac_symbols::SymbolTable,
     target_dir: &Path,
-) -> RajacResult<usize> {
+) -> RajacResult<(usize, Diagnostics)> {
     let mut total_files = 0;
+    let mut diagnostics = Diagnostics::new();
 
     for unit in compilation_units {
-        let count = emit_classfiles(
+        let (count, unit_diagnostics) = emit_classfiles(
             &unit.ast,
             &unit.arena,
             type_arena,
@@ -156,10 +159,12 @@ pub fn generate_classfiles(
                 unit.source_file.as_str()
             )
         })?;
+        unit.diagnostics.extend(unit_diagnostics.iter().cloned());
+        diagnostics.extend(unit_diagnostics);
         total_files += count;
     }
 
-    Ok(total_files)
+    Ok((total_files, diagnostics))
 }
 
 /// Emits class files for a single compilation unit.
@@ -203,8 +208,22 @@ fn emit_classfiles(
     symbol_table: &rajac_symbols::SymbolTable,
     source_file: &FilePath,
     target_dir: &Path,
-) -> RajacResult<usize> {
-    let mut class_files = bytecode_generate_classfiles(ast, arena, type_arena, symbol_table)?;
+) -> RajacResult<(usize, Diagnostics)> {
+    let generated = bytecode_generate_classfiles(ast, arena, type_arena, symbol_table)?;
+    let mut diagnostics = Diagnostics::new();
+    for unsupported_feature in &generated.unsupported_features {
+        diagnostics.add(Diagnostic {
+            severity: Severity::Error,
+            message: unsupported_feature.message.clone(),
+            chunks: vec![source_chunk_for_marker(
+                source_file,
+                ast.source.as_str(),
+                unsupported_feature.marker.as_str(),
+            )],
+        });
+    }
+
+    let mut class_files = generated.class_files;
 
     for class_file in &mut class_files {
         let source_file_attribute_index = class_file.constant_pool.add_utf8("SourceFile")?;
@@ -261,5 +280,105 @@ fn emit_classfiles(
         })?;
     }
 
-    Ok(classfile_count)
+    Ok((classfile_count, diagnostics))
+}
+
+fn source_chunk_for_marker(source_file: &FilePath, source: &str, marker: &str) -> SourceChunk {
+    let offset = source.find(marker).unwrap_or(0);
+    let (line, line_start, line_end) = line_bounds_for_offset(source, offset);
+    let fragment = &source[line_start..line_end];
+    let annotation_start = fragment.find(marker).unwrap_or(0);
+    let annotation_end = annotation_start + marker.len().max(1);
+
+    SourceChunk {
+        path: source_file.clone(),
+        fragment: SharedString::new(fragment),
+        offset: line_start,
+        line,
+        annotations: vec![Annotation {
+            span: Span(annotation_start..annotation_end),
+            message: SharedString::new(""),
+        }],
+    }
+}
+
+fn line_bounds_for_offset(source: &str, offset: usize) -> (usize, usize, usize) {
+    let offset = offset.min(source.len());
+    let line_start = source[..offset].rfind('\n').map_or(0, |index| index + 1);
+    let line_end = source[offset..]
+        .find('\n')
+        .map_or(source.len(), |index| offset + index);
+    let line = source[..line_start].bytes().filter(|byte| *byte == b'\n').count() + 1;
+    (line, line_start, line_end)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::stages::{collection, resolution};
+    use rajac_diagnostics::Diagnostics;
+    use rajac_lexer::Lexer;
+    use rajac_parser::Parser;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn generate_classfiles_reports_unsupported_generation_features() -> RajacResult<()> {
+        let source = r#"
+class Test {
+    void run() {
+        try {
+        } finally {
+        }
+    }
+}
+"#;
+        let (mut units, symbol_table) = resolved_units(source);
+        let target_dir = unique_test_output_dir();
+
+        let (class_count, diagnostics) = generate_classfiles(
+            &mut units,
+            symbol_table.type_arena(),
+            &symbol_table,
+            &target_dir,
+        )?;
+
+        assert_eq!(class_count, 1);
+        assert_eq!(diagnostics.len(), 1);
+
+        let diagnostic = diagnostics.iter().next().expect("missing diagnostic");
+        assert_eq!(
+            diagnostic.message.as_str(),
+            "unsupported bytecode generation feature: try statements"
+        );
+        assert_eq!(diagnostic.chunks[0].line, 4);
+        assert_eq!(diagnostic.chunks[0].fragment.as_str().trim(), "try {");
+        assert_eq!(units[0].diagnostics.len(), 1);
+
+        std::fs::remove_dir_all(&target_dir).ok();
+        Ok(())
+    }
+
+    fn resolved_units(source: &str) -> (Vec<CompilationUnit>, rajac_symbols::SymbolTable) {
+        let parse_result = Parser::new(Lexer::new(source, FilePath::new("Test.java")), source)
+            .parse_compilation_unit();
+        let mut units = vec![CompilationUnit {
+            source_file: FilePath::new("Test.java"),
+            ast: parse_result.ast,
+            arena: parse_result.arena,
+            diagnostics: Diagnostics::new(),
+        }];
+        let mut symbol_table = rajac_symbols::SymbolTable::new();
+        collection::collect_compilation_unit_symbols(&mut symbol_table, &units)
+            .expect("collect symbols");
+        resolution::resolve_identifiers(&mut units, &mut symbol_table);
+        (units, symbol_table)
+    }
+
+    fn unique_test_output_dir() -> std::path::PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("rajac-generation-test-{nonce}"))
+    }
 }
