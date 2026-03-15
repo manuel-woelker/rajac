@@ -160,6 +160,7 @@ impl<'arena> CodeGenerator<'arena> {
                 )
             )
         {
+            self.ensure_clean_stack("implicit return at end of method body")?;
             self.emit(Instruction::Return);
         }
 
@@ -223,8 +224,10 @@ impl<'arena> CodeGenerator<'arena> {
             }
             Stmt::Expr(expr_id) => {
                 self.emit_expression(*expr_id)?;
+                self.discard_expression_result(*expr_id);
             }
             Stmt::Return(None) => {
+                self.ensure_clean_stack("void return")?;
                 self.emit(Instruction::Return);
             }
             Stmt::Return(Some(expr_id)) => {
@@ -232,6 +235,7 @@ impl<'arena> CodeGenerator<'arena> {
                 let expr_ty = self.expression_type_id(*expr_id);
                 let expr_kind = self.kind_for_expr(*expr_id, expr_ty);
                 self.emit(self.return_instruction_for_kind(expr_kind));
+                self.ensure_clean_stack("value return")?;
             }
             Stmt::LocalVar {
                 ty,
@@ -568,6 +572,19 @@ impl<'arena> CodeGenerator<'arena> {
         }
     }
 
+    fn discard_expression_result(&mut self, expr_id: ExprId) {
+        let expr_ty = self.expression_type_id(expr_id);
+        if expr_ty == TypeId::INVALID && matches!(self.arena.expr(expr_id), AstExpr::Error) {
+            return;
+        }
+
+        let kind = self.kind_for_expr(expr_id, expr_ty);
+        match kind.slot_size() {
+            2 => self.emit(Instruction::Pop2),
+            _ => self.emit(Instruction::Pop),
+        }
+    }
+
     fn emit_boolean_expression(&mut self, expr_id: ExprId) -> RajacResult<()> {
         let true_label = self.new_label();
         let false_label = self.new_label();
@@ -629,6 +646,18 @@ impl<'arena> CodeGenerator<'arena> {
         self.emit_expression(rhs)?;
         self.emit_store(local.slot, local.kind);
         Ok(())
+    }
+
+    fn ensure_clean_stack(&self, context: &str) -> RajacResult<()> {
+        if self.current_stack == 0 {
+            return Ok(());
+        }
+
+        Err(rajac_base::err!(
+            "internal bytecode error: operand stack depth {} at {}",
+            self.current_stack,
+            context
+        ))
     }
 
     fn emit_condition(
@@ -2115,6 +2144,37 @@ mod tests {
             generator.emitter.code_items[1],
             CodeItem::Instruction(Instruction::Ldc(_))
         ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn expression_statements_discard_their_result_before_return() -> RajacResult<()> {
+        let mut arena = AstArena::new();
+        let type_arena = TypeArena::new();
+        let symbol_table = SymbolTable::new();
+        let mut constant_pool = ConstantPool::new();
+
+        let expr_id = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Int,
+            value: "7".into(),
+        }));
+        let expr_stmt = arena.alloc_stmt(Stmt::Expr(expr_id));
+        let body = arena.alloc_stmt(Stmt::Block(vec![expr_stmt]));
+
+        let mut generator =
+            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
+        let (instructions, _max_stack, _max_locals) =
+            generator.generate_method_body(false, &[], body)?;
+
+        assert_eq!(
+            instructions,
+            vec![
+                Instruction::Bipush(7),
+                Instruction::Pop,
+                Instruction::Return
+            ]
+        );
 
         Ok(())
     }
