@@ -165,6 +165,34 @@ fn resolve_optional_utf8(constant_pool: &ConstantPool, index: u16, empty_value: 
         .unwrap_or_else(|_| "<invalid:utf8>".to_string())
 }
 
+fn format_ldc_constant(constant_pool: &ConstantPool, index: u16, opcode: &str) -> String {
+    if let Ok(value) = constant_pool.try_get_utf8(index) {
+        return format!("{opcode} \"{value}\"");
+    }
+
+    if let Ok(value) = constant_pool.try_get_string(index) {
+        return format!("{opcode} \"{value}\"");
+    }
+
+    if let Ok(value) = constant_pool.try_get_integer(index) {
+        return format!("{opcode} {value}");
+    }
+
+    if let Ok(value) = constant_pool.try_get_float(index) {
+        return format!("{opcode} {value}");
+    }
+
+    if let Ok(value) = constant_pool.try_get_long(index) {
+        return format!("{opcode} {value}");
+    }
+
+    if let Ok(value) = constant_pool.try_get_double(index) {
+        return format!("{opcode} {value}");
+    }
+
+    format!("{opcode} #{index}")
+}
+
 fn pretty_print_field(out: &mut String, constant_pool: &ConstantPool, field: &Field) {
     let name = constant_pool
         .try_get_utf8(field.name_index)
@@ -266,27 +294,9 @@ fn format_instruction(
         Instruction::Dconst_1 => "dconst_1".to_string(),
         Instruction::Bipush(byte) => format!("bipush {}", byte),
         Instruction::Sipush(short) => format!("sipush {}", short),
-        Instruction::Ldc(index) => match constant_pool.try_get_utf8(u16::from(*index)) {
-            Ok(value) => format!("ldc \"{}\"", value),
-            Err(_) => match constant_pool.try_get_string(u16::from(*index)) {
-                Ok(value) => format!("ldc \"{}\"", value),
-                Err(_) => format!("ldc #{}", index),
-            },
-        },
-        Instruction::Ldc_w(index) => match constant_pool.try_get_utf8(*index) {
-            Ok(value) => format!("ldc_w \"{}\"", value),
-            Err(_) => match constant_pool.try_get_string(*index) {
-                Ok(value) => format!("ldc_w \"{}\"", value),
-                Err(_) => format!("ldc_w #{}", index),
-            },
-        },
-        Instruction::Ldc2_w(index) => match constant_pool.try_get_utf8(*index) {
-            Ok(value) => format!("ldc2_w \"{}\"", value),
-            Err(_) => match constant_pool.try_get_string(*index) {
-                Ok(value) => format!("ldc2_w \"{}\"", value),
-                Err(_) => format!("ldc2_w #{}", index),
-            },
-        },
+        Instruction::Ldc(index) => format_ldc_constant(constant_pool, u16::from(*index), "ldc"),
+        Instruction::Ldc_w(index) => format_ldc_constant(constant_pool, *index, "ldc_w"),
+        Instruction::Ldc2_w(index) => format_ldc_constant(constant_pool, *index, "ldc2_w"),
         Instruction::Iload(index) => format!("iload {}", index),
         Instruction::Lload(index) => format!("lload {}", index),
         Instruction::Fload(index) => format!("fload {}", index),
@@ -846,5 +856,27 @@ mod tests {
             }
         "#]]
         .assert_eq(printed);
+    }
+
+    #[test]
+    fn pretty_prints_ldc_numeric_constants_by_value() {
+        let mut constant_pool = ConstantPool::default();
+        let int_index = constant_pool.add_integer(2147483647).unwrap();
+        let long_index = constant_pool.add_long(9223372036854775807).unwrap();
+
+        assert_eq!(
+            format_instruction(
+                &ristretto_classfile::attributes::Instruction::Ldc(int_index as u8),
+                &constant_pool
+            ),
+            "ldc 2147483647"
+        );
+        assert_eq!(
+            format_instruction(
+                &ristretto_classfile::attributes::Instruction::Ldc2_w(long_index),
+                &constant_pool
+            ),
+            "ldc2_w 9223372036854775807"
+        );
     }
 }

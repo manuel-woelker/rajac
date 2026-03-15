@@ -396,11 +396,13 @@ impl<'a> Parser<'a> {
                 let value = rajac_base::shared_string::SharedString::new(
                     &self.source[self.current.span.clone()],
                 );
-                self.bump();
-                let lit = Literal {
-                    kind: LiteralKind::Int,
-                    value,
+                let kind = if matches!(self.peek(), TokenKind::LongLiteral) {
+                    LiteralKind::Long
+                } else {
+                    LiteralKind::Int
                 };
+                self.bump();
+                let lit = Literal { kind, value };
                 Some(self.arena.alloc_expr(Expr::Literal(lit)))
             }
             TokenKind::FloatLiteral => {

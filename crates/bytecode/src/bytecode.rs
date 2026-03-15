@@ -424,7 +424,7 @@ impl<'arena> CodeGenerator<'arena> {
     fn emit_literal(&mut self, literal: &Literal) -> RajacResult<()> {
         match literal.kind {
             LiteralKind::Int => {
-                if let Ok(value) = literal.value.parse::<i32>() {
+                if let Some(value) = parse_int_literal(literal.value.as_str()) {
                     match value {
                         -1 => self.emit(Instruction::Iconst_m1),
                         0 => self.emit(Instruction::Iconst_0),
@@ -435,46 +435,66 @@ impl<'arena> CodeGenerator<'arena> {
                         5 => self.emit(Instruction::Iconst_5),
                         -128..=127 => self.emit(Instruction::Bipush(value as i8)),
                         -32768..=32767 => self.emit(Instruction::Sipush(value as i16)),
-                        _ => {}
+                        _ => {
+                            let constant_index = self.constant_pool.add_integer(value)?;
+                            self.emit_loadable_constant(constant_index);
+                        }
                     }
                 }
             }
             LiteralKind::Long => {
-                if let Ok(value) = literal.value.parse::<i64>() {
+                if let Some(value) = parse_long_literal(literal.value.as_str()) {
                     match value {
                         0 => self.emit(Instruction::Lconst_0),
                         1 => self.emit(Instruction::Lconst_1),
-                        _ => {}
+                        _ => {
+                            let constant_index = self.constant_pool.add_long(value)?;
+                            self.emit(Instruction::Ldc2_w(constant_index));
+                        }
                     }
                 }
             }
             LiteralKind::Float => {
-                if let Ok(value) = literal.value.parse::<f32>() {
+                if let Some(value) = parse_float_literal(literal.value.as_str()) {
                     match value {
                         0.0 => self.emit(Instruction::Fconst_0),
                         1.0 => self.emit(Instruction::Fconst_1),
                         2.0 => self.emit(Instruction::Fconst_2),
-                        _ => {}
+                        _ => {
+                            let constant_index = self.constant_pool.add_float(value)?;
+                            self.emit_loadable_constant(constant_index);
+                        }
                     }
                 }
             }
             LiteralKind::Double => {
-                if let Ok(value) = literal.value.parse::<f64>() {
+                if let Some(value) = parse_double_literal(literal.value.as_str()) {
                     match value {
                         0.0 => self.emit(Instruction::Dconst_0),
                         1.0 => self.emit(Instruction::Dconst_1),
-                        _ => {}
+                        _ => {
+                            let constant_index = self.constant_pool.add_double(value)?;
+                            self.emit(Instruction::Ldc2_w(constant_index));
+                        }
                     }
                 }
             }
             LiteralKind::Char => {
-                if let Ok(value) = literal.value.parse::<char>() {
+                if let Some(value) = parse_char_literal(literal.value.as_str()) {
                     let code = value as i32;
                     match code {
-                        0..=5 => self.emit(Instruction::Iconst_0),
+                        0 => self.emit(Instruction::Iconst_0),
+                        1 => self.emit(Instruction::Iconst_1),
+                        2 => self.emit(Instruction::Iconst_2),
+                        3 => self.emit(Instruction::Iconst_3),
+                        4 => self.emit(Instruction::Iconst_4),
+                        5 => self.emit(Instruction::Iconst_5),
                         -128..=127 => self.emit(Instruction::Bipush(code as i8)),
                         -32768..=32767 => self.emit(Instruction::Sipush(code as i16)),
-                        _ => {}
+                        _ => {
+                            let constant_index = self.constant_pool.add_integer(code)?;
+                            self.emit_loadable_constant(constant_index);
+                        }
                     }
                 }
             }
@@ -498,6 +518,14 @@ impl<'arena> CodeGenerator<'arena> {
             }
         }
         Ok(())
+    }
+
+    fn emit_loadable_constant(&mut self, constant_index: u16) {
+        if constant_index <= u8::MAX as u16 {
+            self.emit(Instruction::Ldc(constant_index as u8));
+        } else {
+            self.emit(Instruction::Ldc_w(constant_index));
+        }
     }
 
     fn emit_boolean_expression(&mut self, expr_id: ExprId) -> RajacResult<()> {
@@ -1620,6 +1648,58 @@ fn is_null_literal(expr: &AstExpr) -> bool {
     )
 }
 
+fn parse_int_literal(value: &str) -> Option<i32> {
+    normalized_numeric_literal(value, &['l', 'L']).parse().ok()
+}
+
+fn parse_long_literal(value: &str) -> Option<i64> {
+    normalized_numeric_literal(value, &['l', 'L']).parse().ok()
+}
+
+fn parse_float_literal(value: &str) -> Option<f32> {
+    normalized_numeric_literal(value, &['f', 'F']).parse().ok()
+}
+
+fn parse_double_literal(value: &str) -> Option<f64> {
+    normalized_numeric_literal(value, &['d', 'D']).parse().ok()
+}
+
+fn normalized_numeric_literal(value: &str, suffixes: &[char]) -> String {
+    value
+        .trim_end_matches(|c| suffixes.contains(&c))
+        .replace('_', "")
+}
+
+fn parse_char_literal(value: &str) -> Option<char> {
+    let inner = value.strip_prefix('\'')?.strip_suffix('\'')?;
+
+    if let Some(hex) = inner.strip_prefix("\\u") {
+        let code = u32::from_str_radix(hex, 16).ok()?;
+        return char::from_u32(code);
+    }
+
+    if let Some(escaped) = inner.strip_prefix('\\') {
+        return match escaped {
+            "n" => Some('\n'),
+            "r" => Some('\r'),
+            "t" => Some('\t'),
+            "\\" => Some('\\'),
+            "'" => Some('\''),
+            "\"" => Some('"'),
+            "0" => Some('\0'),
+            _ => None,
+        };
+    }
+
+    let mut chars = inner.chars();
+    let ch = chars.next()?;
+    if chars.next().is_none() {
+        Some(ch)
+    } else {
+        None
+    }
+}
+
 fn is_object_equals_call(name: &Ident, args: &[ExprId]) -> bool {
     name.as_str() == "equals" && args.len() == 1
 }
@@ -1774,6 +1854,7 @@ fn stack_effect(instr: &Instruction) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ristretto_classfile::ConstantPool;
 
     #[test]
     fn finalize_adds_nop_for_branch_to_terminal_label() {
@@ -1807,5 +1888,81 @@ mod tests {
         let instructions = emitter.finalize();
 
         assert_eq!(instructions, vec![Instruction::Iconst_0]);
+    }
+
+    #[test]
+    fn emit_literal_uses_constant_pool_for_large_numeric_values() -> RajacResult<()> {
+        let arena = AstArena::new();
+        let type_arena = TypeArena::new();
+        let symbol_table = SymbolTable::new();
+        let mut constant_pool = ConstantPool::new();
+        let mut generator =
+            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
+
+        generator.emit_literal(&Literal {
+            kind: LiteralKind::Int,
+            value: "2147483647".into(),
+        })?;
+        generator.emit_literal(&Literal {
+            kind: LiteralKind::Long,
+            value: "9223372036854775807L".into(),
+        })?;
+        generator.emit_literal(&Literal {
+            kind: LiteralKind::Float,
+            value: "3.4028235e38f".into(),
+        })?;
+        generator.emit_literal(&Literal {
+            kind: LiteralKind::Double,
+            value: "1.7976931348623157e308d".into(),
+        })?;
+
+        assert!(matches!(
+            generator.emitter.code_items[0],
+            CodeItem::Instruction(Instruction::Ldc(_))
+        ));
+        assert!(matches!(
+            generator.emitter.code_items[1],
+            CodeItem::Instruction(Instruction::Ldc2_w(_))
+        ));
+        assert!(matches!(
+            generator.emitter.code_items[2],
+            CodeItem::Instruction(Instruction::Ldc(_))
+        ));
+        assert!(matches!(
+            generator.emitter.code_items[3],
+            CodeItem::Instruction(Instruction::Ldc2_w(_))
+        ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn emit_literal_decodes_char_escape_sequences() -> RajacResult<()> {
+        let arena = AstArena::new();
+        let type_arena = TypeArena::new();
+        let symbol_table = SymbolTable::new();
+        let mut constant_pool = ConstantPool::new();
+        let mut generator =
+            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
+
+        generator.emit_literal(&Literal {
+            kind: LiteralKind::Char,
+            value: "'\\u0005'".into(),
+        })?;
+        generator.emit_literal(&Literal {
+            kind: LiteralKind::Char,
+            value: "'\\uffff'".into(),
+        })?;
+
+        assert!(matches!(
+            generator.emitter.code_items[0],
+            CodeItem::Instruction(Instruction::Iconst_5)
+        ));
+        assert!(matches!(
+            generator.emitter.code_items[1],
+            CodeItem::Instruction(Instruction::Ldc(_))
+        ));
+
+        Ok(())
     }
 }

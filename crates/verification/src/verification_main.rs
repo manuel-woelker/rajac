@@ -38,12 +38,7 @@ different bytecode, and keeping them in an explicit ignore list preserves signal
 the suite without hiding which files still need follow-up work.
 */
 fn get_ignored_class_file_mismatches() -> HashSet<&'static str> {
-    HashSet::from([
-        "DoWhileLoop.class",
-        "ForLoop.class",
-        "PrimitiveNumberLiterals.class",
-        "WhileLoop.class",
-    ])
+    HashSet::from(["DoWhileLoop.class", "ForLoop.class", "WhileLoop.class"])
 }
 
 struct ComparisonStats {

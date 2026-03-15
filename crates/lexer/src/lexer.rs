@@ -256,6 +256,9 @@ impl<'a> Lexer<'a> {
     fn read_number(&mut self, start: usize) -> TokenKind {
         let mut has_decimal_point = false;
         let mut has_exponent = false;
+        let mut has_float_suffix = false;
+        let mut has_double_suffix = false;
+        let mut has_long_suffix = false;
 
         while let Some(c) = self.peek() {
             if c.is_ascii_digit() {
@@ -305,21 +308,35 @@ impl<'a> Lexer<'a> {
                 {
                     self.bump();
                 }
-            } else if c == 'f'
-                || c == 'F'
-                || c == 'l'
-                || c == 'L'
-                || c == 'x'
-                || c == 'X'
-                || c == 'b'
-                || c == 'B'
-            {
+            } else if c == 'f' || c == 'F' {
+                self.bump();
+                has_float_suffix = true;
+                break;
+            } else if c == 'd' || c == 'D' {
+                self.bump();
+                has_double_suffix = true;
+                break;
+            } else if c == 'l' || c == 'L' {
+                self.bump();
+                has_long_suffix = true;
+                break;
+            } else if c == 'x' || c == 'X' || c == 'b' || c == 'B' {
                 self.bump();
             } else {
                 break;
             }
         }
-        TokenKind::IntLiteral
+
+        if has_float_suffix {
+            TokenKind::FloatLiteral
+        } else if has_double_suffix || has_decimal_point || has_exponent {
+            TokenKind::DoubleLiteral
+        } else if has_long_suffix {
+            TokenKind::LongLiteral
+        } else {
+            let _ = start;
+            TokenKind::IntLiteral
+        }
     }
 
     fn read_string(&mut self, start: usize) -> TokenKind {
@@ -650,7 +667,7 @@ impl<'a> Lexer<'a> {
             '\'' => self.read_char(self.pos - 1),
             _ if c.is_ascii_digit() => {
                 let start_pos = self.pos - 1;
-                self.read_number(start_pos);
+                let number_kind = self.read_number(start_pos);
 
                 // Check if this is actually an invalid identifier (digit followed by identifier chars)
                 if let Some(next_char) = self.peek() {
@@ -687,18 +704,18 @@ impl<'a> Lexer<'a> {
                             } else {
                                 // Not a malformed number, put the dot back
                                 self.pos -= 1;
-                                TokenKind::IntLiteral
+                                number_kind
                             }
                         } else {
                             // End of input, not malformed
                             self.pos -= 1;
-                            TokenKind::IntLiteral
+                            number_kind
                         }
                     } else {
-                        TokenKind::IntLiteral
+                        number_kind
                     }
                 } else {
-                    TokenKind::IntLiteral
+                    number_kind
                 }
             }
             _ if c.is_alphabetic() || c == '_' || c == '$' => self.read_ident(self.pos - 1),

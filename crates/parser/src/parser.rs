@@ -991,6 +991,36 @@ mod tests {
         "#;
         let result = parse_src(source);
         assert_eq!(result.ast.classes.len(), 1);
+
+        let class_decl = result.arena.class_decl(result.ast.classes[0]);
+        let literal_kinds: Vec<_> = class_decl
+            .members
+            .iter()
+            .filter_map(|member_id| match result.arena.class_member(*member_id) {
+                ClassMember::Field(field) => {
+                    field
+                        .initializer
+                        .map(|expr_id| match result.arena.expr(expr_id) {
+                            Expr::Literal(literal) => literal.kind.clone(),
+                            _ => panic!("expected literal initializer"),
+                        })
+                }
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            literal_kinds,
+            vec![
+                LiteralKind::Int,
+                LiteralKind::Long,
+                LiteralKind::Float,
+                LiteralKind::Double,
+                LiteralKind::String,
+                LiteralKind::Char,
+                LiteralKind::Bool,
+            ]
+        );
     }
 
     #[test]
