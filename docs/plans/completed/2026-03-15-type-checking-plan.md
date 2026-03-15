@@ -258,4 +258,4 @@ The first robust type-checking milestone should be considered complete when:
 - [x] Add colocated tests for semantic typing and diagnostics.
 - [x] Add or update verification fixtures and error message overrides for semantic diagnostics.
 - [x] Run `cargo run -p verification --bin verification`.
-- [ ] Run `./scripts/check-code.sh`.
+- [x] Run `./scripts/check-code.sh`.
