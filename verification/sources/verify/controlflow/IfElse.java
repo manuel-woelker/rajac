@@ -1,11 +1,11 @@
 package verify.controlflow;
 
 public class IfElse {
-    public static int choose(int value) {
-        if (value > 0) {
-            return 1;
+    public static String choose(String value) {
+        if (value == "foo") {
+            return "bar";
         } else {
-            return -1;
+            return "baz";
         }
     }
 }
