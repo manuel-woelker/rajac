@@ -43,7 +43,7 @@ excluding certain directories, or handling different source file types.
 
 use rajac_base::file_path::FilePath;
 use rajac_base::logging::instrument;
-use rajac_base::result::RajacResult;
+use rajac_base::result::{RajacResult, ResultExt};
 use std::path::Path;
 use walkdir::WalkDir;
 
@@ -95,11 +95,14 @@ use walkdir::WalkDir;
 pub fn find_java_files(dir: &Path) -> RajacResult<Vec<FilePath>> {
     let mut java_files = Vec::new();
 
-    for entry in WalkDir::new(dir)
-        .follow_links(true)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
+    for entry in WalkDir::new(dir).follow_links(true) {
+        let entry = entry.with_context(|| {
+            format!(
+                "Failed to traverse '{}' while discovering Java files in '{}'",
+                dir.display(),
+                dir.display()
+            )
+        })?;
         let path = entry.path();
         if path.is_file() && path.extension().is_some_and(|ext| ext == "java") {
             java_files.push(FilePath::new(path));
@@ -107,4 +110,37 @@ pub fn find_java_files(dir: &Path) -> RajacResult<Vec<FilePath>> {
     }
 
     Ok(java_files)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_java_files;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn discovery_errors_when_followed_symlink_is_broken() {
+        let root = unique_temp_dir("discovery_broken_symlink");
+        fs::create_dir_all(&root).unwrap();
+
+        let broken_link = root.join("missing.java");
+        std::os::unix::fs::symlink(root.join("does-not-exist.java"), &broken_link).unwrap();
+
+        let error = find_java_files(&root).unwrap_err();
+        let rendered = error.to_test_string();
+
+        assert!(rendered.contains("Failed to traverse"));
+        assert!(rendered.contains(root.to_string_lossy().as_ref()));
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn unique_temp_dir(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("rajac_{name}_{nanos}"))
+    }
 }
