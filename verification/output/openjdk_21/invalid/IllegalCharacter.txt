@@ -1,4 +1,0 @@
-/data/projects/rajac/verification/sources_invalid/lexer/IllegalCharacter.java:3: error: ';' expected
-        int price = 20£;
-                      ^
-1 error

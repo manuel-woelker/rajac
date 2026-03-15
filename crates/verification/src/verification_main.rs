@@ -394,6 +394,7 @@ fn verify_invalid_sources(
     )
     .entered();
     let invalid_output_dir = reference_output.join("invalid");
+    let invalid_output_file = invalid_output_dir.join("errors.txt");
     let error_overrides = get_error_message_overrides();
 
     let java_files = get_java_files(invalid_dir)?;
@@ -455,14 +456,14 @@ fn verify_invalid_sources(
         }
     }
 
+    let reference_errors = parse_reference_errors(&invalid_output_file, &java_files)?;
+
     // Verify each file against its expected error
     for java_file in &java_files {
         let file_stem = java_file.file_stem().unwrap().to_string_lossy();
         let _span = info_span!("verify_invalid_file", file = %file_stem).entered();
-        let ref_output_file = invalid_output_dir.join(format!("{}.txt", file_stem));
-
-        if !ref_output_file.exists() {
-            warn!(reference_output = %ref_output_file.display(), "missing reference output");
+        let Some((ref_line, ref_error)) = reference_errors.get(file_stem.as_ref()) else {
+            warn!(reference_output = %invalid_output_file.display(), "missing reference output");
             println!(
                 "{} Missing reference output for: {}",
                 "Error:".red(),
@@ -470,15 +471,8 @@ fn verify_invalid_sources(
             );
             failures += 1;
             continue;
-        }
-
-        let ref_content = fs::read_to_string(&ref_output_file).context(format!(
-            "Failed to read reference output: {}",
-            ref_output_file.display()
-        ))?;
-
-        let (ref_line, ref_error) = parse_reference_error(&ref_content)?;
-        debug!(reference_line = ref_line, reference_error = %ref_error, "parsed reference diagnostic");
+        };
+        debug!(reference_line = *ref_line, reference_error = %ref_error, "parsed reference diagnostic");
 
         let empty_vec: Vec<&rajac_diagnostics::Diagnostic> = vec![];
         let file_diagnostics = file_diagnostics.get(&*file_stem).unwrap_or(&empty_vec);
@@ -507,7 +501,7 @@ fn verify_invalid_sources(
             .iter()
             .find(|d| {
                 // Look for a diagnostic that matches the expected line
-                d.chunks.iter().any(|chunk| chunk.line == ref_line)
+                d.chunks.iter().any(|chunk| chunk.line == *ref_line)
             })
             .or_else(|| file_diagnostics.iter().next())
             .unwrap();
@@ -516,7 +510,7 @@ fn verify_invalid_sources(
         let rajac_line = diagnostic.chunks.first().map(|c| c.line);
         let rajac_error = diagnostic.message.as_str();
 
-        let line_match = rajac_line.is_some_and(|l| l == ref_line);
+        let line_match = rajac_line.is_some_and(|l| l == *ref_line);
 
         /* 📖 # Why check for overrides before error comparison?
         The override system allows us to verify line numbers against OpenJDK (for compatibility)
@@ -527,13 +521,13 @@ fn verify_invalid_sources(
         let expected_error = error_overrides
             .get(&*file_stem)
             .copied()
-            .unwrap_or(&ref_error);
+            .unwrap_or(ref_error);
 
         let error_match = rajac_error
             .to_lowercase()
             .contains(&expected_error.to_lowercase());
         debug!(
-            reference_line = ref_line,
+            reference_line = *ref_line,
             rajac_line = rajac_line.unwrap_or_default(),
             expected_error = %expected_error,
             rajac_error = %rajac_error,
@@ -546,8 +540,8 @@ fn verify_invalid_sources(
             warn!("invalid source mismatch");
             print_invalid_source_mismatch(
                 &file_stem,
-                ref_line,
-                &ref_error,
+                *ref_line,
+                ref_error,
                 if error_overrides.contains_key(&*file_stem) {
                     Some(expected_error)
                 } else {
@@ -594,11 +588,32 @@ fn get_java_files(dir: &Path) -> RajacResult<Vec<PathBuf>> {
     Ok(java_files)
 }
 
-fn parse_reference_error(content: &str) -> RajacResult<(usize, String)> {
+fn parse_reference_errors(
+    output_file: &Path,
+    java_files: &[PathBuf],
+) -> RajacResult<HashMap<String, (usize, String)>> {
+    let content = fs::read_to_string(output_file).context(format!(
+        "Failed to read reference output: {}",
+        output_file.display()
+    ))?;
     let line_regex = Regex::new(r"(.+\.java):(\d+): error: (.+)")?;
+    let expected_files: HashSet<_> = java_files
+        .iter()
+        .filter_map(|path| path.file_stem())
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .collect();
+    let mut errors = HashMap::new();
 
     for line in content.lines() {
         if let Some(caps) = line_regex.captures(line) {
+            let file_stem = Path::new(caps.get(1).unwrap().as_str())
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            if !expected_files.contains(&file_stem) || errors.contains_key(&file_stem) {
+                continue;
+            }
             let line_num: usize = caps
                 .get(2)
                 .unwrap()
@@ -606,11 +621,11 @@ fn parse_reference_error(content: &str) -> RajacResult<(usize, String)> {
                 .parse::<usize>()
                 .context("Failed to parse line number")?;
             let error_msg = caps.get(3).unwrap().as_str().to_string();
-            return Ok((line_num, error_msg));
+            errors.insert(file_stem, (line_num, error_msg));
         }
     }
 
-    Err(rajac_base::err!("Failed to parse reference error output"))
+    Ok(errors)
 }
 
 fn print_invalid_source_mismatch(

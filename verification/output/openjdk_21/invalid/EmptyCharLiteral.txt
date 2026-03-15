@@ -1,4 +1,0 @@
-/data/projects/rajac/verification/sources_invalid/lexer/EmptyCharLiteral.java:3: error: empty character literal
-        char c = '';
-                 ^
-1 error

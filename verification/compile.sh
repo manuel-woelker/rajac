@@ -31,17 +31,18 @@ echo "Compiled Java files to: $OUTPUT_DIR"
 # Compile invalid Java files separately and capture output
 INVALID_OUTPUT_DIR="/data/projects/rajac/verification/output/${COMPILER_NAME}_${COMPILER_VERSION}/invalid"
 mkdir -p "$INVALID_OUTPUT_DIR"
+INVALID_OUTPUT_FILE="${INVALID_OUTPUT_DIR}/errors.txt"
 
-INVALID_COUNT=0
-while read -r java_file; do
-    output_file="${INVALID_OUTPUT_DIR}/$(basename "$java_file" .java).txt"
-    if javac -d "$INVALID_OUTPUT_DIR" "$java_file" > "$output_file" 2>&1; then
-        echo "ERROR: javac succeeded but should have failed for: $java_file"
+mapfile -t INVALID_FILES < <(find /data/projects/rajac/verification/sources_invalid -name "*.java" -type f | sort)
+INVALID_COUNT="${#INVALID_FILES[@]}"
+
+if [[ "$INVALID_COUNT" -gt 0 ]]; then
+    if javac -d "$INVALID_OUTPUT_DIR" "${INVALID_FILES[@]}" > "$INVALID_OUTPUT_FILE" 2>&1; then
+        echo "ERROR: javac succeeded but should have failed for invalid sources"
         exit 1
     fi
-    ((INVALID_COUNT++)) || true
-done < <(find /data/projects/rajac/verification/sources_invalid -name "*.java" -type f)
+fi
 
-echo "Compiled invalid Java files to: $INVALID_OUTPUT_DIR"
+echo "Compiled invalid Java files to: $INVALID_OUTPUT_FILE"
 echo "Number of valid files: $(find /data/projects/rajac/verification/sources -name "*.java" -type f | wc -l)"
 echo "Number of invalid files: $INVALID_COUNT"

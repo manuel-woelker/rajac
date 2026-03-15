@@ -1,5 +1,0 @@
-/data/projects/rajac/verification/sources_invalid/lexer/UnclosedComment.java:1: error: unclosed comment
-/* comment
-^
-/data/projects/rajac/verification/sources_invalid/lexer/UnclosedComment.java:2: error: reached end of file while parsing
-2 errors

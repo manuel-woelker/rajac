@@ -1,7 +1,0 @@
-/data/projects/rajac/verification/sources_invalid/lexer/InvalidIdentifierStart.java:3: error: not a statement
-        int 2value = 42;
-        ^
-/data/projects/rajac/verification/sources_invalid/lexer/InvalidIdentifierStart.java:3: error: ';' expected
-        int 2value = 42;
-           ^
-2 errors

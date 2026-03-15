@@ -1,4 +1,0 @@
-/data/projects/rajac/verification/sources_invalid/lexer/UnclosedCharLiteral.java:3: error: unclosed character literal
-        char c = 'a;
-                 ^
-1 error
