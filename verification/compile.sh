@@ -4,16 +4,6 @@ set -euo pipefail
 
 trap 'echo "Compilation failed on line ${LINENO}: ${BASH_COMMAND}"' ERR
 
-INVALID_COMPILER_CLASSES_DIR=""
-
-cleanup() {
-    if [[ -n "$INVALID_COMPILER_CLASSES_DIR" && -d "$INVALID_COMPILER_CLASSES_DIR" ]]; then
-        rm -rf "$INVALID_COMPILER_CLASSES_DIR"
-    fi
-}
-
-trap cleanup EXIT
-
 # Get javac version information
 JAVAC_VERSION=$(javac -version 2>&1)
 
@@ -42,19 +32,28 @@ echo "Compiled Java files to: $OUTPUT_DIR"
 INVALID_OUTPUT_DIR="/data/projects/rajac/verification/output/${COMPILER_NAME}_${COMPILER_VERSION}/invalid"
 mkdir -p "$INVALID_OUTPUT_DIR"
 INVALID_OUTPUT_FILE="${INVALID_OUTPUT_DIR}/errors.txt"
-INVALID_COMPILER_SOURCE="/data/projects/rajac/verification/CompileInvalidSources.java"
+: > "$INVALID_OUTPUT_FILE"
 
-mapfile -t INVALID_FILES < <(find /data/projects/rajac/verification/sources_invalid -name "*.java" -type f | sort)
-INVALID_COUNT="${#INVALID_FILES[@]}"
+INVALID_COUNT=0
+for STAGE in lexer parser typecheck; do
+    STAGE_DIR="/data/projects/rajac/verification/sources_invalid/${STAGE}"
+    if [[ ! -d "$STAGE_DIR" ]]; then
+        continue
+    fi
 
-if [[ "$INVALID_COUNT" -gt 0 ]]; then
-    INVALID_COMPILER_CLASSES_DIR=$(mktemp -d /tmp/rajac-invalid-compiler.XXXXXX)
-    javac -d "$INVALID_COMPILER_CLASSES_DIR" "$INVALID_COMPILER_SOURCE"
-    java -cp "$INVALID_COMPILER_CLASSES_DIR" CompileInvalidSources \
-        "$INVALID_OUTPUT_DIR" \
-        "$INVALID_OUTPUT_FILE" \
-        "${INVALID_FILES[@]}"
-fi
+    mapfile -t STAGE_FILES < <(find "$STAGE_DIR" -name "*.java" -type f | sort)
+    STAGE_COUNT="${#STAGE_FILES[@]}"
+    INVALID_COUNT=$((INVALID_COUNT + STAGE_COUNT))
+
+    if [[ "$STAGE_COUNT" -eq 0 ]]; then
+        continue
+    fi
+
+    if javac -d "$INVALID_OUTPUT_DIR" "${STAGE_FILES[@]}" >> "$INVALID_OUTPUT_FILE" 2>&1; then
+        echo "ERROR: javac succeeded but should have failed for invalid ${STAGE} sources"
+        exit 1
+    fi
+done
 
 echo "Compiled invalid Java files to: $INVALID_OUTPUT_FILE"
 echo "Number of valid files: $(find /data/projects/rajac/verification/sources -name "*.java" -type f | wc -l)"

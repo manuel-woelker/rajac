@@ -625,6 +625,17 @@ fn parse_reference_errors(
         }
     }
 
+    let actual_files: HashSet<_> = errors.keys().cloned().collect();
+    let mut missing_files: Vec<_> = expected_files.difference(&actual_files).cloned().collect();
+    missing_files.sort();
+    if !missing_files.is_empty() {
+        return Err(rajac_base::err!(
+            "Reference output {} is missing error diagnostics for: {}",
+            output_file.display(),
+            missing_files.join(", ")
+        ));
+    }
+
     Ok(errors)
 }
 
