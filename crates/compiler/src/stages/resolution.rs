@@ -107,6 +107,7 @@ use rajac_ast::{
     Ast, AstArena, AstType, AstTypeId, ClassDeclId, ClassMember, ClassMemberId, Constructor,
     EnumDecl, ExprId, Field, Method, Modifiers, ParamId, StmtId,
 };
+use rajac_base::logging::instrument;
 use rajac_base::qualified_name::FullyQualifiedClassName as ResolvedName;
 use rajac_base::shared_string::SharedString;
 use rajac_symbols::SymbolTable;
@@ -168,17 +169,32 @@ use std::collections::{HashMap, HashSet};
 /// - Built-in types (String, Object) are always available
 /// - Fully qualified names bypass import resolution
 /// - Inner classes have special resolution rules
+#[instrument(
+    name = "compiler.phase.resolution",
+    skip(compilation_units, symbol_table),
+    fields(compilation_units = compilation_units.len())
+)]
 pub fn resolve_identifiers(
     compilation_units: &mut [CompilationUnit],
     symbol_table: &mut SymbolTable,
 ) {
     for unit in compilation_units.iter_mut() {
-        resolve_compilation_unit(&unit.ast, &mut unit.arena, symbol_table);
+        resolve_compilation_unit(&unit.ast, &mut unit.arena, symbol_table, &unit.source_file);
     }
 }
 
 /// Resolves identifiers in a single compilation unit.
-fn resolve_compilation_unit(ast: &Ast, arena: &mut AstArena, symbol_table: &mut SymbolTable) {
+#[instrument(
+    name = "compiler.phase.resolution.file",
+    skip(ast, arena, symbol_table, source_file),
+    fields(source_file = %source_file.as_str())
+)]
+fn resolve_compilation_unit(
+    ast: &Ast,
+    arena: &mut AstArena,
+    symbol_table: &mut SymbolTable,
+    source_file: &rajac_base::file_path::FilePath,
+) {
     let context = ResolveContext::new(ast);
 
     for stmt_id in &ast.statements {

@@ -52,6 +52,7 @@ responsibilities and well-defined inputs/outputs.
 //! ```
 
 use rajac_base::file_path::FilePath;
+use rajac_base::logging::instrument;
 use rajac_base::result::{RajacResult, ResultExt};
 use rajac_diagnostics::Diagnostics;
 use rajac_symbols::SymbolTable;
@@ -314,6 +315,15 @@ impl Compiler {
     /// compiler.compile_directory()?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
+    #[instrument(
+        name = "compiler.compile_directory",
+        skip(self),
+        fields(
+            source_dirs = self.config.source_dirs.len(),
+            classpaths = self.config.classpaths.len(),
+            target_dir = %self.config.target_dir.as_str()
+        )
+    )]
     pub fn compile_directory(&mut self) -> RajacResult<()> {
         std::fs::create_dir_all(self.config.target_dir.as_path())
             .context("Failed to create target directory")?;
@@ -400,6 +410,11 @@ impl Compiler {
     /// println!("Found {} Java files", compiler.java_files.len());
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
+    #[instrument(
+        name = "compiler.discover_files",
+        skip(self),
+        fields(source_dirs = self.config.source_dirs.len())
+    )]
     fn discover_files(&mut self) -> RajacResult<()> {
         self.java_files.clear();
         for source_dir in &self.config.source_dirs {
@@ -444,6 +459,11 @@ impl Compiler {
     /// println!("Collected symbols from {} compilation units", compiler.compilation_units.len());
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
+    #[instrument(
+        name = "compiler.collect_symbols",
+        skip(self),
+        fields(compilation_units = self.compilation_units.len())
+    )]
     fn collect_symbols(&mut self) -> RajacResult<()> {
         collection::collect_compilation_unit_symbols(
             &mut self.symbol_table,
@@ -484,6 +504,11 @@ impl Compiler {
     /// compiler.resolve_identifiers();
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
+    #[instrument(
+        name = "compiler.resolve_identifiers",
+        skip(self),
+        fields(compilation_units = self.compilation_units.len())
+    )]
     fn resolve_identifiers(&mut self) {
         resolution::resolve_identifiers(&mut self.compilation_units, &mut self.symbol_table);
     }
@@ -530,6 +555,14 @@ impl Compiler {
     /// println!("Generated {} class files", class_count);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
+    #[instrument(
+        name = "compiler.generate_classfiles",
+        skip(self),
+        fields(
+            compilation_units = self.compilation_units.len(),
+            target_dir = %self.config.target_dir.as_str()
+        )
+    )]
     fn generate_classfiles(&mut self) -> RajacResult<usize> {
         generation::generate_classfiles(
             &self.compilation_units,

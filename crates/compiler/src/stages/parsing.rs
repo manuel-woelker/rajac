@@ -54,6 +54,7 @@ without affecting other compilation phases.
 
 use crate::CompilationUnit;
 use rajac_base::file_path::FilePath;
+use rajac_base::logging::instrument;
 use rajac_base::result::{RajacResult, ResultExt};
 use rajac_parser::parse;
 use rayon::prelude::*;
@@ -122,19 +123,26 @@ use std::fs;
 /// - Results are collected in the original order
 /// - Errors from any thread cause the entire operation to fail
 /// - Thread safety is handled by the underlying parser
+#[instrument(name = "compiler.phase.parsing", skip(java_files), fields(files = java_files.len()))]
 pub fn parse_files(java_files: &[FilePath]) -> RajacResult<Vec<CompilationUnit>> {
     java_files
         .par_iter()
-        .map(|java_file| {
-            let source =
-                fs::read_to_string(java_file.as_path()).context("Failed to read source file")?;
-            let parse_result = parse(&source, java_file.clone());
-            Ok(CompilationUnit {
-                source_file: java_file.clone(),
-                ast: parse_result.ast,
-                arena: parse_result.arena,
-                diagnostics: parse_result.diagnostics,
-            })
-        })
+        .map(parse_file)
         .collect::<RajacResult<Vec<_>>>()
+}
+
+#[instrument(
+    name = "compiler.phase.parsing.file",
+    skip(java_file),
+    fields(source_file = %java_file.as_str())
+)]
+fn parse_file(java_file: &FilePath) -> RajacResult<CompilationUnit> {
+    let source = fs::read_to_string(java_file.as_path()).context("Failed to read source file")?;
+    let parse_result = parse(&source, java_file.clone());
+    Ok(CompilationUnit {
+        source_file: java_file.clone(),
+        ast: parse_result.ast,
+        arena: parse_result.arena,
+        diagnostics: parse_result.diagnostics,
+    })
 }

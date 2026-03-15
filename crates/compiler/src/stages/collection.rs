@@ -58,6 +58,7 @@ construction and potential optimization of symbol discovery.
 use crate::CompilationUnit;
 use rajac_ast::{Ast, AstArena, ClassKind};
 use rajac_base::file_path::FilePath;
+use rajac_base::logging::instrument;
 use rajac_base::result::RajacResult;
 use rajac_base::shared_string::SharedString;
 use rajac_classpath::Classpath;
@@ -82,6 +83,11 @@ use rajac_symbols::{SymbolKind, SymbolTable};
 /// Each classpath entry can be:
 /// - A JAR file (`.jar`) - all classes are loaded into the symbol table
 /// - A directory - all `.class` files are loaded into the symbol table
+#[instrument(
+    name = "compiler.phase.collection.classpath",
+    skip(symbol_table, classpaths),
+    fields(classpaths = classpaths.len())
+)]
 pub fn collect_classpath_symbols(
     symbol_table: &mut SymbolTable,
     classpaths: &[FilePath],
@@ -112,12 +118,17 @@ pub fn collect_classpath_symbols(
 ///
 /// - `symbol_table` - Mutable reference to the symbol table to populate
 /// - `compilation_units` - Slice of compilation units containing parsed ASTs
+#[instrument(
+    name = "compiler.phase.collection",
+    skip(symbol_table, compilation_units),
+    fields(compilation_units = compilation_units.len())
+)]
 pub fn collect_compilation_unit_symbols(
     symbol_table: &mut SymbolTable,
     compilation_units: &[CompilationUnit],
 ) -> RajacResult<()> {
     for unit in compilation_units {
-        populate_symbol_table(symbol_table, &unit.ast, &unit.arena);
+        populate_symbol_table(symbol_table, &unit.ast, &unit.arena, &unit.source_file);
     }
     Ok(())
 }
@@ -148,7 +159,17 @@ pub fn collect_compilation_unit_symbols(
 /// - Defaults to empty package (default package) if none specified
 /// - Creates or retrieves the appropriate package in the symbol table
 /// - All symbols from the file are added to that package
-fn populate_symbol_table(symbol_table: &mut SymbolTable, ast: &Ast, arena: &AstArena) {
+#[instrument(
+    name = "compiler.phase.collection.file",
+    skip(symbol_table, ast, arena, source_file),
+    fields(source_file = %source_file.as_str())
+)]
+fn populate_symbol_table(
+    symbol_table: &mut SymbolTable,
+    ast: &Ast,
+    arena: &AstArena,
+    source_file: &FilePath,
+) {
     let package_name = ast
         .package
         .as_ref()

@@ -15,3 +15,4 @@ rajac-base = { path = "../base" }
 rajac-bytecode = { path = "../bytecode" }
 rajac-diagnostics = { path = "../diagnostics" }
 ristretto_classfile = {workspace = true}
+tracing = { workspace = true }

@@ -55,6 +55,7 @@ output without affecting other compilation phases.
 
 use crate::CompilationUnit;
 use rajac_base::file_path::FilePath;
+use rajac_base::logging::instrument;
 use rajac_base::result::{RajacResult, ResultExt};
 use rajac_bytecode::classfile::generate_classfiles as bytecode_generate_classfiles;
 use ristretto_classfile::attributes::Attribute;
@@ -124,6 +125,14 @@ use std::path::Path;
 /// - Anonymous classes: `Outer$1.class`, `Outer$2.class`
 /// - Local classes: `Method$1LocalClass.class`
 /// - Interfaces and enums follow the same naming pattern
+#[instrument(
+    name = "compiler.phase.generation",
+    skip(compilation_units, type_arena, symbol_table, target_dir),
+    fields(
+        compilation_units = compilation_units.len(),
+        target_dir = %target_dir.display()
+    )
+)]
 pub fn generate_classfiles(
     compilation_units: &[CompilationUnit],
     type_arena: &rajac_types::TypeArena,
@@ -176,6 +185,11 @@ pub fn generate_classfiles(
 /// - Proper error reporting at runtime
 /// - Source-level debugging support
 /// - IDE integration for debugging
+#[instrument(
+    name = "compiler.phase.generation.file",
+    skip(ast, arena, type_arena, symbol_table, source_file, target_dir),
+    fields(source_file = %source_file.as_str(), target_dir = %target_dir.display())
+)]
 fn emit_classfiles(
     ast: &rajac_ast::Ast,
     arena: &rajac_ast::AstArena,

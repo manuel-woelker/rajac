@@ -739,6 +739,7 @@ dependencies = [
  "rajac-types",
  "rayon",
  "ristretto_classfile",
+ "tracing",
  "walkdir",
 ]
 

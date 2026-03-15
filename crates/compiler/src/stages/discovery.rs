@@ -42,6 +42,7 @@ excluding certain directories, or handling different source file types.
 */
 
 use rajac_base::file_path::FilePath;
+use rajac_base::logging::instrument;
 use rajac_base::result::RajacResult;
 use std::path::Path;
 use walkdir::WalkDir;
@@ -90,6 +91,7 @@ use walkdir::WalkDir;
 /// - No content validation is performed at this stage
 /// - Hidden files and directories are included if they have `.java` extension
 /// - The function is case-sensitive for file extensions
+#[instrument(name = "compiler.phase.discovery", skip(dir), fields(source_dir = %dir.display()))]
 pub fn find_java_files(dir: &Path) -> RajacResult<Vec<FilePath>> {
     let mut java_files = Vec::new();
 

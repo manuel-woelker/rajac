@@ -28,4 +28,4 @@ macro_rules! log_error {
 }
 
 pub use log_error;
-pub use tracing::{debug, error, info, info_span, trace, warn};
+pub use tracing::{debug, error, info, info_span, instrument, trace, warn};
