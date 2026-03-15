@@ -226,8 +226,8 @@ This control-flow semantic-validation milestone should be considered complete wh
 - [x] Validate `case` labels against the selector type and supported constant-expression rules.
 - [x] Reject duplicate `case` constants.
 - [x] Reject multiple `default` labels.
-- [ ] Add a minimal statement-outcome model for abrupt completion.
-- [ ] Diagnose straightforward unreachable statements after unconditional abrupt completion.
+- [x] Add a minimal statement-outcome model for abrupt completion.
+- [x] Diagnose straightforward unreachable statements after unconditional abrupt completion.
 - [x] Add colocated tests for control-flow semantic diagnostics.
 - [ ] Add or update invalid verification fixtures and any error-message overrides.
 - [ ] Run `cargo run -p verification --bin verification`.

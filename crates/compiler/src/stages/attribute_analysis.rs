@@ -104,6 +104,12 @@ enum LabeledStatementKind {
     NonIteration,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StatementOutcome {
+    CanCompleteNormally,
+    Abrupt,
+}
+
 impl<'a> SemanticAnalyzer<'a> {
     fn new(
         source_file: &'a FilePath,
@@ -246,20 +252,26 @@ impl<'a> SemanticAnalyzer<'a> {
         self.current_return_type = previous_return_type;
     }
 
-    fn analyze_stmt(&mut self, stmt_id: StmtId) {
+    fn analyze_stmt(&mut self, stmt_id: StmtId) -> StatementOutcome {
         match self.arena.stmt(stmt_id).clone() {
-            Stmt::Empty => {}
-            Stmt::Break(label) => self.analyze_break(label.as_ref()),
-            Stmt::Continue(label) => self.analyze_continue(label.as_ref()),
+            Stmt::Empty => StatementOutcome::CanCompleteNormally,
+            Stmt::Break(label) => {
+                self.analyze_break(label.as_ref());
+                StatementOutcome::Abrupt
+            }
+            Stmt::Continue(label) => {
+                self.analyze_continue(label.as_ref());
+                StatementOutcome::Abrupt
+            }
             Stmt::Block(statements) => {
                 self.push_scope();
-                for nested_stmt_id in statements {
-                    self.analyze_stmt(nested_stmt_id);
-                }
+                let outcome = self.analyze_stmt_sequence(statements);
                 self.pop_scope();
+                outcome
             }
             Stmt::Expr(expr_id) => {
                 self.analyze_expr(expr_id);
+                StatementOutcome::CanCompleteNormally
             }
             Stmt::If {
                 condition,
@@ -267,9 +279,19 @@ impl<'a> SemanticAnalyzer<'a> {
                 else_branch,
             } => {
                 self.require_boolean_condition(condition, "if");
-                self.analyze_stmt(then_branch);
-                if let Some(else_branch) = else_branch {
-                    self.analyze_stmt(else_branch);
+                let then_outcome = self.analyze_stmt(then_branch);
+                let else_outcome = if let Some(else_branch) = else_branch {
+                    self.analyze_stmt(else_branch)
+                } else {
+                    StatementOutcome::CanCompleteNormally
+                };
+                if then_outcome == StatementOutcome::Abrupt
+                    && else_branch.is_some()
+                    && else_outcome == StatementOutcome::Abrupt
+                {
+                    StatementOutcome::Abrupt
+                } else {
+                    StatementOutcome::CanCompleteNormally
                 }
             }
             Stmt::While { condition, body } => {
@@ -277,12 +299,14 @@ impl<'a> SemanticAnalyzer<'a> {
                 self.with_control_flow_context(ControlFlowContext::Loop, |analyzer| {
                     analyzer.analyze_stmt(body);
                 });
+                StatementOutcome::CanCompleteNormally
             }
             Stmt::DoWhile { body, condition } => {
                 self.with_control_flow_context(ControlFlowContext::Loop, |analyzer| {
                     analyzer.analyze_stmt(body);
                 });
                 self.require_boolean_condition(condition, "do-while");
+                StatementOutcome::CanCompleteNormally
             }
             Stmt::For {
                 init,
@@ -315,13 +339,12 @@ impl<'a> SemanticAnalyzer<'a> {
                     analyzer.analyze_stmt(body);
                 });
                 self.pop_scope();
+                StatementOutcome::CanCompleteNormally
             }
-            Stmt::Switch { expr, cases } => {
-                self.analyze_switch_statement(expr, cases);
-            }
+            Stmt::Switch { expr, cases } => self.analyze_switch_statement(expr, cases),
             Stmt::Return(expr) => {
                 let Some(expected_ty) = self.current_return_type else {
-                    return;
+                    return StatementOutcome::Abrupt;
                 };
 
                 match expr {
@@ -363,32 +386,49 @@ impl<'a> SemanticAnalyzer<'a> {
                         }
                     }
                 }
+                StatementOutcome::Abrupt
             }
             Stmt::Label(name, stmt_id) => {
+                let mut outcome = StatementOutcome::CanCompleteNormally;
                 self.with_active_label(
                     &name.name,
                     labeled_statement_kind(stmt_id, self.arena),
                     |analyzer| {
-                        analyzer.analyze_stmt(stmt_id);
+                        outcome = analyzer.analyze_stmt(stmt_id);
                     },
                 );
+                outcome
             }
             Stmt::Try {
                 try_block,
                 catches,
                 finally_block,
             } => {
-                self.analyze_stmt(try_block);
+                let try_outcome = self.analyze_stmt(try_block);
+                let mut catch_can_complete = false;
                 for catch_clause in catches {
                     self.push_scope();
                     let param = self.arena.param(catch_clause.param).clone();
                     let param_ty = self.arena.ty(param.ty).ty();
                     self.declare_local(param.name.name.clone(), param_ty, param.name.name.as_str());
-                    self.analyze_stmt(catch_clause.body);
+                    if self.analyze_stmt(catch_clause.body) == StatementOutcome::CanCompleteNormally
+                    {
+                        catch_can_complete = true;
+                    }
                     self.pop_scope();
                 }
-                if let Some(finally_block) = finally_block {
-                    self.analyze_stmt(finally_block);
+                let finally_outcome = if let Some(finally_block) = finally_block {
+                    self.analyze_stmt(finally_block)
+                } else {
+                    StatementOutcome::CanCompleteNormally
+                };
+                if finally_outcome == StatementOutcome::Abrupt {
+                    StatementOutcome::Abrupt
+                } else if try_outcome == StatementOutcome::CanCompleteNormally || catch_can_complete
+                {
+                    StatementOutcome::CanCompleteNormally
+                } else {
+                    StatementOutcome::Abrupt
                 }
             }
             Stmt::Throw(expr_id) => {
@@ -418,6 +458,7 @@ impl<'a> SemanticAnalyzer<'a> {
                         Some("throw"),
                     );
                 }
+                StatementOutcome::Abrupt
             }
             Stmt::Synchronized { expr, block } => {
                 if let Some(expr_id) = expr {
@@ -435,13 +476,16 @@ impl<'a> SemanticAnalyzer<'a> {
                         );
                     }
                 }
-                self.analyze_stmt(block);
+                self.analyze_stmt(block)
             }
             Stmt::LocalVar {
                 ty,
                 name,
                 initializer,
-            } => self.analyze_local_var(ty, name, initializer),
+            } => {
+                self.analyze_local_var(ty, name, initializer);
+                StatementOutcome::CanCompleteNormally
+            }
         }
     }
 
@@ -1336,12 +1380,17 @@ impl<'a> SemanticAnalyzer<'a> {
         }
     }
 
-    fn analyze_switch_statement(&mut self, expr: ExprId, cases: Vec<rajac_ast::SwitchCase>) {
+    fn analyze_switch_statement(
+        &mut self,
+        expr: ExprId,
+        cases: Vec<rajac_ast::SwitchCase>,
+    ) -> StatementOutcome {
         let selector_ty = self.analyze_expr(expr);
         self.validate_switch_selector(expr, selector_ty);
 
         let mut seen_case_values = HashSet::new();
         let mut has_default = false;
+        let mut can_complete_normally = cases.is_empty();
         self.with_control_flow_context(ControlFlowContext::Switch, |analyzer| {
             for case in cases {
                 for label in case.labels {
@@ -1362,12 +1411,18 @@ impl<'a> SemanticAnalyzer<'a> {
                     }
                 }
                 analyzer.push_scope();
-                for body_stmt_id in case.body {
-                    analyzer.analyze_stmt(body_stmt_id);
-                }
+                let case_outcome = analyzer.analyze_stmt_sequence(case.body);
                 analyzer.pop_scope();
+                if case_outcome == StatementOutcome::CanCompleteNormally {
+                    can_complete_normally = true;
+                }
             }
         });
+        if has_default && !can_complete_normally {
+            StatementOutcome::Abrupt
+        } else {
+            StatementOutcome::CanCompleteNormally
+        }
     }
 
     fn validate_switch_selector(&mut self, expr_id: ExprId, selector_ty: TypeId) {
@@ -1464,6 +1519,22 @@ impl<'a> SemanticAnalyzer<'a> {
         });
         analyze(self);
         self.active_labels.pop();
+    }
+
+    fn analyze_stmt_sequence(&mut self, statements: Vec<StmtId>) -> StatementOutcome {
+        let mut previous_was_abrupt = false;
+        for stmt_id in statements {
+            if previous_was_abrupt {
+                self.emit_unreachable_statement(stmt_id);
+            }
+            let outcome = self.analyze_stmt(stmt_id);
+            previous_was_abrupt = outcome == StatementOutcome::Abrupt;
+        }
+        if previous_was_abrupt {
+            StatementOutcome::Abrupt
+        } else {
+            StatementOutcome::CanCompleteNormally
+        }
     }
 
     fn push_scope(&mut self) {
@@ -1620,6 +1691,13 @@ impl<'a> SemanticAnalyzer<'a> {
             message: SharedString::new(&message),
             chunks: vec![chunk],
         });
+    }
+
+    fn emit_unreachable_statement(&mut self, stmt_id: StmtId) {
+        self.emit_error(
+            "unreachable statement",
+            stmt_marker(self.arena.stmt(stmt_id)),
+        );
     }
 }
 
@@ -2301,6 +2379,27 @@ fn labeled_statement_kind(stmt_id: StmtId, arena: &AstArena) -> LabeledStatement
     }
 }
 
+fn stmt_marker(stmt: &Stmt) -> Option<&'static str> {
+    match stmt {
+        Stmt::Empty => None,
+        Stmt::Block(_) => Some("{"),
+        Stmt::Expr(_) => None,
+        Stmt::If { .. } => Some("if"),
+        Stmt::While { .. } => Some("while"),
+        Stmt::DoWhile { .. } => Some("do"),
+        Stmt::For { .. } => Some("for"),
+        Stmt::Switch { .. } => Some("switch"),
+        Stmt::Return(_) => Some("return"),
+        Stmt::Break(_) => Some("break"),
+        Stmt::Continue(_) => Some("continue"),
+        Stmt::Label(_, _) => None,
+        Stmt::Try { .. } => Some("try"),
+        Stmt::Throw(_) => Some("throw"),
+        Stmt::Synchronized { .. } => Some("synchronized"),
+        Stmt::LocalVar { .. } => None,
+    }
+}
+
 fn source_chunk_for_marker(
     source_file: &FilePath,
     source: &str,
@@ -2798,6 +2897,79 @@ class Example {
                 .message
                 .as_str()
                 .contains("duplicate default label")
+        }));
+    }
+
+    #[test]
+    fn reports_unreachable_statement_after_return() {
+        let source = r#"
+class Example {
+    int run() {
+        return 1;
+        int value = 2;
+    }
+}
+"#;
+
+        let (mut units, mut symbol_table) = resolved_units(source);
+        let diagnostics = analyze_attributes(&mut units, &mut symbol_table);
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .as_str()
+                .contains("unreachable statement")
+        }));
+    }
+
+    #[test]
+    fn reports_unreachable_statement_after_continue() {
+        let source = r#"
+class Example {
+    void run() {
+        while (true) {
+            continue;
+            int value = 1;
+        }
+    }
+}
+"#;
+
+        let (mut units, mut symbol_table) = resolved_units(source);
+        let diagnostics = analyze_attributes(&mut units, &mut symbol_table);
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .as_str()
+                .contains("unreachable statement")
+        }));
+    }
+
+    #[test]
+    fn reports_unreachable_statement_in_switch_case() {
+        let source = r#"
+class Example {
+    int run(int value) {
+        switch (value) {
+            case 1:
+                break;
+                value = 2;
+            default:
+                return 0;
+        }
+    }
+}
+"#;
+
+        let (mut units, mut symbol_table) = resolved_units(source);
+        let diagnostics = analyze_attributes(&mut units, &mut symbol_table);
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .as_str()
+                .contains("unreachable statement")
         }));
     }
 
