@@ -168,6 +168,7 @@ impl<'arena> CodeGenerator<'arena> {
                 Some(
                     Instruction::Return
                         | Instruction::Areturn
+                        | Instruction::Athrow
                         | Instruction::Ireturn
                         | Instruction::Freturn
                         | Instruction::Dreturn
@@ -205,8 +206,23 @@ impl<'arena> CodeGenerator<'arena> {
             self.emit_super_constructor_call(super_internal_name, &[])?;
         }
 
-        self.ensure_clean_stack("implicit return at end of constructor body")?;
-        self.emit(Instruction::Return);
+        if self.emulator().is_empty()
+            || !matches!(
+                self.emulator().last_instruction(),
+                Some(
+                    Instruction::Return
+                        | Instruction::Areturn
+                        | Instruction::Athrow
+                        | Instruction::Ireturn
+                        | Instruction::Freturn
+                        | Instruction::Dreturn
+                        | Instruction::Lreturn
+                )
+            )
+        {
+            self.ensure_clean_stack("implicit return at end of constructor body")?;
+            self.emit(Instruction::Return);
+        }
 
         Ok((self.emitter.finalize(), self.max_stack, self.max_locals))
     }
@@ -359,7 +375,10 @@ impl<'arena> CodeGenerator<'arena> {
                     self.bind_label(end_label);
                 }
             },
-            Stmt::Throw(_) => {}
+            Stmt::Throw(expr_id) => {
+                self.emit_expression(*expr_id)?;
+                self.emit(Instruction::Athrow);
+            }
             Stmt::Try { .. } | Stmt::Synchronized { .. } => {}
         }
         Ok(())
@@ -679,11 +698,27 @@ impl<'arena> CodeGenerator<'arena> {
                 self.emit_method_call(expr.as_ref(), name, args, *method_id, expr_ty)?;
             }
             AstExpr::New { ty, args } => {
-                let class_name = type_to_internal_class_name_from_type_id(*ty);
-                let _ = (class_name, args);
-                self.emit(Instruction::New(0));
+                let class_name = type_id_to_internal_name(self.arena.ty(*ty).ty(), self.type_arena);
+                let class_index = self.constant_pool.add_class(&class_name)?;
+                self.emit(Instruction::New(class_index));
                 self.emit(Instruction::Dup);
-                self.emit(Instruction::Invokespecial(0));
+                for &arg in args {
+                    self.emit_expression(arg)?;
+                }
+                let descriptor = method_descriptor_from_parts(
+                    args.iter()
+                        .map(|arg| self.expression_type_id(*arg))
+                        .collect(),
+                    self.symbol_table
+                        .primitive_type_id("void")
+                        .unwrap_or(TypeId::INVALID),
+                    self.type_arena,
+                );
+                let constructor_ref =
+                    self.constant_pool
+                        .add_method_ref(class_index, "<init>", &descriptor)?;
+                self.emit(Instruction::Invokespecial(constructor_ref));
+                self.adjust_method_call_stack(&descriptor, true);
             }
             AstExpr::NewArray { ty, dimensions } => {
                 for dim in dimensions {
@@ -1259,7 +1294,7 @@ impl<'arena> CodeGenerator<'arena> {
 
     fn statement_terminates(&self, stmt_id: StmtId) -> bool {
         match self.arena.stmt(stmt_id) {
-            Stmt::Return(_) => true,
+            Stmt::Return(_) | Stmt::Throw(_) => true,
             Stmt::Block(stmts) => stmts
                 .last()
                 .copied()
@@ -2362,11 +2397,6 @@ fn type_to_internal_class_name(type_id: rajac_ast::AstTypeId) -> String {
     "java/lang/Object".to_string()
 }
 
-fn type_to_internal_class_name_from_type_id(type_id: rajac_ast::AstTypeId) -> String {
-    let _ = type_id;
-    "java/lang/Object".to_string()
-}
-
 fn type_to_descriptor(type_id: rajac_ast::AstTypeId) -> String {
     let _ = type_id;
     "Ljava/lang/Object;".to_string()
@@ -2475,7 +2505,7 @@ fn stack_effect(instr: &Instruction) -> i32 {
         Anewarray(_) => 0,
         Multianewarray(_, _) => 0,
         Arraylength => 0,
-        Athrow => 0,
+        Athrow => -1,
         Checkcast(_) => 0,
         Instanceof(_) => 0,
         Ifeq(_) | Ifne(_) | Iflt(_) | Ifge(_) | Ifgt(_) | Ifle(_) | Ifnull(_) | Ifnonnull(_) => -1,
@@ -2750,6 +2780,61 @@ mod tests {
                 Instruction::Return
             ]
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn throw_statements_emit_athrow_without_implicit_return() -> RajacResult<()> {
+        let mut arena = AstArena::new();
+        let type_arena = TypeArena::new();
+        let symbol_table = SymbolTable::new();
+        let mut constant_pool = ConstantPool::new();
+
+        let null_expr = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Null,
+            value: "null".into(),
+        }));
+        let throw_stmt = arena.alloc_stmt(Stmt::Throw(null_expr));
+        let body = arena.alloc_stmt(Stmt::Block(vec![throw_stmt]));
+
+        let mut generator =
+            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
+        let (instructions, _max_stack, _max_locals) =
+            generator.generate_method_body(false, &[], body)?;
+
+        assert_eq!(
+            instructions,
+            vec![Instruction::Aconst_null, Instruction::Athrow]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn constructor_throw_statements_emit_athrow_without_implicit_return() -> RajacResult<()> {
+        let mut arena = AstArena::new();
+        let type_arena = TypeArena::new();
+        let symbol_table = SymbolTable::new();
+        let mut constant_pool = ConstantPool::new();
+
+        let null_expr = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Null,
+            value: "null".into(),
+        }));
+        let throw_stmt = arena.alloc_stmt(Stmt::Throw(null_expr));
+        let body = arena.alloc_stmt(Stmt::Block(vec![throw_stmt]));
+
+        let mut generator =
+            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
+        let (instructions, _max_stack, _max_locals) =
+            generator.generate_constructor_body(&[], Some(body), "java/lang/Object")?;
+
+        assert_eq!(instructions.len(), 4);
+        assert!(matches!(instructions[0], Instruction::Aload_0));
+        assert!(matches!(instructions[1], Instruction::Invokespecial(_)));
+        assert!(matches!(instructions[2], Instruction::Aconst_null));
+        assert!(matches!(instructions[3], Instruction::Athrow));
 
         Ok(())
     }

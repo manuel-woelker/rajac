@@ -3010,6 +3010,43 @@ class Example {
     }
 
     #[test]
+    fn accepts_throw_of_runtime_exception() {
+        let source = r#"
+class Example {
+    void run() {
+        throw new RuntimeException();
+    }
+}
+"#;
+
+        let (mut units, mut symbol_table) = resolved_units(source);
+        let diagnostics = analyze_attributes(&mut units, &mut symbol_table);
+
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn reports_throw_of_primitive_value() {
+        let source = r#"
+class Example {
+    void run() {
+        throw 1;
+    }
+}
+"#;
+
+        let (mut units, mut symbol_table) = resolved_units(source);
+        let diagnostics = analyze_attributes(&mut units, &mut symbol_table);
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .as_str()
+                .contains("throw expression must be a reference type")
+        }));
+    }
+
+    #[test]
     fn reports_unreachable_statement_after_return() {
         let source = r#"
 class Example {
