@@ -54,6 +54,26 @@ where
     }
 }
 
+impl<T> ResultExt<T> for Result<T, RajacError> {
+    #[track_caller]
+    fn context(self, context: impl Into<SharedString>) -> RajacResult<T> {
+        let caller = Location::caller();
+        self.map_err(|error| {
+            RajacError::message_at_location(context.into(), caller).with_source(error)
+        })
+    }
+
+    #[track_caller]
+    fn with_context<C, S>(self, context: C) -> RajacResult<T>
+    where
+        C: FnOnce() -> S,
+        S: Into<SharedString>,
+    {
+        let caller = Location::caller();
+        self.map_err(|error| RajacError::message_at_location(context(), caller).with_source(error))
+    }
+}
+
 impl<T> OptionExt<T> for Option<T> {
     #[track_caller]
     fn context(self, context: impl Into<SharedString>) -> RajacResult<T> {
@@ -106,5 +126,15 @@ mod tests {
             .unwrap();
         assert_eq!(value, 123);
         assert!(!context_called.get());
+    }
+
+    #[test]
+    fn test_with_context_wraps_rajac_error_results() {
+        let result: crate::result::RajacResult<i32> = Err(crate::err!("root cause"));
+        let error = result.with_context(|| "outer context").unwrap_err();
+        let rendered = error.to_test_string();
+
+        assert!(rendered.contains("outer context"));
+        assert!(rendered.contains("root cause"));
     }
 }

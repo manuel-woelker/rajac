@@ -553,7 +553,7 @@ fn parse_reference_error(content: &str) -> RajacResult<(usize, String)> {
                 .get(2)
                 .unwrap()
                 .as_str()
-                .parse()
+                .parse::<usize>()
                 .context("Failed to parse line number")?;
             let error_msg = caps.get(3).unwrap().as_str().to_string();
             return Ok((line_num, error_msg));

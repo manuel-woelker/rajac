@@ -59,7 +59,7 @@ use crate::CompilationUnit;
 use rajac_ast::{Ast, AstArena, ClassKind};
 use rajac_base::file_path::FilePath;
 use rajac_base::logging::instrument;
-use rajac_base::result::RajacResult;
+use rajac_base::result::{RajacResult, ResultExt};
 use rajac_base::shared_string::SharedString;
 use rajac_classpath::Classpath;
 use rajac_symbols::{SymbolKind, SymbolTable};
@@ -104,7 +104,14 @@ pub fn collect_classpath_symbols(
         }
     }
     if !classpath.is_empty() {
-        classpath.add_to_symbol_table(symbol_table)?;
+        classpath
+            .add_to_symbol_table(symbol_table)
+            .with_context(|| {
+                format!(
+                    "Failed to collect symbols from classpath entries: {:?}",
+                    classpaths
+                )
+            })?;
     }
     Ok(())
 }
@@ -205,5 +212,42 @@ fn populate_symbol_table(
             rajac_types::Type::class(class_type),
             kind,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::collect_classpath_symbols;
+    use rajac_base::file_path::FilePath;
+    use rajac_symbols::SymbolTable;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn classpath_errors_include_entry_paths() {
+        let temp_dir = unique_temp_dir("collection_context");
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let jar_path = temp_dir.join("broken.jar");
+        fs::write(&jar_path, "not a jar").unwrap();
+
+        let mut symbol_table = SymbolTable::new();
+        let error =
+            collect_classpath_symbols(&mut symbol_table, &[FilePath::new(&jar_path)]).unwrap_err();
+        let rendered = error.to_test_string();
+
+        assert!(rendered.contains("Failed to collect symbols from classpath entries"));
+        assert!(rendered.contains("broken.jar"));
+
+        fs::remove_dir_all(&temp_dir).unwrap();
+    }
+
+    fn unique_temp_dir(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("rajac_{name}_{nanos}"))
     }
 }

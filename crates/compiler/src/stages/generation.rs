@@ -149,7 +149,13 @@ pub fn generate_classfiles(
             symbol_table,
             &unit.source_file,
             target_dir,
-        )?;
+        )
+        .with_context(|| {
+            format!(
+                "Failed to generate class files for source file '{}'",
+                unit.source_file.as_str()
+            )
+        })?;
         total_files += count;
     }
 
@@ -204,7 +210,13 @@ fn emit_classfiles(
         let source_file_attribute_index = class_file.constant_pool.add_utf8("SourceFile")?;
         let source_file_index = class_file
             .constant_pool
-            .add_utf8(source_file.file_name().unwrap_or("unknown"))?;
+            .add_utf8(source_file.file_name().unwrap_or("unknown"))
+            .with_context(|| {
+                format!(
+                    "Failed to add SourceFile attribute for source file '{}'",
+                    source_file.as_str()
+                )
+            })?;
         class_file.attributes.push(Attribute::SourceFile {
             name_index: source_file_attribute_index,
             source_file_index,
@@ -217,20 +229,36 @@ fn emit_classfiles(
         let class_name = class_file
             .constant_pool
             .try_get_class(class_file.this_class)
-            .context("Failed to get class name from constant pool")?;
+            .with_context(|| {
+                format!(
+                    "Failed to get generated class name from constant pool for source file '{}'",
+                    source_file.as_str()
+                )
+            })?;
 
         let class_path = target_dir.join(format!("{}.class", class_name));
 
         if let Some(parent) = class_path.parent() {
-            fs::create_dir_all(parent).context("Failed to create package directory")?;
+            fs::create_dir_all(parent).with_context(|| {
+                format!(
+                    "Failed to create package directory '{}' for class '{}'",
+                    parent.display(),
+                    class_name
+                )
+            })?;
         }
 
         let mut bytes = Vec::new();
-        class_file.to_bytes(&mut bytes)?;
-        fs::write(&class_path, &bytes).context(format!(
-            "Failed to write class file: {}",
-            class_path.display()
-        ))?;
+        class_file
+            .to_bytes(&mut bytes)
+            .with_context(|| format!("Failed to serialize generated class '{}'", class_name))?;
+        fs::write(&class_path, &bytes).with_context(|| {
+            format!(
+                "Failed to write class file '{}' for class '{}'",
+                class_path.display(),
+                class_name
+            )
+        })?;
     }
 
     Ok(classfile_count)

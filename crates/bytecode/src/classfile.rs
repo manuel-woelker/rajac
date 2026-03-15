@@ -40,7 +40,13 @@ pub fn generate_classfiles(
             &mut class_files,
             type_arena,
             symbol_table,
-        )?;
+        )
+        .with_context(|| {
+            format!(
+                "failed to generate bytecode for class '{}'",
+                class.name.as_str()
+            )
+        })?;
     }
     Ok(class_files)
 }
@@ -85,10 +91,17 @@ fn emit_classfiles_for_class(
         &nested_classes,
         type_arena,
         _symbol_table,
-    )?;
+    )
+    .with_context(|| {
+        format!(
+            "failed to build classfile for class '{}'",
+            class.name.as_str()
+        )
+    })?;
     class_files.push(class_file);
 
     for nested in nested_classes {
+        let nested_decl = arena.class_decl(nested.class_id);
         emit_classfiles_for_class(
             arena,
             nested.class_id,
@@ -97,7 +110,14 @@ fn emit_classfiles_for_class(
             class_files,
             type_arena,
             _symbol_table,
-        )?;
+        )
+        .with_context(|| {
+            format!(
+                "failed to generate bytecode for nested class '{}' inside '{}'",
+                nested_decl.name.as_str(),
+                class.name.as_str()
+            )
+        })?;
     }
 
     Ok(())

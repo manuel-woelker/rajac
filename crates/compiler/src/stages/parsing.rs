@@ -137,7 +137,8 @@ pub fn parse_files(java_files: &[FilePath]) -> RajacResult<Vec<CompilationUnit>>
     fields(source_file = %java_file.as_str())
 )]
 fn parse_file(java_file: &FilePath) -> RajacResult<CompilationUnit> {
-    let source = fs::read_to_string(java_file.as_path()).context("Failed to read source file")?;
+    let source = fs::read_to_string(java_file.as_path())
+        .with_context(|| format!("Failed to read source file '{}'", java_file.as_str()))?;
     let parse_result = parse(&source, java_file.clone());
     Ok(CompilationUnit {
         source_file: java_file.clone(),
@@ -145,4 +146,23 @@ fn parse_file(java_file: &FilePath) -> RajacResult<CompilationUnit> {
         arena: parse_result.arena,
         diagnostics: parse_result.diagnostics,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_file;
+    use rajac_base::file_path::FilePath;
+
+    #[test]
+    fn missing_source_file_error_includes_source_path() {
+        let missing_file = FilePath::new("tests/fixtures/does-not-exist/Main.java");
+
+        let error = parse_file(&missing_file).unwrap_err();
+        let rendered = error.to_test_string();
+
+        assert!(
+            rendered
+                .contains("Failed to read source file 'tests/fixtures/does-not-exist/Main.java'")
+        );
+    }
 }

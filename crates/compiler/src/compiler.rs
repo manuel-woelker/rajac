@@ -325,8 +325,12 @@ impl Compiler {
         )
     )]
     pub fn compile_directory(&mut self) -> RajacResult<()> {
-        std::fs::create_dir_all(self.config.target_dir.as_path())
-            .context("Failed to create target directory")?;
+        std::fs::create_dir_all(self.config.target_dir.as_path()).with_context(|| {
+            format!(
+                "Failed to create target directory '{}'",
+                self.config.target_dir.as_str()
+            )
+        })?;
 
         // Stage 1: Discovery - Find Java files
         self.discover_files()?;
@@ -418,7 +422,10 @@ impl Compiler {
     fn discover_files(&mut self) -> RajacResult<()> {
         self.java_files.clear();
         for source_dir in &self.config.source_dirs {
-            let mut files = discovery::find_java_files(source_dir.as_path())?;
+            let mut files =
+                discovery::find_java_files(source_dir.as_path()).with_context(|| {
+                    format!("Failed to discover Java files in '{}'", source_dir.as_str())
+                })?;
             self.java_files.append(&mut files);
         }
         Ok(())
