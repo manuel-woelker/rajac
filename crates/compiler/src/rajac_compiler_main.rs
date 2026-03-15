@@ -32,12 +32,13 @@
 //! The compiler prints:
 //! - Number of Java files found and processed
 //! - Number of class files generated
-//! - Success/failure status
+//! - Success/failure status derived from emitted diagnostics
 //!
 //! Class files are written to `[source_dir]/classes/` by default.
 
 use rajac_base::file_path::FilePath;
 use rajac_compiler::{Compiler, CompilerConfig};
+use rajac_diagnostics::Severity;
 use std::path::Path;
 
 fn main() {
@@ -56,6 +57,15 @@ fn main() {
 
     if let Err(e) = compiler.compile_directory() {
         eprintln!("Compilation failed: {:?}", e);
+        std::process::exit(1);
+    }
+
+    if compiler
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == Severity::Error)
+    {
+        eprintln!("Compilation failed: error diagnostics were emitted");
         std::process::exit(1);
     }
 

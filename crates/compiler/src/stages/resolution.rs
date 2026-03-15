@@ -197,12 +197,8 @@ fn resolve_compilation_unit(
 ) {
     let context = ResolveContext::new(ast);
 
-    for stmt_id in &ast.statements {
-        resolve_stmt(*stmt_id, arena, symbol_table, &context, None);
-    }
-
     for class_id in &ast.classes {
-        resolve_class_decl(*class_id, arena, symbol_table, &context);
+        resolve_class_decl_signatures(*class_id, arena, symbol_table, &context);
     }
 
     populate_compilation_unit_methods(ast, arena, symbol_table);
@@ -213,6 +209,36 @@ fn resolve_compilation_unit(
 
     for class_id in &ast.classes {
         resolve_class_decl(*class_id, arena, symbol_table, &context);
+    }
+}
+
+fn resolve_class_decl_signatures(
+    class_id: ClassDeclId,
+    arena: &mut AstArena,
+    symbol_table: &mut SymbolTable,
+    context: &ResolveContext,
+) {
+    let (members, extends, implements, permits) = {
+        let class = &mut arena.class_decls[class_id.0 as usize];
+        (
+            class.members.clone(),
+            class.extends,
+            class.implements.clone(),
+            class.permits.clone(),
+        )
+    };
+
+    if let Some(type_id) = extends {
+        resolve_type(type_id, arena, symbol_table, context);
+    }
+    for type_id in implements {
+        resolve_type(type_id, arena, symbol_table, context);
+    }
+    for type_id in permits {
+        resolve_type(type_id, arena, symbol_table, context);
+    }
+    for member_id in members {
+        resolve_class_member_signatures(member_id, arena, symbol_table, context);
     }
 }
 
@@ -339,6 +365,73 @@ fn resolve_class_member(
     }
 
     arena.class_members[member_id.0 as usize] = member;
+}
+
+fn resolve_class_member_signatures(
+    member_id: ClassMemberId,
+    arena: &mut AstArena,
+    symbol_table: &mut SymbolTable,
+    context: &ResolveContext,
+) {
+    let mut member = arena.class_members[member_id.0 as usize].clone();
+
+    match &mut member {
+        ClassMember::Field(field) => {
+            resolve_type(field.ty, arena, symbol_table, context);
+        }
+        ClassMember::Method(method) => {
+            for param_id in method.params.clone() {
+                resolve_param(param_id, arena, symbol_table, context);
+            }
+            resolve_type(method.return_ty, arena, symbol_table, context);
+            for throws_id in method.throws.clone() {
+                resolve_type(throws_id, arena, symbol_table, context);
+            }
+        }
+        ClassMember::Constructor(constructor) => {
+            for param_id in constructor.params.clone() {
+                resolve_param(param_id, arena, symbol_table, context);
+            }
+            for throws_id in constructor.throws.clone() {
+                resolve_type(throws_id, arena, symbol_table, context);
+            }
+        }
+        ClassMember::StaticBlock(_) => {}
+        ClassMember::NestedClass(class_id)
+        | ClassMember::NestedInterface(class_id)
+        | ClassMember::NestedRecord(class_id)
+        | ClassMember::NestedAnnotation(class_id) => {
+            resolve_class_decl_signatures(*class_id, arena, symbol_table, context);
+        }
+        ClassMember::NestedEnum(enum_decl) => {
+            resolve_enum_decl_signatures(enum_decl, arena, symbol_table, context);
+        }
+    }
+
+    arena.class_members[member_id.0 as usize] = member;
+}
+
+fn resolve_enum_decl_signatures(
+    enum_decl: &mut EnumDecl,
+    arena: &mut AstArena,
+    symbol_table: &mut SymbolTable,
+    context: &ResolveContext,
+) {
+    for type_id in enum_decl.implements.clone() {
+        resolve_type(type_id, arena, symbol_table, context);
+    }
+
+    for entry in &mut enum_decl.entries {
+        if let Some(members) = &entry.body {
+            for member_id in members.clone() {
+                resolve_class_member_signatures(member_id, arena, symbol_table, context);
+            }
+        }
+    }
+
+    for member_id in enum_decl.members.clone() {
+        resolve_class_member_signatures(member_id, arena, symbol_table, context);
+    }
 }
 
 /// Resolves identifiers in an enum declaration.
@@ -1426,7 +1519,10 @@ fn void_type_id(primitive_lookup: &HashMap<SharedString, TypeId>) -> TypeId {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CompilationUnit;
+    use rajac_base::file_path::FilePath;
     use rajac_base::shared_string::SharedString;
+    use rajac_parser::parse;
     use rajac_symbols::SymbolKind;
 
     #[test]
@@ -1531,5 +1627,56 @@ mod tests {
             ),
             Some(bool_method)
         );
+    }
+
+    #[test]
+    fn resolves_method_calls_after_signature_only_prep_pass() {
+        let source = r#"
+class Helper {}
+
+class Example {
+    void run(Helper helper) {}
+
+    void test() {
+        run(new Helper());
+    }
+}
+"#;
+        let parse_result = parse(source, FilePath::new("Example.java"));
+        let mut units = vec![CompilationUnit {
+            source_file: FilePath::new("Example.java"),
+            ast: parse_result.ast,
+            arena: parse_result.arena,
+            diagnostics: parse_result.diagnostics,
+        }];
+        let mut symbol_table = SymbolTable::new();
+        crate::stages::collection::collect_compilation_unit_symbols(&mut symbol_table, &units)
+            .unwrap();
+
+        resolve_identifiers(&mut units, &mut symbol_table);
+
+        let example_class = units[0].ast.classes[1];
+        let ClassMember::Method(test_method) = units[0]
+            .arena
+            .class_member(units[0].arena.class_decl(example_class).members[1])
+            .clone()
+        else {
+            panic!("expected test method");
+        };
+        let Some(body_id) = test_method.body else {
+            panic!("expected test body");
+        };
+        let rajac_ast::Stmt::Block(statements) = units[0].arena.stmt(body_id).clone() else {
+            panic!("expected block body");
+        };
+        let rajac_ast::Stmt::Expr(expr_id) = units[0].arena.stmt(statements[0]).clone() else {
+            panic!("expected expression statement");
+        };
+        let rajac_ast::Expr::MethodCall { method_id, .. } = units[0].arena.expr(expr_id).clone()
+        else {
+            panic!("expected method call");
+        };
+
+        assert!(method_id.is_some(), "expected method call to be resolved");
     }
 }

@@ -53,6 +53,7 @@ responsibilities and well-defined inputs/outputs.
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
+use rajac_base::error::RajacError;
 use rajac_base::file_path::FilePath;
 use rajac_base::logging::instrument;
 use rajac_base::result::{RajacResult, ResultExt};
@@ -128,7 +129,15 @@ pub struct CompilerConfig {
 ///
 /// The compiler coordinates all stages of compilation from source discovery
 /// through bytecode generation. It maintains state across stages and provides
-/// both high-level and granular control over the compilation process.
+/// high-level control over the compilation process.
+///
+/// A compiler instance is single-use. After [`compile_directory()`] runs once,
+/// the instance cannot be reused for a second compilation. This avoids stale
+/// diagnostics, symbols, and timings from leaking across runs.
+///
+/// Compilation success is determined by [`Compiler::diagnostics`]. A completed
+/// pipeline can still be unsuccessful if any emitted diagnostic has error
+/// severity, in which case code generation is skipped.
 ///
 /// # Architecture
 ///
@@ -202,6 +211,8 @@ pub struct Compiler {
     pub statistics: CompilationStatistics,
     /// Diagnostics collected during compilation
     pub diagnostics: Diagnostics,
+    /// Whether this compiler instance has already attempted a compilation
+    has_run: bool,
 }
 
 impl Compiler {
@@ -237,6 +248,7 @@ impl Compiler {
             classpath_symbols_loaded: false,
             statistics: CompilationStatistics::new(),
             diagnostics: Diagnostics::new(),
+            has_run: false,
         }
     }
 
@@ -262,6 +274,7 @@ impl Compiler {
             classpath_symbols_loaded: true,
             statistics: CompilationStatistics::new(),
             diagnostics: Diagnostics::new(),
+            has_run: false,
         }
     }
 
@@ -300,10 +313,16 @@ impl Compiler {
     /// # Errors
     ///
     /// Returns an error if any stage fails, such as:
+    /// - Reusing the same `Compiler` instance for multiple compilations
     /// - Unable to create target directory
     /// - Source file parsing errors
     /// - Symbol collection conflicts
     /// - Bytecode generation failures
+    ///
+    /// Semantic compilation errors are reported through [`Compiler::diagnostics`]
+    /// instead of the return value. When any diagnostic has error severity, this
+    /// method returns `Ok(())`, skips classfile generation, and leaves the
+    /// diagnostics available for the caller to inspect.
     ///
     /// # Example
     ///
@@ -330,6 +349,13 @@ impl Compiler {
         )
     )]
     pub fn compile_directory(&mut self) -> RajacResult<()> {
+        if self.has_run {
+            return Err(RajacError::message(
+                "Compiler instances are single-use; create a new Compiler for each compilation",
+            ));
+        }
+        self.has_run = true;
+
         std::fs::create_dir_all(self.config.target_dir.as_path()).with_context(|| {
             format!(
                 "Failed to create target directory '{}'",
@@ -673,5 +699,49 @@ impl Default for Compiler {
             classpaths: Vec::new(),
             emit_timing_statistics: false,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Compiler, CompilerConfig};
+    use rajac_base::file_path::FilePath;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn compiler_instances_are_single_use() {
+        let root = unique_temp_dir("compiler_single_use");
+        let source_dir = root.join("src");
+        let target_dir = root.join("classes");
+        fs::create_dir_all(&source_dir).unwrap();
+
+        let config = CompilerConfig {
+            source_dirs: vec![FilePath::new(&source_dir)],
+            target_dir: FilePath::new(&target_dir),
+            classpaths: Vec::new(),
+            emit_timing_statistics: false,
+        };
+        let mut compiler = Compiler::new(config);
+
+        compiler.compile_directory().unwrap();
+
+        let error = compiler.compile_directory().unwrap_err();
+        assert!(
+            error
+                .to_test_string()
+                .contains("Compiler instances are single-use")
+        );
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn unique_temp_dir(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("rajac_{name}_{nanos}"))
     }
 }
