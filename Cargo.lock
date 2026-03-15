@@ -734,6 +734,7 @@ dependencies = [
  "rajac-bytecode",
  "rajac-classpath",
  "rajac-diagnostics",
+ "rajac-lexer",
  "rajac-parser",
  "rajac-symbols",
  "rajac-types",

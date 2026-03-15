@@ -593,17 +593,10 @@ impl<'arena> CodeGenerator<'arena> {
     ) -> RajacResult<()> {
         let ty = self.arena.ty(ty);
         let kind = local_kind_from_ast_type(ty);
-        let local_ty = ty.ty();
         let slot = self.allocate_local(kind);
 
-        self.local_vars.insert(
-            name.as_str().to_string(),
-            LocalVar {
-                slot,
-                kind,
-                ty: local_ty,
-            },
-        );
+        self.local_vars
+            .insert(name.as_str().to_string(), LocalVar { slot, kind });
 
         if let Some(expr_id) = initializer {
             self.emit_expression(expr_id)?;
@@ -1293,14 +1286,8 @@ impl<'arena> CodeGenerator<'arena> {
             let param_ty = self.arena.ty(param.ty);
             let kind = local_kind_from_ast_type(param_ty);
             let slot = self.allocate_local(kind);
-            self.local_vars.insert(
-                param.name.as_str().to_string(),
-                LocalVar {
-                    slot,
-                    kind,
-                    ty: param_ty.ty(),
-                },
-            );
+            self.local_vars
+                .insert(param.name.as_str().to_string(), LocalVar { slot, kind });
         }
     }
 
@@ -1515,11 +1502,6 @@ impl<'arena> CodeGenerator<'arena> {
         }
 
         match self.arena.expr(expr_id) {
-            AstExpr::Ident(ident) => self
-                .local_vars
-                .get(ident.as_str())
-                .map(|local| local.ty)
-                .unwrap_or(TypeId::INVALID),
             AstExpr::MethodCall { name, args, .. } if is_object_equals_call(name, args) => self
                 .symbol_table
                 .primitive_type_id("boolean")
@@ -1599,7 +1581,6 @@ impl<'arena> CodeGenerator<'arena> {
 struct LocalVar {
     slot: u16,
     kind: LocalVarKind,
-    ty: TypeId,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]

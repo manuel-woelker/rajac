@@ -387,6 +387,17 @@ impl Compiler {
         self.statistics
             .end_phase(CompilationPhase::AttributeAnalysis);
 
+        if self
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == rajac_diagnostics::Severity::Error)
+        {
+            if self.config.emit_timing_statistics {
+                self.statistics.print_table();
+            }
+            return Ok(());
+        }
+
         // Stage 6: Generation - Emit bytecode
         self.statistics.begin_phase(CompilationPhase::Generation);
         self.generate_classfiles()?;
@@ -568,7 +579,11 @@ impl Compiler {
         fields(compilation_units = self.compilation_units.len())
     )]
     fn analyze_attributes(&mut self) {
-        attribute_analysis::analyze_attributes(&mut self.compilation_units, &mut self.symbol_table);
+        let diagnostics = attribute_analysis::analyze_attributes(
+            &mut self.compilation_units,
+            &mut self.symbol_table,
+        );
+        self.diagnostics.extend(diagnostics);
     }
 
     /// Generates bytecode class files from the resolved compilation units.
