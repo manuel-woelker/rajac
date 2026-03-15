@@ -14,7 +14,7 @@ pub fn init_logging() {
             )
             .with(
                 EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| EnvFilter::builder().parse("info").unwrap()),
+                    .unwrap_or_else(|_| EnvFilter::builder().parse("warn").unwrap()),
             )
             .init();
     });
