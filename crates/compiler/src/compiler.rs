@@ -4,7 +4,8 @@ The compiler now follows a clear pipeline architecture with distinct stages:
 2. Parsing - converting to ASTs
 3. Collection - building symbol tables
 4. Resolution - resolving identifiers and types
-5. Generation - emitting bytecode
+5. Attribute analysis - semantic checks on resolved ASTs
+6. Generation - emitting bytecode
 
 This separation makes the code more maintainable, testable, and allows
 for easier optimization of individual stages. Each stage has clear
@@ -47,6 +48,7 @@ responsibilities and well-defined inputs/outputs.
 //! compiler.parse_files()?;
 //! compiler.collect_symbols()?;
 //! compiler.resolve_identifiers();
+//! compiler.analyze_attributes();
 //! compiler.generate_classfiles()?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
@@ -57,7 +59,7 @@ use rajac_base::result::{RajacResult, ResultExt};
 use rajac_diagnostics::Diagnostics;
 use rajac_symbols::SymbolTable;
 
-use crate::stages::{collection, discovery, generation, parsing, resolution};
+use crate::stages::{attribute_analysis, collection, discovery, generation, parsing, resolution};
 use crate::statistics::{CompilationPhase, CompilationStatistics};
 
 /// Represents a single compilation unit containing a parsed source file.
@@ -135,7 +137,8 @@ pub struct CompilerConfig {
 /// 2. **Parsing** - Convert source to ASTs
 /// 3. **Collection** - Build symbol tables
 /// 4. **Resolution** - Resolve identifiers and types
-/// 5. **Generation** - Emit bytecode class files
+/// 5. **Attribute Analysis** - Perform semantic checks on resolved ASTs
+/// 6. **Generation** - Emit bytecode class files
 ///
 /// # Usage Patterns
 ///
@@ -177,6 +180,7 @@ pub struct CompilerConfig {
 /// compiler.parse_files()?;
 /// compiler.collect_symbols()?;
 /// compiler.resolve_identifiers();
+/// compiler.analyze_attributes();
 /// let class_count = compiler.generate_classfiles()?;
 ///
 /// println!("Generated {} class files", class_count);
@@ -290,7 +294,8 @@ impl Compiler {
     /// 2. **Parsing** - Convert source files to ASTs
     /// 3. **Collection** - Build symbol tables from ASTs
     /// 4. **Resolution** - Resolve identifiers and types
-    /// 5. **Generation** - Emit bytecode class files
+    /// 5. **Attribute Analysis** - Perform semantic checks on resolved ASTs
+    /// 6. **Generation** - Emit bytecode class files
     ///
     /// # Errors
     ///
@@ -375,7 +380,14 @@ impl Compiler {
         self.resolve_identifiers();
         self.statistics.end_phase(CompilationPhase::Resolution);
 
-        // Stage 5: Generation - Emit bytecode
+        // Stage 5: Attribute analysis - Semantic checks
+        self.statistics
+            .begin_phase(CompilationPhase::AttributeAnalysis);
+        self.analyze_attributes();
+        self.statistics
+            .end_phase(CompilationPhase::AttributeAnalysis);
+
+        // Stage 6: Generation - Emit bytecode
         self.statistics.begin_phase(CompilationPhase::Generation);
         self.generate_classfiles()?;
         self.statistics.end_phase(CompilationPhase::Generation);
@@ -509,6 +521,7 @@ impl Compiler {
     /// compiler.parse_files()?;
     /// compiler.collect_symbols()?;
     /// compiler.resolve_identifiers();
+    /// compiler.analyze_attributes();
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[instrument(
@@ -518,6 +531,44 @@ impl Compiler {
     )]
     fn resolve_identifiers(&mut self) {
         resolution::resolve_identifiers(&mut self.compilation_units, &mut self.symbol_table);
+    }
+
+    /// Performs attribute analysis on resolved compilation units.
+    ///
+    /// This method executes only the attribute analysis stage of the
+    /// compilation pipeline. The current implementation is a stub that reserves
+    /// the integration point for future semantic analysis work.
+    ///
+    /// # Prerequisites
+    ///
+    /// Identifiers should be resolved first using [`resolve_identifiers()`].
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run,ignore
+    /// # use rajac_compiler::{Compiler, CompilerConfig};
+    /// # use rajac_base::file_path::FilePath;
+    /// # let config = CompilerConfig {
+    /// #     source_dirs: vec![FilePath::new("src")],
+    /// #     target_dir: FilePath::new("target"),
+    /// #     classpaths: Vec::new(),
+    /// #     emit_timing_statistics: false,
+    /// # };
+    /// let mut compiler = Compiler::new(config);
+    /// compiler.discover_files()?;
+    /// compiler.parse_files()?;
+    /// compiler.collect_symbols()?;
+    /// compiler.resolve_identifiers();
+    /// compiler.analyze_attributes();
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[instrument(
+        name = "compiler.analyze_attributes",
+        skip(self),
+        fields(compilation_units = self.compilation_units.len())
+    )]
+    fn analyze_attributes(&mut self) {
+        attribute_analysis::analyze_attributes(&mut self.compilation_units, &mut self.symbol_table);
     }
 
     /// Generates bytecode class files from the resolved compilation units.
@@ -557,6 +608,7 @@ impl Compiler {
     /// compiler.parse_files()?;
     /// compiler.collect_symbols()?;
     /// compiler.resolve_identifiers();
+    /// compiler.analyze_attributes();
     /// let class_count = compiler.generate_classfiles()?;
     ///
     /// println!("Generated {} class files", class_count);

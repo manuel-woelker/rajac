@@ -64,6 +64,7 @@ impl CompilationStatistics {
             CompilationPhase::ClasspathCollect,
             CompilationPhase::Collection,
             CompilationPhase::Resolution,
+            CompilationPhase::AttributeAnalysis,
             CompilationPhase::Generation,
         ];
 
@@ -150,6 +151,7 @@ pub enum CompilationPhase {
     ClasspathCollect,
     Collection,
     Resolution,
+    AttributeAnalysis,
     Generation,
 }
 
@@ -161,6 +163,7 @@ impl CompilationPhase {
             CompilationPhase::ClasspathCollect => "Classpath Collect",
             CompilationPhase::Collection => "Collection",
             CompilationPhase::Resolution => "Resolution",
+            CompilationPhase::AttributeAnalysis => "Attribute Analysis",
             CompilationPhase::Generation => "Generation",
         }
     }

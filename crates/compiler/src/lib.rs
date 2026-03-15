@@ -11,7 +11,8 @@
 //! 2. **Parsing** - Converting source code to Abstract Syntax Trees (ASTs)
 //! 3. **Collection** - Building symbol tables from ASTs
 //! 4. **Resolution** - Resolving identifiers and types
-//! 5. **Generation** - Emitting Java bytecode class files
+//! 5. **Attribute Analysis** - Performing semantic checks on resolved ASTs
+//! 6. **Generation** - Emitting Java bytecode class files
 //!
 //! ## Usage
 //!
