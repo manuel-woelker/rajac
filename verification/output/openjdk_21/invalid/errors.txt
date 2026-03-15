@@ -1,38 +1,18 @@
 /data/projects/rajac/verification/sources_invalid/lexer/BadUnicodeEscape.java:3: error: illegal unicode escape
-        char c = '\u00G1';
-                      ^
 /data/projects/rajac/verification/sources_invalid/lexer/BadUnicodeEscape.java:3: error: unclosed character literal
-        char c = '\u00G1';
-                 ^
 /data/projects/rajac/verification/sources_invalid/lexer/BadUnicodeEscape.java:3: error: unclosed character literal
-        char c = '\u00G1';
-                        ^
 /data/projects/rajac/verification/sources_invalid/lexer/EmptyCharLiteral.java:3: error: empty character literal
-        char c = '';
-                 ^
 /data/projects/rajac/verification/sources_invalid/lexer/IllegalCharacter.java:3: error: ';' expected
-        int price = 20£;
-                      ^
 /data/projects/rajac/verification/sources_invalid/lexer/InvalidEscapeSequence.java:3: error: illegal escape character
-        String s = "\q";
-                     ^
 /data/projects/rajac/verification/sources_invalid/lexer/InvalidIdentifierStart.java:3: error: not a statement
-        int 2value = 42;
-        ^
 /data/projects/rajac/verification/sources_invalid/lexer/InvalidIdentifierStart.java:3: error: ';' expected
-        int 2value = 42;
-           ^
 /data/projects/rajac/verification/sources_invalid/lexer/MalformedNumber.java:3: error: ';' expected
-        double d = 1.2.3;
-                      ^
 /data/projects/rajac/verification/sources_invalid/lexer/UnclosedCharLiteral.java:3: error: unclosed character literal
-        char c = 'a;
-                 ^
 /data/projects/rajac/verification/sources_invalid/lexer/UnclosedComment.java:1: error: unclosed comment
-/* comment
-^
 /data/projects/rajac/verification/sources_invalid/lexer/UnclosedComment.java:2: error: reached end of file while parsing
 /data/projects/rajac/verification/sources_invalid/lexer/UnterminatedString.java:5: error: unclosed string literal
-        System.out.println( "Hello, World! );
-                            ^
-13 errors
+/data/projects/rajac/verification/sources_invalid/lexer/InvalidIdentifierStart.java:3: error: cannot find symbol
+  symbol:   variable value
+  location: class InvalidIdentifierStart
+/data/projects/rajac/verification/sources_invalid/typecheck/NonBooleanWhile.java:3: error: incompatible types: int cannot be converted to boolean
+/data/projects/rajac/verification/sources_invalid/typecheck/ReturnTypeMismatch.java:3: error: incompatible types: boolean cannot be converted to int

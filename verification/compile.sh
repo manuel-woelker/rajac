@@ -4,6 +4,16 @@ set -euo pipefail
 
 trap 'echo "Compilation failed on line ${LINENO}: ${BASH_COMMAND}"' ERR
 
+INVALID_COMPILER_CLASSES_DIR=""
+
+cleanup() {
+    if [[ -n "$INVALID_COMPILER_CLASSES_DIR" && -d "$INVALID_COMPILER_CLASSES_DIR" ]]; then
+        rm -rf "$INVALID_COMPILER_CLASSES_DIR"
+    fi
+}
+
+trap cleanup EXIT
+
 # Get javac version information
 JAVAC_VERSION=$(javac -version 2>&1)
 
@@ -32,15 +42,18 @@ echo "Compiled Java files to: $OUTPUT_DIR"
 INVALID_OUTPUT_DIR="/data/projects/rajac/verification/output/${COMPILER_NAME}_${COMPILER_VERSION}/invalid"
 mkdir -p "$INVALID_OUTPUT_DIR"
 INVALID_OUTPUT_FILE="${INVALID_OUTPUT_DIR}/errors.txt"
+INVALID_COMPILER_SOURCE="/data/projects/rajac/verification/CompileInvalidSources.java"
 
 mapfile -t INVALID_FILES < <(find /data/projects/rajac/verification/sources_invalid -name "*.java" -type f | sort)
 INVALID_COUNT="${#INVALID_FILES[@]}"
 
 if [[ "$INVALID_COUNT" -gt 0 ]]; then
-    if javac -d "$INVALID_OUTPUT_DIR" "${INVALID_FILES[@]}" > "$INVALID_OUTPUT_FILE" 2>&1; then
-        echo "ERROR: javac succeeded but should have failed for invalid sources"
-        exit 1
-    fi
+    INVALID_COMPILER_CLASSES_DIR=$(mktemp -d /tmp/rajac-invalid-compiler.XXXXXX)
+    javac -d "$INVALID_COMPILER_CLASSES_DIR" "$INVALID_COMPILER_SOURCE"
+    java -cp "$INVALID_COMPILER_CLASSES_DIR" CompileInvalidSources \
+        "$INVALID_OUTPUT_DIR" \
+        "$INVALID_OUTPUT_FILE" \
+        "${INVALID_FILES[@]}"
 fi
 
 echo "Compiled invalid Java files to: $INVALID_OUTPUT_FILE"
