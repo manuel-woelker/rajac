@@ -122,6 +122,8 @@ impl RajacError {
 
 impl RajacError {
     fn write_details(&self, write: &mut dyn std::fmt::Write, prefix: &str) -> std::fmt::Result {
+        let show_span_trace = self.source.is_none();
+
         writeln!(
             write,
             "{}{} {}:{}:{}",
@@ -132,7 +134,7 @@ impl RajacError {
             self.location.column()
         )?;
 
-        if self.span_trace.status() == SpanTraceStatus::CAPTURED {
+        if show_span_trace && self.span_trace.status() == SpanTraceStatus::CAPTURED {
             writeln!(write, "{}{}", prefix, style("36", "  span trace:"))?;
             write_span_trace(write, prefix, &self.span_trace)?;
         }
@@ -156,6 +158,8 @@ impl RajacError {
         write: &mut dyn std::fmt::Write,
         prefix: &str,
     ) -> std::fmt::Result {
+        let show_span_trace = self.source.is_none();
+
         writeln!(
             write,
             "{}{} {}:{}:{}",
@@ -166,7 +170,7 @@ impl RajacError {
             self.location.column()
         )?;
 
-        if self.span_trace.status() == SpanTraceStatus::CAPTURED {
+        if show_span_trace && self.span_trace.status() == SpanTraceStatus::CAPTURED {
             writeln!(write, "{}{}", prefix, style("36", "  span trace:"))?;
             write_span_trace(write, prefix, &self.span_trace)?;
         }

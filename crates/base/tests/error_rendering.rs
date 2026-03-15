@@ -78,3 +78,25 @@ fn span_trace_renders_as_structured_frames() {
     "#])
     .assert_eq(&error.to_test_string());
 }
+
+#[test]
+fn chained_error_only_renders_root_cause_span_trace() {
+    init_logging();
+
+    let outer_span = info_span!("outer_error_span");
+    let outer_guard = outer_span.enter();
+    let error = {
+        let inner_span = info_span!("inner_error_span");
+        let _inner_guard = inner_span.enter();
+        RajacError::message("outer failure").with_source(RajacError::message("root cause"))
+    };
+    drop(outer_guard);
+
+    let rendered = error.to_test_string();
+
+    assert!(rendered.contains("outer failure"));
+    assert!(rendered.contains("caused by: root cause"));
+    assert!(rendered.contains("inner_error_span"));
+    assert!(rendered.contains("outer_error_span"));
+    assert_eq!(rendered.matches("span trace:").count(), 1);
+}

@@ -45,15 +45,22 @@ pub fn format_cli_error(headline: &str, error: &RajacError) -> String {
     let mut causes = Vec::new();
     let mut current = error.source();
     while let Some(cause) = current {
-        causes.push(cause.kind().to_string());
+        causes.push((cause.kind().to_string(), cause.location()));
         current = cause.source();
     }
 
     if !causes.is_empty() {
         rendered.push('\n');
         rendered.push_str("\u{1b}[1;33m━━ cause chain\u{1b}[0m\n");
-        for cause in &causes {
+        for (cause, location) in &causes {
             let _ = writeln!(&mut rendered, "  • {}", cause);
+            let _ = writeln!(
+                &mut rendered,
+                "    at {}:{}:{}",
+                location.file(),
+                location.line(),
+                location.column()
+            );
         }
     }
 
@@ -75,12 +82,13 @@ mod tests {
         expect!([r#"
             ━━ verification failed
             × error failed to verify
-              at crates/base/src/cli.rs:72:21
+              at crates/base/src/cli.rs:79:21
             caused by: missing reference output
-                 at crates/base/src/cli.rs:73:26
+                 at crates/base/src/cli.rs:80:26
 
             ━━ cause chain
               • missing reference output
+                at crates/base/src/cli.rs:80:26
         "#])
         .assert_eq(&crate::unansi(&format_cli_error(
             "verification failed",
