@@ -701,8 +701,7 @@ impl<'arena> CodeGenerator<'arena> {
                 self.emit_cast(*ty)?;
             }
             AstExpr::InstanceOf { expr, ty } => {
-                let _ = (expr, ty);
-                self.emit_unsupported_feature("instanceof expressions", "instanceof")?;
+                self.emit_instanceof_expression(*expr, *ty)?;
             }
             AstExpr::FieldAccess { expr, name, .. } => {
                 self.emit_field_access(*expr, name)?;
@@ -845,6 +844,24 @@ impl<'arena> CodeGenerator<'arena> {
         let class_name = array_component_class_name(component_type, self.type_arena);
         let class_index = self.constant_pool.add_class(class_name)?;
         self.emit(Instruction::Anewarray(class_index));
+        Ok(())
+    }
+
+    fn emit_instanceof_expression(
+        &mut self,
+        expr: ExprId,
+        target_type: rajac_ast::AstTypeId,
+    ) -> RajacResult<()> {
+        let target_type_id = self.arena.ty(target_type).ty();
+        if target_type_id == TypeId::INVALID {
+            return self.emit_unsupported_feature("instanceof expressions", "instanceof");
+        }
+
+        self.emit_expression(expr)?;
+
+        let class_name = instanceof_target_class_name(target_type_id, self.type_arena);
+        let class_index = self.constant_pool.add_class(class_name)?;
+        self.emit(Instruction::Instanceof(class_index));
         Ok(())
     }
 
@@ -2268,9 +2285,8 @@ impl<'arena> CodeGenerator<'arena> {
             | AstExpr::Super
             | AstExpr::FieldAccess { .. }
             | AstExpr::SuperCall { .. } => LocalVarKind::Reference,
-            AstExpr::Assign { .. } | AstExpr::InstanceOf { .. } | AstExpr::Error => {
-                LocalVarKind::Reference
-            }
+            AstExpr::InstanceOf { .. } => LocalVarKind::IntLike,
+            AstExpr::Assign { .. } | AstExpr::Error => LocalVarKind::Reference,
         }
     }
 }
@@ -2752,6 +2768,16 @@ fn type_id_to_internal_name(type_id: TypeId, type_arena: &TypeArena) -> String {
     match type_arena.get(type_id) {
         Type::Class(class_type) => class_type.internal_name(),
         _ => "java/lang/Object".to_string(),
+    }
+}
+
+fn instanceof_target_class_name(type_id: TypeId, type_arena: &TypeArena) -> String {
+    match type_arena.get(type_id) {
+        Type::Class(class_type) => class_type.internal_name(),
+        Type::Array(_) => type_id_to_descriptor(type_id, type_arena),
+        Type::Primitive(_) | Type::TypeVariable(_) | Type::Wildcard(_) | Type::Error => {
+            "java/lang/Object".to_string()
+        }
     }
 }
 
@@ -3297,19 +3323,22 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_instanceof_expressions_emit_runtime_exception_and_report() -> RajacResult<()> {
+    fn instanceof_expressions_emit_instanceof_for_class_targets() -> RajacResult<()> {
         let mut arena = AstArena::new();
-        let type_arena = TypeArena::new();
-        let symbol_table = SymbolTable::new();
+        let mut symbol_table = SymbolTable::new();
         let mut constant_pool = ConstantPool::new();
 
         let null_expr = arena.alloc_expr(AstExpr::Literal(Literal {
             kind: LiteralKind::Null,
             value: "null".into(),
         }));
+        let object_type = symbol_table.type_arena_mut().alloc(Type::class(
+            ClassType::new(SharedString::new("Object"))
+                .with_package(SharedString::new("java.lang")),
+        ));
         let object_ty = arena.alloc_type(AstType::Simple {
             name: SharedString::new("Object"),
-            ty: TypeId::INVALID,
+            ty: object_type,
             type_args: vec![],
         });
         let instanceof_expr = arena.alloc_expr(AstExpr::InstanceOf {
@@ -3319,26 +3348,86 @@ mod tests {
         let expr_stmt = arena.alloc_stmt(Stmt::Expr(instanceof_expr));
         let body = arena.alloc_stmt(Stmt::Block(vec![expr_stmt]));
 
-        let mut generator =
-            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
+        let mut generator = CodeGenerator::new(
+            &arena,
+            symbol_table.type_arena(),
+            &symbol_table,
+            &mut constant_pool,
+        );
         let (instructions, _max_stack, _max_locals) =
             generator.generate_method_body(false, &[], body)?;
         let unsupported_features = generator.take_unsupported_features();
 
-        assert_eq!(unsupported_features.len(), 1);
+        assert!(unsupported_features.is_empty());
+        assert_eq!(instructions[0], Instruction::Aconst_null);
+        let Instruction::Instanceof(class_index) = instructions[1] else {
+            panic!("expected instanceof");
+        };
         assert_eq!(
-            unsupported_features[0].message.as_str(),
-            "unsupported bytecode generation feature: instanceof expressions"
+            constant_pool
+                .try_get_class(class_index)
+                .expect("class constant"),
+            "java/lang/Object"
         );
-        assert_eq!(unsupported_features[0].marker.as_str(), "instanceof");
-        assert!(matches!(instructions[0], Instruction::New(_)));
-        assert!(matches!(instructions[1], Instruction::Dup));
-        assert!(matches!(
-            instructions[2],
-            Instruction::Ldc(_) | Instruction::Ldc_w(_)
-        ));
-        assert!(matches!(instructions[3], Instruction::Invokespecial(_)));
-        assert!(matches!(instructions[4], Instruction::Athrow));
+        assert_eq!(instructions[2], Instruction::Pop);
+        assert_eq!(instructions[3], Instruction::Return);
+
+        Ok(())
+    }
+
+    #[test]
+    fn instanceof_expressions_emit_instanceof_for_array_targets() -> RajacResult<()> {
+        let mut arena = AstArena::new();
+        let mut symbol_table = SymbolTable::new();
+        let mut constant_pool = ConstantPool::new();
+
+        let null_expr = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Null,
+            value: "null".into(),
+        }));
+        let int_type = symbol_table
+            .primitive_type_id("int")
+            .expect("missing int type");
+        let int_array_type = symbol_table.type_arena_mut().alloc(Type::array(int_type));
+        let ast_int_type = arena.alloc_type(AstType::Primitive {
+            kind: PrimitiveType::Int,
+            ty: int_type,
+        });
+        let ast_array_type = arena.alloc_type(AstType::Array {
+            element_type: ast_int_type,
+            dimensions: 1,
+            ty: int_array_type,
+        });
+        let instanceof_expr = arena.alloc_expr(AstExpr::InstanceOf {
+            expr: null_expr,
+            ty: ast_array_type,
+        });
+        let expr_stmt = arena.alloc_stmt(Stmt::Expr(instanceof_expr));
+        let body = arena.alloc_stmt(Stmt::Block(vec![expr_stmt]));
+
+        let mut generator = CodeGenerator::new(
+            &arena,
+            symbol_table.type_arena(),
+            &symbol_table,
+            &mut constant_pool,
+        );
+        let (instructions, _max_stack, _max_locals) =
+            generator.generate_method_body(false, &[], body)?;
+        let unsupported_features = generator.take_unsupported_features();
+
+        assert!(unsupported_features.is_empty());
+        assert_eq!(instructions[0], Instruction::Aconst_null);
+        let Instruction::Instanceof(class_index) = instructions[1] else {
+            panic!("expected instanceof");
+        };
+        assert_eq!(
+            constant_pool
+                .try_get_class(class_index)
+                .expect("class constant"),
+            "[I"
+        );
+        assert_eq!(instructions[2], Instruction::Pop);
+        assert_eq!(instructions[3], Instruction::Return);
 
         Ok(())
     }

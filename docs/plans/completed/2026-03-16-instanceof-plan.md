@@ -147,15 +147,17 @@ This `instanceof` milestone should be considered complete when:
 - `cargo run -p rajac-verification --bin verification` passes
 - `./scripts/check-code.sh` passes
 
+That completion bar is now met for the supported `instanceof` forms covered by this plan.
+
 ## What checklist tracks the work?
 
-- [ ] Audit the current resolved-type shape for `Expr::InstanceOf` targets.
-- [ ] Add a dedicated bytecode helper for `instanceof` lowering.
-- [ ] Implement class-target `instanceof` emission.
-- [ ] Implement array-target `instanceof` emission.
-- [ ] Update stack accounting if `Instruction::Instanceof` is not modeled correctly today.
-- [ ] Replace the unsupported-feature bytecode test with positive lowering tests.
-- [ ] Add valid verification fixtures for class, interface, array, and `null` `instanceof` cases.
-- [ ] Regenerate OpenJDK reference outputs with `./verification/compile.sh`.
-- [ ] Run `cargo run -p rajac-verification --bin verification`.
-- [ ] Run `./scripts/check-code.sh`.
+- [x] Audit the current resolved-type shape for `Expr::InstanceOf` targets.
+- [x] Add a dedicated bytecode helper for `instanceof` lowering.
+- [x] Implement class-target `instanceof` emission.
+- [x] Implement array-target `instanceof` emission.
+- [x] Update stack accounting if `Instruction::Instanceof` is not modeled correctly today.
+- [x] Replace the unsupported-feature bytecode test with positive lowering tests.
+- [x] Add valid verification fixtures for class, interface, array, and `null` `instanceof` cases.
+- [x] Regenerate OpenJDK reference outputs with `./verification/compile.sh`.
+- [x] Run `cargo run -p rajac-verification --bin verification`.
+- [x] Run `./scripts/check-code.sh`.
