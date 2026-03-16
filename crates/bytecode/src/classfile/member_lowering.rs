@@ -41,7 +41,7 @@ pub(crate) fn field_from_ast(
     }))
 }
 
-fn field_access_flags(modifiers: &Modifiers) -> FieldAccessFlags {
+pub(crate) fn field_access_flags(modifiers: &Modifiers) -> FieldAccessFlags {
     let mut flags = FieldAccessFlags::empty();
 
     if has_modifier(modifiers, Modifiers::PUBLIC) {
@@ -58,6 +58,9 @@ fn field_access_flags(modifiers: &Modifiers) -> FieldAccessFlags {
     }
     if has_modifier(modifiers, Modifiers::FINAL) {
         flags |= FieldAccessFlags::FINAL;
+    }
+    if has_modifier(modifiers, Modifiers::SYNTHETIC) {
+        flags |= FieldAccessFlags::SYNTHETIC;
     }
 
     flags
@@ -155,7 +158,7 @@ pub(crate) fn generate_method_bytecode(
     }])
 }
 
-fn method_access_flags(modifiers: &Modifiers) -> MethodAccessFlags {
+pub(crate) fn method_access_flags(modifiers: &Modifiers) -> MethodAccessFlags {
     let mut flags = MethodAccessFlags::empty();
 
     if has_modifier(modifiers, Modifiers::PUBLIC) {
@@ -176,6 +179,9 @@ fn method_access_flags(modifiers: &Modifiers) -> MethodAccessFlags {
     if has_modifier(modifiers, Modifiers::ABSTRACT) {
         flags |= MethodAccessFlags::ABSTRACT;
     }
+    if has_modifier(modifiers, Modifiers::SYNTHETIC) {
+        flags |= MethodAccessFlags::SYNTHETIC;
+    }
 
     flags
 }
@@ -194,7 +200,12 @@ pub(crate) fn constructor_from_ast(
     let descriptor_index = constant_pool.add_utf8(&descriptor)?;
 
     let mut access_flags = MethodAccessFlags::default();
-    if constructor.modifiers.is_public() || class_modifiers.is_public() {
+    let has_explicit_visibility = constructor.modifiers.is_public()
+        || constructor.modifiers.is_protected()
+        || constructor.modifiers.is_private();
+    if constructor.modifiers.is_public()
+        || (!has_explicit_visibility && class_modifiers.is_public())
+    {
         access_flags |= MethodAccessFlags::PUBLIC;
     }
     if constructor.modifiers.is_protected() {
@@ -214,6 +225,86 @@ pub(crate) fn constructor_from_ast(
         &constructor.params,
         constructor.body,
         super_internal_name,
+    )?;
+    generation_context
+        .unsupported_features
+        .extend(code_gen.take_unsupported_features());
+
+    let code_name = constant_pool.add_utf8("Code")?;
+    let code_attribute = Attribute::Code {
+        name_index: code_name,
+        max_stack,
+        max_locals,
+        code: instructions,
+        exception_table: vec![],
+        attributes: vec![],
+    };
+
+    let mut attributes = vec![code_attribute];
+    if let Some(exceptions_attribute) = exceptions_attribute_from_ast_types(
+        constant_pool,
+        &constructor.throws,
+        arena,
+        generation_context.type_arena,
+    )? {
+        attributes.push(exceptions_attribute);
+    }
+
+    Ok(Method {
+        access_flags,
+        name_index,
+        descriptor_index,
+        attributes,
+    })
+}
+
+pub(crate) fn enum_constructor_from_ast(
+    arena: &AstArena,
+    constant_pool: &mut ConstantPool,
+    constructor: &AstConstructor,
+    class_modifiers: &Modifiers,
+    generation_context: &mut ClassfileGenerationContext<'_>,
+) -> RajacResult<Method> {
+    let name_index = constant_pool.add_utf8("<init>")?;
+
+    let mut descriptor = String::from("(Ljava/lang/String;I");
+    for param_id in &constructor.params {
+        let param = arena.param(*param_id);
+        descriptor.push_str(&type_to_descriptor(
+            arena,
+            param.ty,
+            generation_context.type_arena,
+        )?);
+    }
+    descriptor.push_str(")V");
+    let descriptor_index = constant_pool.add_utf8(&descriptor)?;
+
+    let mut access_flags = MethodAccessFlags::default();
+    let has_explicit_visibility = constructor.modifiers.is_public()
+        || constructor.modifiers.is_protected()
+        || constructor.modifiers.is_private();
+    if constructor.modifiers.is_public()
+        || (!has_explicit_visibility && class_modifiers.is_public())
+    {
+        access_flags |= MethodAccessFlags::PUBLIC;
+    }
+    if constructor.modifiers.is_protected() {
+        access_flags |= MethodAccessFlags::PROTECTED;
+    }
+    if constructor.modifiers.is_private() {
+        access_flags |= MethodAccessFlags::PRIVATE;
+    }
+
+    let mut code_gen = CodeGenerator::new(
+        arena,
+        generation_context.type_arena,
+        generation_context.symbol_table,
+        constant_pool,
+    );
+    let (instructions, max_stack, max_locals) = code_gen.generate_enum_constructor_body(
+        &constructor.params,
+        constructor.body,
+        "java/lang/Enum",
     )?;
     generation_context
         .unsupported_features

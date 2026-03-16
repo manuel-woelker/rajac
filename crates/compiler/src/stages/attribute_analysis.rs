@@ -18,8 +18,8 @@ semantic information and gives the compiler a single phase for type errors.
 
 use crate::CompilationUnit;
 use rajac_ast::{
-    Ast, AstArena, BinaryOp, ClassDecl, ClassDeclId, ClassMember, ClassMemberId, Constructor,
-    EnumDecl, Expr, ExprId, Field, ForInit, Literal, LiteralKind, Method, Stmt, StmtId, UnaryOp,
+    Ast, AstArena, BinaryOp, ClassDecl, ClassDeclId, ClassMember, ClassMemberId, Constructor, Expr,
+    ExprId, Field, ForInit, Literal, LiteralKind, Method, Stmt, StmtId, UnaryOp,
 };
 use rajac_base::file_path::FilePath;
 use rajac_base::logging::instrument;
@@ -156,6 +156,18 @@ impl<'a> SemanticAnalyzer<'a> {
         let previous_class = self.current_class_type_id;
         self.current_class_type_id = self.lookup_class_type_id(&class);
 
+        for entry in &class.enum_entries {
+            for arg in &entry.args {
+                self.analyze_expr(*arg);
+            }
+
+            if let Some(body) = &entry.body {
+                for member_id in body {
+                    self.analyze_class_member(*member_id);
+                }
+            }
+        }
+
         for member_id in class.members {
             self.analyze_class_member(member_id);
         }
@@ -176,26 +188,8 @@ impl<'a> SemanticAnalyzer<'a> {
             ClassMember::NestedClass(class_id)
             | ClassMember::NestedInterface(class_id)
             | ClassMember::NestedRecord(class_id)
-            | ClassMember::NestedAnnotation(class_id) => self.analyze_class_decl(class_id),
-            ClassMember::NestedEnum(enum_decl) => self.analyze_enum_decl(&enum_decl),
-        }
-    }
-
-    fn analyze_enum_decl(&mut self, enum_decl: &EnumDecl) {
-        for entry in &enum_decl.entries {
-            for arg in &entry.args {
-                self.analyze_expr(*arg);
-            }
-
-            if let Some(body) = &entry.body {
-                for member_id in body {
-                    self.analyze_class_member(*member_id);
-                }
-            }
-        }
-
-        for member_id in &enum_decl.members {
-            self.analyze_class_member(*member_id);
+            | ClassMember::NestedAnnotation(class_id)
+            | ClassMember::NestedEnum(class_id) => self.analyze_class_decl(class_id),
         }
     }
 
@@ -1905,9 +1899,21 @@ fn fold_sign_literals(ast: &Ast, arena: &mut AstArena) {
 }
 
 fn fold_class_sign_literals(class_id: ClassDeclId, arena: &mut AstArena) {
-    let members = arena.class_decl(class_id).members.clone();
+    let class = arena.class_decl(class_id).clone();
 
-    for member_id in members {
+    for entry in class.enum_entries {
+        for arg in entry.args {
+            fold_expr_sign_literals(arg, arena);
+        }
+
+        if let Some(body) = entry.body {
+            for member_id in body {
+                fold_class_member_sign_literals(member_id, arena);
+            }
+        }
+    }
+
+    for member_id in class.members {
         fold_class_member_sign_literals(member_id, arena);
     }
 }
@@ -1927,8 +1933,8 @@ fn fold_class_member_sign_literals(member_id: ClassMemberId, arena: &mut AstAren
         ClassMember::NestedClass(class_id)
         | ClassMember::NestedInterface(class_id)
         | ClassMember::NestedRecord(class_id)
-        | ClassMember::NestedAnnotation(class_id) => fold_class_sign_literals(class_id, arena),
-        ClassMember::NestedEnum(enum_decl) => fold_enum_sign_literals(&enum_decl, arena),
+        | ClassMember::NestedAnnotation(class_id)
+        | ClassMember::NestedEnum(class_id) => fold_class_sign_literals(class_id, arena),
     }
 }
 
@@ -1941,24 +1947,6 @@ fn fold_field_sign_literals(field: &Field, arena: &mut AstArena) {
 fn fold_method_sign_literals(method: &Method, arena: &mut AstArena) {
     if let Some(body) = method.body {
         fold_stmt_sign_literals(body, arena);
-    }
-}
-
-fn fold_enum_sign_literals(enum_decl: &EnumDecl, arena: &mut AstArena) {
-    for entry in &enum_decl.entries {
-        for arg in &entry.args {
-            fold_expr_sign_literals(*arg, arena);
-        }
-
-        if let Some(body) = &entry.body {
-            for member_id in body {
-                fold_class_member_sign_literals(*member_id, arena);
-            }
-        }
-    }
-
-    for member_id in &enum_decl.members {
-        fold_class_member_sign_literals(*member_id, arena);
     }
 }
 

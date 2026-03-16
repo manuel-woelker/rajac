@@ -25,7 +25,9 @@ pub(crate) use descriptor::{
     type_to_internal_class_name,
 };
 pub(crate) use generation_context::NestedClassInfo;
-pub(crate) use member_lowering::{constructor_from_ast, field_from_ast, method_from_ast};
+pub(crate) use member_lowering::{
+    constructor_from_ast, enum_constructor_from_ast, field_from_ast, method_from_ast,
+};
 pub(crate) use naming::collect_nested_class_infos;
 
 pub fn generate_classfiles(
@@ -98,7 +100,7 @@ mod tests {
     use super::*;
     use rajac_ast::{
         Ast, AstArena, AstType, ClassDecl, ClassKind, ClassMember, Constructor as AstConstructor,
-        Method, Modifiers, PackageDecl, Param, PrimitiveType, QualifiedName,
+        EnumEntry, Method, Modifiers, PackageDecl, Param, PrimitiveType, QualifiedName,
     };
     use rajac_base::shared_string::SharedString;
     use rajac_types::Ident;
@@ -144,6 +146,7 @@ mod tests {
             extends: None,
             implements: vec![],
             permits: vec![],
+            enum_entries: vec![],
             members: vec![member_id],
             modifiers: Modifiers(Modifiers::PUBLIC),
         });
@@ -193,6 +196,7 @@ mod tests {
             extends: None,
             implements: vec![],
             permits: vec![],
+            enum_entries: vec![],
             members: vec![member_id],
             modifiers: Modifiers(Modifiers::PUBLIC),
         });
@@ -239,6 +243,7 @@ mod tests {
             extends: None,
             implements: vec![],
             permits: vec![],
+            enum_entries: vec![],
             members: vec![],
             modifiers: Modifiers(Modifiers::PRIVATE),
         });
@@ -252,6 +257,7 @@ mod tests {
             extends: None,
             implements: vec![],
             permits: vec![],
+            enum_entries: vec![],
             members: vec![inner_member_id],
             modifiers: Modifiers(Modifiers::PUBLIC),
         });
@@ -346,6 +352,64 @@ mod tests {
     }
 
     #[test]
+    fn emits_nested_enum_class_files() -> RajacResult<()> {
+        let mut arena = AstArena::new();
+        let mut ast = Ast::new(SharedString::new("test"));
+        let type_arena = rajac_types::TypeArena::new();
+        let symbol_table = SymbolTable::new();
+        ast.package = Some(PackageDecl {
+            name: QualifiedName::new(vec![SharedString::new("p")]),
+        });
+
+        let inner_id = arena.alloc_class_decl(ClassDecl {
+            kind: ClassKind::Enum,
+            name: Ident::new(SharedString::new("Inner")),
+            type_params: vec![],
+            extends: None,
+            implements: vec![],
+            permits: vec![],
+            enum_entries: vec![EnumEntry {
+                name: Ident::new(SharedString::new("VALUE")),
+                args: vec![],
+                body: None,
+            }],
+            members: vec![],
+            modifiers: Modifiers(Modifiers::PRIVATE),
+        });
+
+        let inner_member_id = arena.alloc_class_member(ClassMember::NestedEnum(inner_id));
+
+        let outer_id = arena.alloc_class_decl(ClassDecl {
+            kind: ClassKind::Class,
+            name: Ident::new(SharedString::new("Outer")),
+            type_params: vec![],
+            extends: None,
+            implements: vec![],
+            permits: vec![],
+            enum_entries: vec![],
+            members: vec![inner_member_id],
+            modifiers: Modifiers(Modifiers::PUBLIC),
+        });
+
+        ast.classes.push(outer_id);
+
+        let class_files = generate_classfiles(&ast, &arena, &type_arena, &symbol_table)?;
+        assert_eq!(class_files.len(), 2);
+        assert!(
+            class_files
+                .iter()
+                .any(|class_file| class_file.class_name().ok() == Some("p/Outer"))
+        );
+        assert!(
+            class_files
+                .iter()
+                .any(|class_file| class_file.class_name().ok() == Some("p/Outer$Inner"))
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn emits_explicit_constructors_as_init_methods() -> RajacResult<()> {
         let mut arena = AstArena::new();
         let mut ast = Ast::new(SharedString::new("test"));
@@ -378,6 +442,7 @@ mod tests {
             extends: None,
             implements: vec![],
             permits: vec![],
+            enum_entries: vec![],
             members: vec![ctor_member_id],
             modifiers: Modifiers(Modifiers::PUBLIC),
         });
@@ -407,6 +472,62 @@ mod tests {
                 .iter()
                 .any(|attribute| matches!(attribute, Attribute::Code { .. }))
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn emits_enum_fields_and_synthetic_methods() -> RajacResult<()> {
+        let mut arena = AstArena::new();
+        let mut ast = Ast::new(SharedString::new("test"));
+        let type_arena = rajac_types::TypeArena::new();
+        let symbol_table = SymbolTable::new();
+
+        let class_id = arena.alloc_class_decl(ClassDecl {
+            kind: ClassKind::Enum,
+            name: Ident::new(SharedString::new("Color")),
+            type_params: vec![],
+            extends: None,
+            implements: vec![],
+            permits: vec![],
+            enum_entries: vec![
+                EnumEntry {
+                    name: Ident::new(SharedString::new("RED")),
+                    args: vec![],
+                    body: None,
+                },
+                EnumEntry {
+                    name: Ident::new(SharedString::new("GREEN")),
+                    args: vec![],
+                    body: None,
+                },
+            ],
+            members: vec![],
+            modifiers: Modifiers(Modifiers::PUBLIC),
+        });
+        ast.classes.push(class_id);
+
+        let mut class_files = generate_classfiles(&ast, &arena, &type_arena, &symbol_table)?;
+        let class_file = class_files.pop().unwrap();
+        class_file.verify()?;
+
+        let field_names = class_file
+            .fields
+            .iter()
+            .map(|field| class_file.constant_pool.try_get_utf8(field.name_index))
+            .collect::<Result<Vec<_>, _>>()?;
+        assert!(field_names.contains(&"RED"));
+        assert!(field_names.contains(&"GREEN"));
+        assert!(field_names.contains(&"$VALUES"));
+
+        let method_names = class_file
+            .methods
+            .iter()
+            .map(|method| class_file.constant_pool.try_get_utf8(method.name_index))
+            .collect::<Result<Vec<_>, _>>()?;
+        assert!(method_names.contains(&"values"));
+        assert!(method_names.contains(&"valueOf"));
+        assert!(method_names.contains(&"<clinit>"));
 
         Ok(())
     }
@@ -455,6 +576,7 @@ mod tests {
             extends: None,
             implements: vec![],
             permits: vec![],
+            enum_entries: vec![],
             members: vec![member_id],
             modifiers: Modifiers(Modifiers::PUBLIC),
         });
@@ -533,6 +655,7 @@ mod tests {
             extends: None,
             implements: vec![],
             permits: vec![],
+            enum_entries: vec![],
             members: vec![ctor_member_id],
             modifiers: Modifiers(Modifiers::PUBLIC),
         });

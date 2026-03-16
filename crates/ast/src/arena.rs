@@ -11,7 +11,6 @@ pub struct AstArena {
     pub fields: Vec<Field>,
     pub class_decls: Vec<ClassDecl>,
     pub class_members: Vec<ClassMember>,
-    pub enum_decls: Vec<EnumDecl>,
 }
 
 impl AstArena {
@@ -67,12 +66,6 @@ impl AstArena {
         id
     }
 
-    pub fn alloc_enum_decl(&mut self, enum_decl: EnumDecl) -> EnumDeclId {
-        let id = EnumDeclId(self.enum_decls.len() as u32);
-        self.enum_decls.push(enum_decl);
-        id
-    }
-
     pub fn stmt(&self, id: StmtId) -> &Stmt {
         &self.stmts[id.0 as usize]
     }
@@ -119,9 +112,5 @@ impl AstArena {
 
     pub fn class_member(&self, id: ClassMemberId) -> &ClassMember {
         &self.class_members[id.0 as usize]
-    }
-
-    pub fn enum_decl(&self, id: EnumDeclId) -> &EnumDecl {
-        &self.enum_decls[id.0 as usize]
     }
 }

@@ -16,9 +16,9 @@ pub(crate) fn collect_nested_class_infos(
         let class_id = match member {
             ClassMember::NestedClass(class_id)
             | ClassMember::NestedInterface(class_id)
+            | ClassMember::NestedEnum(class_id)
             | ClassMember::NestedRecord(class_id)
             | ClassMember::NestedAnnotation(class_id) => *class_id,
-            ClassMember::NestedEnum(_) => continue,
             ClassMember::Field(_)
             | ClassMember::Method(_)
             | ClassMember::Constructor(_)

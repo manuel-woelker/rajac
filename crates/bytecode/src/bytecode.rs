@@ -1,6 +1,6 @@
 use rajac_ast::{
-    AstArena, AstType, Expr as AstExpr, ExprId, Literal, LiteralKind, ParamId, PrimitiveType, Stmt,
-    StmtId, SwitchCase, SwitchLabel,
+    AstArena, AstType, EnumEntry, Expr as AstExpr, ExprId, Literal, LiteralKind, ParamId,
+    PrimitiveType, Stmt, StmtId, SwitchCase, SwitchLabel,
 };
 use rajac_base::result::RajacResult;
 use rajac_base::shared_string::SharedString;
@@ -236,6 +236,113 @@ impl<'arena> CodeGenerator<'arena> {
             self.ensure_clean_stack("implicit return at end of constructor body")?;
             self.emit(Instruction::Return);
         }
+
+        Ok((self.emitter.finalize(), self.max_stack, self.max_locals))
+    }
+
+    pub fn generate_enum_constructor_body(
+        &mut self,
+        params: &[ParamId],
+        body_id: Option<StmtId>,
+        super_internal_name: &str,
+    ) -> RajacResult<(Vec<Instruction>, u16, u16)> {
+        self.initialize_enum_constructor_locals(params);
+
+        self.emit(Instruction::Aload_0);
+        self.emit(Instruction::Aload_1);
+        self.emit(Instruction::Iload_2);
+        let super_class = self.constant_pool.add_class(super_internal_name)?;
+        let super_ctor =
+            self.constant_pool
+                .add_method_ref(super_class, "<init>", "(Ljava/lang/String;I)V")?;
+        self.emit(Instruction::Invokespecial(super_ctor));
+        self.adjust_method_call_stack("(Ljava/lang/String;I)V", true);
+
+        if let Some(body_id) = body_id {
+            if let Some((_, remaining_stmts)) = self.constructor_body_parts(body_id) {
+                for stmt_id in remaining_stmts {
+                    self.emit_statement(stmt_id)?;
+                }
+            } else {
+                self.emit_statement(body_id)?;
+            }
+        }
+
+        if self.emulator().is_empty()
+            || !matches!(
+                self.emulator().last_instruction(),
+                Some(
+                    Instruction::Return
+                        | Instruction::Areturn
+                        | Instruction::Athrow
+                        | Instruction::Ireturn
+                        | Instruction::Freturn
+                        | Instruction::Dreturn
+                        | Instruction::Lreturn
+                )
+            )
+        {
+            self.ensure_clean_stack("implicit return at end of enum constructor body")?;
+            self.emit(Instruction::Return);
+        }
+
+        Ok((self.emitter.finalize(), self.max_stack, self.max_locals))
+    }
+
+    pub fn generate_enum_clinit_body(
+        &mut self,
+        this_internal_name: &str,
+        entries: &[EnumEntry],
+        constructor_descriptors: &[String],
+    ) -> RajacResult<(Vec<Instruction>, u16, u16)> {
+        self.initialize_method_locals(true, &[]);
+
+        let this_class = self.constant_pool.add_class(this_internal_name)?;
+        let values_array_descriptor = format!("[L{this_internal_name};");
+
+        for (ordinal, entry) in entries.iter().enumerate() {
+            self.emit(Instruction::New(this_class));
+            self.emit(Instruction::Dup);
+            self.emit_string_constant(entry.name.as_str())?;
+            self.emit_int_constant(ordinal as i32)?;
+            for arg in &entry.args {
+                self.emit_expression(*arg)?;
+            }
+            let ctor_ref = self.constant_pool.add_method_ref(
+                this_class,
+                "<init>",
+                &constructor_descriptors[ordinal],
+            )?;
+            self.emit(Instruction::Invokespecial(ctor_ref));
+            self.adjust_method_call_stack(&constructor_descriptors[ordinal], true);
+            let field_ref = self.constant_pool.add_field_ref(
+                this_class,
+                entry.name.as_str(),
+                &format!("L{this_internal_name};"),
+            )?;
+            self.emit(Instruction::Putstatic(field_ref));
+        }
+
+        self.emit_int_constant(entries.len() as i32)?;
+        self.emit(Instruction::Anewarray(this_class));
+        for (ordinal, entry) in entries.iter().enumerate() {
+            self.emit(Instruction::Dup);
+            self.emit_int_constant(ordinal as i32)?;
+            let field_ref = self.constant_pool.add_field_ref(
+                this_class,
+                entry.name.as_str(),
+                &format!("L{this_internal_name};"),
+            )?;
+            self.emit(Instruction::Getstatic(field_ref));
+            self.emit(Instruction::Aastore);
+        }
+        let values_field_ref =
+            self.constant_pool
+                .add_field_ref(this_class, "$VALUES", &values_array_descriptor)?;
+        self.emit(Instruction::Putstatic(values_field_ref));
+
+        self.ensure_clean_stack("implicit return at end of enum class initializer")?;
+        self.emit(Instruction::Return);
 
         Ok((self.emitter.finalize(), self.max_stack, self.max_locals))
     }
@@ -1043,6 +1150,12 @@ impl<'arena> CodeGenerator<'arena> {
         } else {
             self.emit(Instruction::Ldc_w(constant_index));
         }
+    }
+
+    fn emit_string_constant(&mut self, value: &str) -> RajacResult<()> {
+        let string_index = self.constant_pool.add_string(value)?;
+        self.emit_loadable_constant(string_index);
+        Ok(())
     }
 
     fn emit_super_constructor_call(
@@ -1958,6 +2071,7 @@ impl<'arena> CodeGenerator<'arena> {
     }
 
     fn initialize_method_locals(&mut self, is_static: bool, params: &[ParamId]) {
+        self.local_vars.clear();
         if is_static {
             self.max_locals = 0;
             self.next_local_slot = 0;
@@ -1970,6 +2084,24 @@ impl<'arena> CodeGenerator<'arena> {
             let param = self.arena.param(*param_id);
             let param_ty = self.arena.ty(param.ty);
             let kind = local_kind_from_ast_type(param_ty);
+            let slot = self.allocate_local(kind);
+            self.local_vars
+                .insert(param.name.as_str().to_string(), LocalVar { slot, kind });
+        }
+    }
+
+    fn initialize_enum_constructor_locals(&mut self, params: &[ParamId]) {
+        self.local_vars.clear();
+        self.max_locals = 0;
+        self.next_local_slot = 0;
+
+        self.allocate_local(LocalVarKind::Reference);
+        self.allocate_local(LocalVarKind::Reference);
+        self.allocate_local(LocalVarKind::IntLike);
+
+        for param_id in params {
+            let param = self.arena.param(*param_id);
+            let kind = local_kind_from_ast_type(self.arena.ty(param.ty));
             let slot = self.allocate_local(kind);
             self.local_vars
                 .insert(param.name.as_str().to_string(), LocalVar { slot, kind });

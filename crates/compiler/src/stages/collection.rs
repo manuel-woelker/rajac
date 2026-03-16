@@ -198,9 +198,10 @@ fn populate_symbol_table(
         let name = class.name.name.clone();
 
         let kind = match class.kind {
-            ClassKind::Class => SymbolKind::Class,
+            ClassKind::Class | ClassKind::Enum | ClassKind::Record | ClassKind::Annotation => {
+                SymbolKind::Class
+            }
             ClassKind::Interface => SymbolKind::Interface,
-            ClassKind::Enum | ClassKind::Record | ClassKind::Annotation => continue,
         };
 
         let class_type = if !package_name.is_empty() {
@@ -220,9 +221,14 @@ fn populate_symbol_table(
 
 #[cfg(test)]
 mod tests {
-    use super::collect_classpath_symbols;
+    use super::{collect_classpath_symbols, collect_compilation_unit_symbols};
+    use crate::CompilationUnit;
+    use rajac_ast::{Ast, AstArena, ClassDecl, ClassKind, Modifiers};
     use rajac_base::file_path::FilePath;
+    use rajac_base::shared_string::SharedString;
+    use rajac_diagnostics::Diagnostics;
     use rajac_symbols::SymbolTable;
+    use rajac_types::Ident;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -244,6 +250,36 @@ mod tests {
         assert!(rendered.contains("broken.jar"));
 
         fs::remove_dir_all(&temp_dir).unwrap();
+    }
+
+    #[test]
+    fn collection_registers_top_level_enums() {
+        let mut arena = AstArena::new();
+        let mut ast = Ast::new(SharedString::new("test"));
+        let enum_id = arena.alloc_class_decl(ClassDecl {
+            kind: ClassKind::Enum,
+            name: Ident::new(SharedString::new("Color")),
+            type_params: vec![],
+            extends: None,
+            implements: vec![],
+            permits: vec![],
+            enum_entries: vec![],
+            members: vec![],
+            modifiers: Modifiers(Modifiers::PUBLIC),
+        });
+        ast.classes.push(enum_id);
+
+        let unit = CompilationUnit {
+            ast,
+            arena,
+            source_file: FilePath::new("Color.java"),
+            diagnostics: Diagnostics::new(),
+        };
+
+        let mut symbol_table = SymbolTable::new();
+        collect_compilation_unit_symbols(&mut symbol_table, &[unit]).unwrap();
+
+        assert!(symbol_table.lookup_type_id("", "Color").is_some());
     }
 
     fn unique_temp_dir(name: &str) -> PathBuf {

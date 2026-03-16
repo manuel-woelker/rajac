@@ -146,6 +146,7 @@ pub struct ClassDecl {
     pub extends: Option<AstTypeId>,
     pub implements: Vec<AstTypeId>,
     pub permits: Vec<AstTypeId>,
+    pub enum_entries: Vec<EnumEntry>,
     pub members: Vec<ClassMemberId>,
     pub modifiers: Modifiers,
 }
@@ -158,7 +159,7 @@ pub enum ClassMember {
     StaticBlock(StmtId),
     NestedClass(ClassDeclId),
     NestedInterface(ClassDeclId),
-    NestedEnum(EnumDecl),
+    NestedEnum(ClassDeclId),
     NestedRecord(ClassDeclId),
     NestedAnnotation(ClassDeclId),
 }
@@ -170,14 +171,6 @@ pub struct Constructor {
     pub body: Option<StmtId>,
     pub throws: Vec<AstTypeId>,
     pub modifiers: Modifiers,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct EnumDecl {
-    pub name: Ident,
-    pub implements: Vec<AstTypeId>,
-    pub entries: Vec<EnumEntry>,
-    pub members: Vec<ClassMemberId>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -397,9 +390,6 @@ pub struct ClassDeclId(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ClassMemberId(pub u32);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct EnumDeclId(pub u32);
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Modifiers(pub u32);

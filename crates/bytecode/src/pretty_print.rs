@@ -784,6 +784,7 @@ mod tests {
             extends: None,
             implements: vec![],
             permits: vec![],
+            enum_entries: vec![],
             members: vec![field_member_id, method_member_id],
             modifiers: Modifiers(Modifiers::PUBLIC),
         });

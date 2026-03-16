@@ -1,5 +1,21 @@
 # What is the plan for implementing enum support?
 
+## What is the current status of this plan?
+
+Most of the first enum milestone is now implemented.
+
+The current codebase now supports:
+
+- top-level enums in symbol collection
+- nested enums in naming and classfile emission
+- enum constants with and without constructor arguments
+- enum field, method, constructor, and `<clinit>` synthesis needed for basic JVM enum execution
+- colocated parser, collection, and bytecode tests for the supported enum shape
+- verification fixtures for simple enums, constructor-argument enums, and nested enums
+
+The remaining gap is verification parity with OpenJDK classfile structure.
+The verification suite currently passes with explicit ignored mismatches for the enum fixtures, which means the emitted class files are functionally present but not yet fully converged with OpenJDK's pretty-printed output.
+
 ## Why is a dedicated plan needed now?
 
 The compiler already recognizes enum syntax and carries enum declarations through parts of the frontend, but enums are not implemented end to end.
@@ -9,7 +25,7 @@ A dedicated plan is needed so the first enum milestone stays narrow, testable, a
 
 ## What is the current implementation baseline?
 
-The current codebase already has:
+The original implementation baseline for this plan had:
 
 - lexer support for the `enum` keyword
 - parser support for top-level and nested `enum` declarations in [parser.rs](/data/projects/rajac/crates/parser/src/parser.rs)
@@ -17,7 +33,7 @@ The current codebase already has:
 - resolution and attribute-analysis traversal hooks for enum declarations in [resolution.rs](/data/projects/rajac/crates/compiler/src/stages/resolution.rs) and [attribute_analysis.rs](/data/projects/rajac/crates/compiler/src/stages/attribute_analysis.rs)
 - classfile access-flag support for `ACC_ENUM` in [attributes.rs](/data/projects/rajac/crates/bytecode/src/classfile/attributes.rs)
 
-The current implementation still has several structural gaps:
+The original implementation gaps were:
 
 - symbol collection explicitly skips top-level enums in [collection.rs](/data/projects/rajac/crates/compiler/src/stages/collection.rs)
 - nested enum naming is skipped in [naming.rs](/data/projects/rajac/crates/bytecode/src/classfile/naming.rs)
@@ -87,8 +103,10 @@ The implementation should prefer attaching enum-specific facts to existing class
 
 The parser already captures the basic enum declaration shape, but the AST needs to stay aligned with the first milestone’s scope.
 
-The plan should preserve the current `EnumDecl` and `EnumEntry` representation for now, with only small extensions if needed for generation.
-If generation requires storing synthesized constructor metadata or enum-entry source ordering, that should be added in a minimal way.
+The implementation no longer preserves `EnumDecl` as a separate top-level semantic path.
+Instead, enums now flow through `ClassDecl` with enum entries attached directly to the class declaration so top-level and nested enums can share collection, resolution, naming, and classfile generation code paths.
+
+`EnumEntry` remains the representation for constants.
 
 Constant-specific class bodies should remain explicitly deferred unless the parser work turns out to be trivial and clearly isolated.
 
@@ -119,6 +137,9 @@ The first implementation should:
 - synthesize enum methods and fields before final classfile emission
 
 If synthetic flags or descriptors are needed for generated members, they should be added deliberately rather than copied ad hoc from OpenJDK output.
+
+That work is now in place for the first milestone, but the generated output still differs from OpenJDK in a few enum-specific structural details.
+Those differences are currently tracked through ignored verification mismatches rather than being treated as complete parity.
 
 ## What architecture changes should accompany the work?
 
@@ -193,22 +214,23 @@ This first enum milestone should be considered complete when:
 - enum constructors and static initialization work for the supported constructor-argument forms
 - nested enums are named and emitted correctly
 - colocated tests cover the core enum-specific collection and generation behavior
-- verification fixtures demonstrate OpenJDK-compatible output for the supported enum forms
+- verification fixtures demonstrate OpenJDK-compatible output for the supported enum forms without relying on ignored classfile mismatches
 - `cargo run -p rajac-verification --bin verification` passes
 - `./scripts/check-code.sh` passes
 
 ## What checklist tracks the work?
 
-- [ ] Define the first-milestone enum scope and keep constant-specific class bodies out of scope.
-- [ ] Teach collection to register top-level enums.
-- [ ] Teach nested naming and inner-class metadata collection to include nested enums.
-- [ ] Ensure resolution models the enum type and implicit `java.lang.Enum` superclass.
-- [ ] Add classfile-builder support for enum class emission.
-- [ ] Synthesize enum constant fields and `$VALUES`.
-- [ ] Synthesize `values()` and `valueOf(String)`.
-- [ ] Add enum constructor and `<clinit>` lowering for supported constant forms.
-- [ ] Add colocated tests for enum collection, naming, and classfile generation.
-- [ ] Add valid verification fixtures for simple, constructor-argument, and nested enums.
-- [ ] Regenerate OpenJDK reference outputs with `./verification/compile.sh`.
-- [ ] Run `cargo run -p rajac-verification --bin verification`.
-- [ ] Run `./scripts/check-code.sh`.
+- [x] Define the first-milestone enum scope and keep constant-specific class bodies out of scope.
+- [x] Teach collection to register top-level enums.
+- [x] Teach nested naming and inner-class metadata collection to include nested enums.
+- [x] Ensure resolution models the enum type and implicit `java.lang.Enum` superclass.
+- [x] Add classfile-builder support for enum class emission.
+- [x] Synthesize enum constant fields and `$VALUES`.
+- [x] Synthesize `values()` and `valueOf(String)`.
+- [x] Add enum constructor and `<clinit>` lowering for supported constant forms.
+- [x] Add colocated tests for enum collection, naming, and classfile generation.
+- [x] Add valid verification fixtures for simple, constructor-argument, and nested enums.
+- [x] Regenerate OpenJDK reference outputs with `./verification/compile.sh`.
+- [x] Run `cargo run -p rajac-verification --bin verification`.
+- [x] Run `./scripts/check-code.sh`.
+- [ ] Remove the temporary ignored enum classfile mismatches from verification by converging the emitted enum classfile structure with OpenJDK.

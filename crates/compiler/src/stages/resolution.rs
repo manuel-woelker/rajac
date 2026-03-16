@@ -105,7 +105,7 @@ optimization of the resolution algorithms without affecting other phases.
 use crate::CompilationUnit;
 use rajac_ast::{
     Ast, AstArena, AstType, AstTypeId, ClassDeclId, ClassMember, ClassMemberId, Constructor,
-    EnumDecl, ExprId, Field, Method, Modifiers, ParamId, StmtId,
+    ExprId, Field, Method, Modifiers, ParamId, StmtId,
 };
 use rajac_base::logging::instrument;
 use rajac_base::qualified_name::FullyQualifiedClassName as ResolvedName;
@@ -312,7 +312,15 @@ fn resolve_class_decl(
         resolve_type(type_id, arena, symbol_table, context);
     }
     if let Some(class_type_id) = current_class_type_id {
-        update_class_hierarchy(class_type_id, extends, &implements, arena, symbol_table);
+        let superclass = if let Some(type_id) = extends {
+            Some(arena.ty(type_id).ty()).filter(|type_id| *type_id != TypeId::INVALID)
+        } else {
+            implicit_superclass_for_class_kind(
+                arena.class_decl(class_id).kind.clone(),
+                symbol_table,
+            )
+        };
+        update_class_hierarchy(class_type_id, superclass, &implements, arena, symbol_table);
     }
     for member_id in members {
         resolve_class_member(
@@ -327,14 +335,11 @@ fn resolve_class_decl(
 
 fn update_class_hierarchy(
     class_type_id: TypeId,
-    extends: Option<AstTypeId>,
+    superclass: Option<TypeId>,
     implements: &[AstTypeId],
     arena: &AstArena,
     symbol_table: &mut SymbolTable,
 ) {
-    let superclass = extends
-        .map(|type_id| arena.ty(type_id).ty())
-        .filter(|type_id| *type_id != TypeId::INVALID);
     let interfaces = implements
         .iter()
         .map(|type_id| arena.ty(*type_id).ty())
@@ -381,11 +386,9 @@ fn resolve_class_member(
         rajac_ast::ClassMember::NestedClass(class_id)
         | rajac_ast::ClassMember::NestedInterface(class_id)
         | rajac_ast::ClassMember::NestedRecord(class_id)
-        | rajac_ast::ClassMember::NestedAnnotation(class_id) => {
+        | rajac_ast::ClassMember::NestedAnnotation(class_id)
+        | rajac_ast::ClassMember::NestedEnum(class_id) => {
             resolve_class_decl(*class_id, arena, symbol_table, context)
-        }
-        rajac_ast::ClassMember::NestedEnum(enum_decl) => {
-            resolve_enum_decl(enum_decl, arena, symbol_table, context)
         }
     }
 
@@ -425,68 +428,13 @@ fn resolve_class_member_signatures(
         ClassMember::NestedClass(class_id)
         | ClassMember::NestedInterface(class_id)
         | ClassMember::NestedRecord(class_id)
-        | ClassMember::NestedAnnotation(class_id) => {
+        | ClassMember::NestedAnnotation(class_id)
+        | ClassMember::NestedEnum(class_id) => {
             resolve_class_decl_signatures(*class_id, arena, symbol_table, context);
-        }
-        ClassMember::NestedEnum(enum_decl) => {
-            resolve_enum_decl_signatures(enum_decl, arena, symbol_table, context);
         }
     }
 
     arena.class_members[member_id.0 as usize] = member;
-}
-
-fn resolve_enum_decl_signatures(
-    enum_decl: &mut EnumDecl,
-    arena: &mut AstArena,
-    symbol_table: &mut SymbolTable,
-    context: &ResolveContext,
-) {
-    for type_id in enum_decl.implements.clone() {
-        resolve_type(type_id, arena, symbol_table, context);
-    }
-
-    for entry in &mut enum_decl.entries {
-        if let Some(members) = &entry.body {
-            for member_id in members.clone() {
-                resolve_class_member_signatures(member_id, arena, symbol_table, context);
-            }
-        }
-    }
-
-    for member_id in enum_decl.members.clone() {
-        resolve_class_member_signatures(member_id, arena, symbol_table, context);
-    }
-}
-
-/// Resolves identifiers in an enum declaration.
-fn resolve_enum_decl(
-    enum_decl: &mut EnumDecl,
-    arena: &mut AstArena,
-    symbol_table: &mut SymbolTable,
-    context: &ResolveContext,
-) {
-    // Note: enum names no longer need resolution since we use TypeIds for types
-
-    for type_id in enum_decl.implements.clone() {
-        resolve_type(type_id, arena, symbol_table, context);
-    }
-
-    for entry in &mut enum_decl.entries {
-        // Note: entry names no longer need resolution since they're just identifiers
-        for expr_id in entry.args.clone() {
-            resolve_expr(expr_id, arena, symbol_table, context, None);
-        }
-        if let Some(members) = &entry.body {
-            for member_id in members.clone() {
-                resolve_class_member(member_id, arena, symbol_table, context, None);
-            }
-        }
-    }
-
-    for member_id in enum_decl.members.clone() {
-        resolve_class_member(member_id, arena, symbol_table, context, None);
-    }
 }
 
 /// Resolves identifiers in a field declaration.
@@ -502,6 +450,17 @@ fn resolve_field(
     if let Some(expr_id) = field.initializer {
         resolve_expr(expr_id, arena, symbol_table, context, current_class_type_id);
     }
+}
+
+fn implicit_superclass_for_class_kind(
+    kind: rajac_ast::ClassKind,
+    symbol_table: &SymbolTable,
+) -> Option<TypeId> {
+    if !matches!(kind, rajac_ast::ClassKind::Enum) {
+        return None;
+    }
+
+    symbol_table.lookup_type_id("java.lang", "Enum")
 }
 
 /// Resolves identifiers in a method declaration.
@@ -1315,6 +1274,7 @@ fn populate_class_methods(
             |member_id| match &arena.class_members[member_id.0 as usize] {
                 ClassMember::NestedClass(class_id)
                 | ClassMember::NestedInterface(class_id)
+                | ClassMember::NestedEnum(class_id)
                 | ClassMember::NestedRecord(class_id)
                 | ClassMember::NestedAnnotation(class_id) => Some(*class_id),
                 _ => None,
@@ -1329,6 +1289,7 @@ fn populate_class_methods(
 
     if let Some(class_type_id) = class_type_id {
         let primitive_lookup = symbol_table.primitive_types().clone();
+        let string_type_id = symbol_table.lookup_type_id("java.lang", "String");
         let (type_arena, method_arena, field_arena) = symbol_table.arenas_mut();
         let mut resolved_methods = Vec::new();
         let mut resolved_fields = Vec::new();
@@ -1369,6 +1330,39 @@ fn populate_class_methods(
                     resolved_methods.push((class_name.clone(), method_id));
                 }
                 _ => {}
+            }
+        }
+
+        let class = arena.class_decl(class_id);
+        if matches!(class.kind, rajac_ast::ClassKind::Enum) {
+            for entry in &class.enum_entries {
+                let field_id = field_arena.alloc(FieldSignature::new(
+                    entry.name.name.clone(),
+                    class_type_id,
+                    FieldModifiers(
+                        FieldModifiers::PUBLIC | FieldModifiers::STATIC | FieldModifiers::FINAL,
+                    ),
+                ));
+                resolved_fields.push((entry.name.name.clone(), field_id));
+            }
+
+            let values_array_type = type_arena.alloc(Type::array(class_type_id));
+            let values_method = method_arena.alloc(MethodSignature::new(
+                SharedString::new("values"),
+                vec![],
+                values_array_type,
+                MethodModifiers(MethodModifiers::PUBLIC | MethodModifiers::STATIC),
+            ));
+            resolved_methods.push((SharedString::new("values"), values_method));
+
+            if let Some(string_type_id) = string_type_id {
+                let value_of_method = method_arena.alloc(MethodSignature::new(
+                    SharedString::new("valueOf"),
+                    vec![string_type_id],
+                    class_type_id,
+                    MethodModifiers(MethodModifiers::PUBLIC | MethodModifiers::STATIC),
+                ));
+                resolved_methods.push((SharedString::new("valueOf"), value_of_method));
             }
         }
 

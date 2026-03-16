@@ -292,6 +292,10 @@ impl<'a> Parser<'a> {
             Vec::new()
         };
 
+        if matches!(kind, ClassKind::Enum) {
+            return self.parse_enum_decl_with_name(name, modifiers);
+        }
+
         // Extends clause
         let extends = if self.consume(TokenKind::KwExtends) {
             self.parse_type()
@@ -344,6 +348,7 @@ impl<'a> Parser<'a> {
             extends,
             implements,
             permits,
+            enum_entries: Vec::new(),
             members,
             modifiers,
         };
@@ -429,8 +434,8 @@ impl<'a> Parser<'a> {
                 }
                 TokenKind::KwEnum => {
                     self.bump();
-                    if let Some(enum_decl) = self.parse_enum_body(modifiers) {
-                        let member = ClassMember::NestedEnum(enum_decl);
+                    if let Some(enum_id) = self.parse_enum_decl(modifiers) {
+                        let member = ClassMember::NestedEnum(enum_id);
                         members.push(self.arena.alloc_class_member(member));
                     }
                     continue;
@@ -565,6 +570,7 @@ impl<'a> Parser<'a> {
             extends,
             implements,
             permits: Vec::new(),
+            enum_entries: Vec::new(),
             members,
             modifiers,
         };
@@ -572,14 +578,21 @@ impl<'a> Parser<'a> {
         Some(self.arena.alloc_class_decl(class_decl))
     }
 
-    fn parse_enum_body(&mut self, _modifiers: Modifiers) -> Option<EnumDecl> {
+    fn parse_enum_decl(&mut self, modifiers: Modifiers) -> Option<ClassDeclId> {
         let name = if self.peek() == TokenKind::Ident {
             Ident::new(self.ident_text())
         } else {
             return None;
         };
         self.bump();
+        self.parse_enum_decl_with_name(name, modifiers)
+    }
 
+    fn parse_enum_decl_with_name(
+        &mut self,
+        name: Ident,
+        modifiers: Modifiers,
+    ) -> Option<ClassDeclId> {
         let mut implements = Vec::new();
         if self.consume(TokenKind::KwImplements) {
             loop {
@@ -641,12 +654,17 @@ impl<'a> Parser<'a> {
 
         self.expect(TokenKind::RBrace);
 
-        Some(EnumDecl {
+        Some(self.arena.alloc_class_decl(ClassDecl {
+            kind: ClassKind::Enum,
             name,
+            type_params: Vec::new(),
+            extends: None,
             implements,
-            entries,
+            permits: Vec::new(),
+            enum_entries: entries,
             members,
-        })
+            modifiers,
+        }))
     }
 
     fn parse_method(
@@ -1166,6 +1184,10 @@ mod tests {
         "#;
         let result = parse_src(source);
         assert_eq!(result.ast.classes.len(), 1);
+        let class = result.arena.class_decl(result.ast.classes[0]);
+        assert_eq!(class.kind, ClassKind::Enum);
+        assert_eq!(class.enum_entries.len(), 3);
+        assert_eq!(class.enum_entries[0].name.as_str(), "RED");
     }
 
     #[test]

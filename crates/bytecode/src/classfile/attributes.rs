@@ -77,6 +77,7 @@ pub(crate) fn class_access_flags(kind: ClassKind, modifiers: &Modifiers) -> Clas
         }
         ClassKind::Enum => {
             flags |= ClassAccessFlags::ENUM;
+            flags |= ClassAccessFlags::FINAL;
         }
         ClassKind::Annotation => {
             flags |= ClassAccessFlags::ANNOTATION;
