@@ -4,6 +4,7 @@ use rajac_base::logging::{debug, error, info, info_span, trace, warn};
 use rajac_base::result::{RajacResult, ResultExt};
 use rajac_bytecode::pretty_print::pretty_print_classfile;
 use rajac_compiler::{Compiler, CompilerConfig};
+use rajac_diagnostics::{Diagnostic, Diagnostics, Severity};
 use rajac_symbols::SymbolTable;
 use regex::Regex;
 use sha2::{Digest, Sha256};
@@ -54,6 +55,26 @@ fn get_ignored_class_file_mismatches() -> HashSet<&'static str> {
 struct ComparisonStats {
     matched_files: usize,
     ignored_files: usize,
+    mismatched_files: usize,
+    missing_files: usize,
+    extra_files: usize,
+}
+
+impl ComparisonStats {
+    fn has_failures(&self) -> bool {
+        self.mismatched_files > 0 || self.missing_files > 0 || self.extra_files > 0
+    }
+}
+
+struct FileComparisonStats {
+    matched_files: usize,
+    ignored_files: usize,
+    mismatched_files: usize,
+}
+
+struct InvalidVerificationStats {
+    verified_files: usize,
+    failed_files: usize,
 }
 
 fn main() -> std::process::ExitCode {
@@ -83,7 +104,7 @@ fn run() -> RajacResult<()> {
     // Compile sources with rajac
     info!("compiling valid sources with rajac");
     println!("Compiling sources with rajac...");
-    compile_with_rajac(
+    let compilation_result = compile_with_rajac(
         sources_dir,
         rajac_base_output,
         &classpaths,
@@ -96,7 +117,7 @@ fn run() -> RajacResult<()> {
     // Verify invalid sources produce errors
     info!("verifying invalid sources");
     println!("\nVerifying invalid sources...");
-    let invalid_files_count = verify_invalid_sources(
+    let invalid_stats = verify_invalid_sources(
         sources_invalid_dir,
         reference_output,
         &classpaths,
@@ -109,7 +130,19 @@ fn run() -> RajacResult<()> {
         "◌ {} class file mismatches ignored",
         comparison_stats.ignored_files
     );
-    println!("✓ {} invalid files verified", invalid_files_count);
+    println!("✓ {} invalid files verified", invalid_stats.verified_files);
+
+    let valid_error_count = count_error_diagnostics(&compilation_result.diagnostics);
+    if valid_error_count > 0 || comparison_stats.has_failures() || invalid_stats.failed_files > 0 {
+        return Err(rajac_base::err!(
+            "verification failed: {} valid-source diagnostic errors, {} class file mismatches, {} missing class files, {} extra class files, {} invalid-source verification failures",
+            valid_error_count,
+            comparison_stats.mismatched_files,
+            comparison_stats.missing_files,
+            comparison_stats.extra_files,
+            invalid_stats.failed_files
+        ));
+    }
 
     Ok(())
 }
@@ -119,7 +152,7 @@ fn compile_with_rajac(
     output_dir: &Path,
     classpaths: &[FilePath],
     prepopulated_symbol_table: &SymbolTable,
-) -> RajacResult<()> {
+) -> RajacResult<rajac_compiler::CompilationResult> {
     let _span = info_span!(
         "compile_with_rajac",
         sources_dir = %sources_dir.display(),
@@ -135,10 +168,11 @@ fn compile_with_rajac(
     };
     let compiler = Compiler::new_with_symbol_table(config, prepopulated_symbol_table.clone());
     debug!("starting compiler.compile for valid sources");
-    compiler.compile()?;
+    let result = compiler.compile()?;
+    emit_diagnostics(&result.diagnostics, "valid sources");
     info!("finished compiling valid sources");
 
-    Ok(())
+    Ok(result)
 }
 
 fn compare_outputs(reference: &Path, actual: &Path) -> RajacResult<ComparisonStats> {
@@ -184,7 +218,7 @@ fn compare_outputs(reference: &Path, actual: &Path) -> RajacResult<ComparisonSta
                 "{}Expected files not found in actual output:",
                 "Missing:".red()
             );
-            for name in only_in_reference {
+            for name in &only_in_reference {
                 println!("  {}", name);
             }
         }
@@ -196,7 +230,7 @@ fn compare_outputs(reference: &Path, actual: &Path) -> RajacResult<ComparisonSta
                 "{}Unexpected files found in actual output:",
                 "Extra:".yellow()
             );
-            for name in only_in_actual {
+            for name in &only_in_actual {
                 println!("  {}", name);
             }
         }
@@ -234,19 +268,25 @@ fn compare_outputs(reference: &Path, actual: &Path) -> RajacResult<ComparisonSta
             "comparing common files after file count mismatch"
         );
         println!("Comparing {} common files...", common_names.len());
-        let ignored_files = compare_file_contents(&ref_common, &act_common, &ignored_class_files)?;
+        let file_stats = compare_file_contents(&ref_common, &act_common, &ignored_class_files)?;
         Ok(ComparisonStats {
-            matched_files: reference_files.len(),
-            ignored_files,
+            matched_files: file_stats.matched_files,
+            ignored_files: file_stats.ignored_files,
+            mismatched_files: file_stats.mismatched_files,
+            missing_files: only_in_reference.len(),
+            extra_files: only_in_actual.len(),
         })
     } else {
         info!(files = reference_files.len(), "comparing class files");
         println!("Comparing {} files...", reference_files.len());
-        let ignored_files =
+        let file_stats =
             compare_file_contents(&reference_files, &actual_files, &ignored_class_files)?;
         Ok(ComparisonStats {
-            matched_files: reference_files.len(),
-            ignored_files,
+            matched_files: file_stats.matched_files,
+            ignored_files: file_stats.ignored_files,
+            mismatched_files: file_stats.mismatched_files,
+            missing_files: 0,
+            extra_files: 0,
         })
     }
 }
@@ -255,10 +295,11 @@ fn compare_file_contents(
     reference_files: &[PathBuf],
     actual_files: &[PathBuf],
     ignored_class_files: &HashSet<&'static str>,
-) -> RajacResult<usize> {
+) -> RajacResult<FileComparisonStats> {
     let _span = info_span!("compare_file_contents", files = reference_files.len()).entered();
     let mut mismatches = 0;
     let mut ignored_mismatches = 0;
+    let mut matched_files = 0;
 
     for (ref_path, act_path) in reference_files.iter().zip(actual_files.iter()) {
         let ref_filename = ref_path.file_name().unwrap().to_string_lossy().into_owned();
@@ -348,6 +389,8 @@ fn compare_file_contents(
             }
 
             mismatches += 1;
+        } else {
+            matched_files += 1;
         }
     }
 
@@ -362,7 +405,11 @@ fn compare_file_contents(
         info!(ignored_mismatches, "ignored known class file mismatches");
     }
 
-    Ok(ignored_mismatches)
+    Ok(FileComparisonStats {
+        matched_files,
+        ignored_files: ignored_mismatches,
+        mismatched_files: mismatches,
+    })
 }
 
 fn get_class_files(dir: &Path) -> RajacResult<Vec<PathBuf>> {
@@ -388,7 +435,7 @@ fn verify_invalid_sources(
     reference_output: &Path,
     classpaths: &[FilePath],
     prepopulated_symbol_table: &SymbolTable,
-) -> RajacResult<usize> {
+) -> RajacResult<InvalidVerificationStats> {
     let _span = info_span!(
         "verify_invalid_sources",
         invalid_dir = %invalid_dir.display(),
@@ -432,7 +479,10 @@ fn verify_invalid_sources(
             "{} All invalid sources compiled successfully (this should not happen)",
             "Error:".red()
         );
-        return Ok(0);
+        return Ok(InvalidVerificationStats {
+            verified_files: 0,
+            failed_files: total_files,
+        });
     }
 
     // Map diagnostics to files
@@ -569,7 +619,65 @@ fn verify_invalid_sources(
         // No summary printed - main function will handle it
     }
 
-    Ok(total_files - failures)
+    Ok(InvalidVerificationStats {
+        verified_files: total_files - failures,
+        failed_files: failures,
+    })
+}
+
+fn emit_diagnostics(diagnostics: &Diagnostics, context: &str) {
+    if diagnostics.is_empty() {
+        return;
+    }
+
+    let error_count = count_error_diagnostics(diagnostics);
+    if error_count > 0 {
+        println!(
+            "\n{} rajac emitted {} diagnostic errors while compiling {}:",
+            "Error:".red(),
+            error_count,
+            context
+        );
+    } else {
+        println!(
+            "\n{} rajac emitted {} diagnostics while compiling {}:",
+            "Note:".yellow(),
+            diagnostics.len(),
+            context
+        );
+    }
+
+    for diagnostic in diagnostics {
+        print_diagnostic(diagnostic);
+    }
+}
+
+fn print_diagnostic(diagnostic: &Diagnostic) {
+    let severity = match diagnostic.severity {
+        Severity::Error => "error".red(),
+        Severity::Warning => "warning".yellow(),
+        Severity::Note => "note".blue(),
+        Severity::Help => "help".cyan(),
+    };
+
+    if let Some(chunk) = diagnostic.chunks.first() {
+        println!(
+            "  {}: {} ({}:{})",
+            severity,
+            diagnostic.message,
+            chunk.path.as_str(),
+            chunk.line
+        );
+    } else {
+        println!("  {}: {}", severity, diagnostic.message);
+    }
+}
+
+fn count_error_diagnostics(diagnostics: &Diagnostics) -> usize {
+    diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Error)
+        .count()
 }
 
 fn get_java_files(dir: &Path) -> RajacResult<Vec<PathBuf>> {
