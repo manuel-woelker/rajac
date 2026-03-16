@@ -1,6 +1,6 @@
 [package]
 name = "rajac-bytecode"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "JVM bytecode generation and classfile support for rajac"
 license.workspace = true
@@ -10,8 +10,8 @@ repository.workspace = true
 expect-test = { workspace = true }
 
 [dependencies]
-rajac-base = { version = "0.1.0", path = "../base" }
-rajac-ast = { version = "0.1.0", path = "../ast" }
-rajac-symbols = { version = "0.1.0", path = "../symbols" }
-rajac-types = { version = "0.1.0", path = "../types" }
+rajac-base = { version = "0.1.1", path = "../base" }
+rajac-ast = { version = "0.1.1", path = "../ast" }
+rajac-symbols = { version = "0.1.1", path = "../symbols" }
+rajac-types = { version = "0.1.1", path = "../types" }
 ristretto_classfile = {workspace = true}

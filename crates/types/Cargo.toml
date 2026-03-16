@@ -1,10 +1,10 @@
 [package]
 name = "rajac-types"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Type system data structures for the rajac compiler"
 license.workspace = true
 repository.workspace = true
 
 [dependencies]
-rajac-base = { version = "0.1.0", path = "../base" }
+rajac-base = { version = "0.1.1", path = "../base" }

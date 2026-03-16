@@ -1,15 +1,15 @@
 [package]
 name = "rajac-classpath"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Classpath loading and symbol extraction for rajac"
 license.workspace = true
 repository.workspace = true
 
 [dependencies]
-rajac-base = { version = "0.1.0", path = "../base" }
-rajac-symbols = { version = "0.1.0", path = "../symbols" }
-rajac-types = { version = "0.1.0", path = "../types" }
+rajac-base = { version = "0.1.1", path = "../base" }
+rajac-symbols = { version = "0.1.1", path = "../symbols" }
+rajac-types = { version = "0.1.1", path = "../types" }
 ristretto_classfile = { workspace = true }
 walkdir = { workspace = true }
 zip = "2.2.2"

@@ -670,11 +670,11 @@ checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
 name = "rajac"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "rajac-ast"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rajac-base",
  "rajac-types",
@@ -682,14 +682,14 @@ dependencies = [
 
 [[package]]
 name = "rajac-ballpit"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rayon",
 ]
 
 [[package]]
 name = "rajac-base"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anstream",
  "ecow",
@@ -706,7 +706,7 @@ dependencies = [
 
 [[package]]
 name = "rajac-bytecode"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "expect-test",
  "rajac-ast",
@@ -718,7 +718,7 @@ dependencies = [
 
 [[package]]
 name = "rajac-classpath"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rajac-base",
  "rajac-symbols",
@@ -731,7 +731,7 @@ dependencies = [
 
 [[package]]
 name = "rajac-compiler"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rajac-ast",
  "rajac-base",
@@ -750,7 +750,7 @@ dependencies = [
 
 [[package]]
 name = "rajac-diagnostics"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "annotate-snippets",
  "expect-test",
@@ -760,7 +760,7 @@ dependencies = [
 
 [[package]]
 name = "rajac-lexer"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "expect-test",
  "rajac-base",
@@ -771,7 +771,7 @@ dependencies = [
 
 [[package]]
 name = "rajac-parser"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rajac-ast",
  "rajac-base",
@@ -783,7 +783,7 @@ dependencies = [
 
 [[package]]
 name = "rajac-symbols"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rajac-base",
  "rajac-types",
@@ -791,18 +791,18 @@ dependencies = [
 
 [[package]]
 name = "rajac-token"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "rajac-types"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rajac-base",
 ]
 
 [[package]]
 name = "rajac-verification"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "colored",
  "diff",

@@ -1,6 +1,6 @@
 [package]
 name = "rajac-ballpit"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Experimental sandbox binary for rajac development"
 license.workspace = true

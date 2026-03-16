@@ -1,15 +1,15 @@
 [package]
 name = "rajac-parser"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Java parser for the rajac compiler"
 license.workspace = true
 repository.workspace = true
 
 [dependencies]
-rajac-lexer = { version = "0.1.0", path = "../lexer" }
-rajac-ast = { version = "0.1.0", path = "../ast" }
-rajac-token = { version = "0.1.0", path = "../token" }
-rajac-base = { version = "0.1.0", path = "../base" }
-rajac-types = { version = "0.1.0", path = "../types" }
-rajac-diagnostics = { version = "0.1.0", path = "../diagnostics" }
+rajac-lexer = { version = "0.1.1", path = "../lexer" }
+rajac-ast = { version = "0.1.1", path = "../ast" }
+rajac-token = { version = "0.1.1", path = "../token" }
+rajac-base = { version = "0.1.1", path = "../base" }
+rajac-types = { version = "0.1.1", path = "../types" }
+rajac-diagnostics = { version = "0.1.1", path = "../diagnostics" }

@@ -1,6 +1,6 @@
 [package]
 name = "rajac-compiler"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Compiler pipeline orchestration for rajac"
 license.workspace = true
@@ -11,18 +11,18 @@ name = "rajac-compiler"
 path = "src/rajac_compiler_main.rs"
 
 [dependencies]
-rajac-parser = { version = "0.1.0", path = "../parser" }
-rajac-ast = { version = "0.1.0", path = "../ast" }
-rajac-types = { version = "0.1.0", path = "../types" }
-rajac-symbols = { version = "0.1.0", path = "../symbols" }
-rajac-classpath = { version = "0.1.0", path = "../classpath" }
+rajac-parser = { version = "0.1.1", path = "../parser" }
+rajac-ast = { version = "0.1.1", path = "../ast" }
+rajac-types = { version = "0.1.1", path = "../types" }
+rajac-symbols = { version = "0.1.1", path = "../symbols" }
+rajac-classpath = { version = "0.1.1", path = "../classpath" }
 walkdir = "2.5"
 rayon = "1.10"
-rajac-base = { version = "0.1.0", path = "../base" }
-rajac-bytecode = { version = "0.1.0", path = "../bytecode" }
-rajac-diagnostics = { version = "0.1.0", path = "../diagnostics" }
+rajac-base = { version = "0.1.1", path = "../base" }
+rajac-bytecode = { version = "0.1.1", path = "../bytecode" }
+rajac-diagnostics = { version = "0.1.1", path = "../diagnostics" }
 ristretto_classfile = {workspace = true}
 tracing = { workspace = true }
 
 [dev-dependencies]
-rajac-lexer = { version = "0.1.0", path = "../lexer" }
+rajac-lexer = { version = "0.1.1", path = "../lexer" }
