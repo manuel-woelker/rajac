@@ -44,6 +44,7 @@ use crate::CompilationUnit;
 use generation_result::GenerationResult;
 use rajac_base::logging::instrument;
 use rajac_base::result::{RajacResult, ResultExt};
+use rajac_diagnostics::Severity;
 use std::path::Path;
 
 pub(crate) use diagnostics::generation_diagnostics_for_unsupported_features;
@@ -66,6 +67,10 @@ pub fn generate_classfiles(
     let mut result = GenerationResult::default();
 
     for unit in compilation_units {
+        if compilation_unit_has_errors(unit) {
+            continue;
+        }
+
         let unit_result = emit::emit_classfiles(
             &unit.ast,
             &unit.arena,
@@ -87,6 +92,12 @@ pub fn generate_classfiles(
     }
 
     Ok(result)
+}
+
+fn compilation_unit_has_errors(unit: &CompilationUnit) -> bool {
+    unit.diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == Severity::Error)
 }
 
 #[cfg(test)]
@@ -135,6 +146,57 @@ class Test {
         assert_eq!(diagnostic.chunks[0].line, 4);
         assert_eq!(diagnostic.chunks[0].fragment.as_str().trim(), "try {");
         assert_eq!(units[0].diagnostics.len(), 1);
+
+        std::fs::remove_dir_all(&target_dir).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn generate_classfiles_skips_units_with_error_diagnostics() -> RajacResult<()> {
+        let source = r#"
+class Good {
+    void run() {
+    }
+}
+"#;
+        let parse_result = Parser::new(Lexer::new(source, FilePath::new("Good.java")), source)
+            .parse_compilation_unit();
+        let mut units = vec![
+            CompilationUnit {
+                source_file: FilePath::new("Good.java"),
+                ast: parse_result.ast,
+                arena: parse_result.arena,
+                diagnostics: Diagnostics::new(),
+            },
+            CompilationUnit {
+                source_file: FilePath::new("Broken.java"),
+                ast: rajac_ast::Ast::new("class Broken {}".into()),
+                arena: rajac_ast::AstArena::new(),
+                diagnostics: Diagnostics::new(),
+            },
+        ];
+        units[1].diagnostics.add(rajac_diagnostics::Diagnostic {
+            severity: Severity::Error,
+            message: "synthetic error".into(),
+            chunks: vec![],
+        });
+
+        let mut symbol_table = rajac_symbols::SymbolTable::new();
+        collection::collect_compilation_unit_symbols(&mut symbol_table, &units)
+            .expect("collect symbols");
+        resolution::resolve_identifiers(&mut units, &mut symbol_table);
+        let target_dir = unique_test_output_dir();
+
+        let result = generate_classfiles(
+            &mut units,
+            symbol_table.type_arena(),
+            &symbol_table,
+            &target_dir,
+        )?;
+
+        assert_eq!(result.class_count, 1);
+        assert!(target_dir.join("Good.class").exists());
+        assert!(!target_dir.join("Broken.class").exists());
 
         std::fs::remove_dir_all(&target_dir).ok();
         Ok(())

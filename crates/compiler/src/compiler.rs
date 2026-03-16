@@ -317,9 +317,10 @@ impl Compiler {
     /// - Bytecode generation failures
     ///
     /// Semantic compilation errors are reported through the returned
-    /// [`CompilationResult`]. When any diagnostic has error severity, this
-    /// method still returns `Ok(_)`, skips classfile generation, and leaves the
-    /// diagnostics available for the caller to inspect.
+    /// [`CompilationResult`]. When diagnostics with error severity are emitted,
+    /// this method still returns `Ok(_)`, generates classfiles only for
+    /// compilation units without errors, and leaves all diagnostics available
+    /// for the caller to inspect.
     ///
     /// # Example
     ///
@@ -402,17 +403,6 @@ impl Compiler {
         self.analyze_attributes();
         self.statistics
             .end_phase(CompilationPhase::AttributeAnalysis);
-
-        if self
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.severity == rajac_diagnostics::Severity::Error)
-        {
-            if self.config.emit_timing_statistics {
-                self.statistics.print_table();
-            }
-            return Ok(self.into_result());
-        }
 
         // Stage 6: Generation - Emit bytecode
         self.statistics.begin_phase(CompilationPhase::Generation);
