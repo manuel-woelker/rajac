@@ -2,7 +2,7 @@
 
 ## What is the current status of this plan?
 
-Most of the first enum milestone is now implemented.
+The first enum milestone is now complete.
 
 The current codebase now supports:
 
@@ -12,9 +12,9 @@ The current codebase now supports:
 - enum field, method, constructor, and `<clinit>` synthesis needed for basic JVM enum execution
 - colocated parser, collection, and bytecode tests for the supported enum shape
 - verification fixtures for simple enums, constructor-argument enums, and nested enums
+- verification parity with OpenJDK for the supported enum fixtures without ignored classfile mismatches
 
-The remaining gap is verification parity with OpenJDK classfile structure.
-The verification suite currently passes with explicit ignored mismatches for the enum fixtures, which means the emitted class files are functionally present but not yet fully converged with OpenJDK's pretty-printed output.
+The verification suite now passes without relying on ignored enum mismatches.
 
 ## Why is a dedicated plan needed now?
 
@@ -138,8 +138,7 @@ The first implementation should:
 
 If synthetic flags or descriptors are needed for generated members, they should be added deliberately rather than copied ad hoc from OpenJDK output.
 
-That work is now in place for the first milestone, but the generated output still differs from OpenJDK in a few enum-specific structural details.
-Those differences are currently tracked through ignored verification mismatches rather than being treated as complete parity.
+That work is now in place for the first milestone, and the supported enum fixtures now match OpenJDK through the repository's normalized classfile comparison.
 
 ## What architecture changes should accompany the work?
 
@@ -233,4 +232,4 @@ This first enum milestone should be considered complete when:
 - [x] Regenerate OpenJDK reference outputs with `./verification/compile.sh`.
 - [x] Run `cargo run -p rajac-verification --bin verification`.
 - [x] Run `./scripts/check-code.sh`.
-- [ ] Remove the temporary ignored enum classfile mismatches from verification by converging the emitted enum classfile structure with OpenJDK.
+- [x] Remove the temporary ignored enum classfile mismatches from verification by converging the emitted enum classfile structure with OpenJDK.

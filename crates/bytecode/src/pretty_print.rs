@@ -719,8 +719,11 @@ fn render_class_attribute(attribute: &Attribute, constant_pool: &ConstantPool) -
                 .iter()
                 .map(|entry| {
                     let inner_name = resolve_class_name(constant_pool, entry.class_info_index);
-                    let outer_name =
-                        resolve_optional_class_name(constant_pool, entry.outer_class_info_index, "<none>");
+                    let outer_name = resolve_optional_class_name(
+                        constant_pool,
+                        entry.outer_class_info_index,
+                        "<none>",
+                    );
                     let inner_simple =
                         resolve_optional_utf8(constant_pool, entry.name_index, "<anonymous>");
                     format!(
@@ -745,7 +748,12 @@ fn render_class_attribute(attribute: &Attribute, constant_pool: &ConstantPool) -
             let mut rendered = String::from("  // NestMembers:\n");
             let mut members = class_indexes
                 .iter()
-                .map(|class_index| format!("  // - {}\n", resolve_class_name(constant_pool, *class_index)))
+                .map(|class_index| {
+                    format!(
+                        "  // - {}\n",
+                        resolve_class_name(constant_pool, *class_index)
+                    )
+                })
                 .collect::<Vec<_>>();
             members.sort();
             for member in members {

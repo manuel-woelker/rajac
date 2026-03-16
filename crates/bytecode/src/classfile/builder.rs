@@ -307,7 +307,8 @@ fn synthesize_enum_values_method(
     let this_class = constant_pool.add_class(this_internal_name)?;
     let array_class = constant_pool.add_class(&array_descriptor)?;
     let values_field = constant_pool.add_field_ref(this_class, "$VALUES", &array_descriptor)?;
-    let clone_method = constant_pool.add_method_ref(array_class, "clone", "()Ljava/lang/Object;")?;
+    let clone_method =
+        constant_pool.add_method_ref(array_class, "clone", "()Ljava/lang/Object;")?;
     let code_name = constant_pool.add_utf8("Code")?;
 
     Ok(Method {
@@ -439,8 +440,11 @@ fn synthesize_enum_clinit(
         code.push(Instruction::Putstatic(field_ref));
     }
 
-    let values_ref =
-        constant_pool.add_method_ref(this_class, "$values", &format!("()[L{this_internal_name};"))?;
+    let values_ref = constant_pool.add_method_ref(
+        this_class,
+        "$values",
+        &format!("()[L{this_internal_name};"),
+    )?;
     code.push(Instruction::Invokestatic(values_ref));
     let values_field_ref =
         constant_pool.add_field_ref(this_class, "$VALUES", &format!("[L{this_internal_name};"))?;
@@ -453,7 +457,7 @@ fn synthesize_enum_clinit(
         descriptor_index: constant_pool.add_utf8("()V")?,
         attributes: vec![Attribute::Code {
             name_index: constant_pool.add_utf8("Code")?,
-            max_stack: 4,
+            max_stack: enum_clinit_max_stack(class),
             max_locals: 0,
             code,
             exception_table: vec![],
@@ -535,14 +539,24 @@ fn push_small_int(code: &mut Vec<Instruction>, value: i32) {
     }
 }
 
+fn enum_clinit_max_stack(class: &ClassDecl) -> u16 {
+    let max_entry_args = class
+        .enum_entries
+        .iter()
+        .map(|entry| entry.args.len() as u16)
+        .max()
+        .unwrap_or(0);
+    4 + max_entry_args
+}
+
 fn emit_enum_literal_argument(
     code: &mut Vec<Instruction>,
     constant_pool: &mut ConstantPool,
     arena: &AstArena,
     arg: rajac_ast::ExprId,
 ) -> RajacResult<()> {
-    match arena.expr(arg) {
-        rajac_ast::Expr::Literal(literal) => match literal.kind {
+    if let rajac_ast::Expr::Literal(literal) = arena.expr(arg) {
+        match literal.kind {
             rajac_ast::LiteralKind::Int => {
                 let value = literal.value.as_str().parse::<i32>().unwrap_or_default();
                 push_small_int(code, value);
@@ -556,11 +570,17 @@ fn emit_enum_literal_argument(
                 }
             }
             rajac_ast::LiteralKind::Bool => {
-                push_small_int(code, if literal.value.as_str() == "true" { 1 } else { 0 });
+                push_small_int(
+                    code,
+                    if literal.value.as_str() == "true" {
+                        1
+                    } else {
+                        0
+                    },
+                );
             }
             _ => {}
-        },
-        _ => {}
+        }
     }
     Ok(())
 }

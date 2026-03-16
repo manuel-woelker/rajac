@@ -1369,10 +1369,7 @@ impl<'arena> CodeGenerator<'arena> {
         Ok(())
     }
 
-    fn resolve_current_class_field_by_name(
-        &self,
-        ident: &Ident,
-    ) -> Option<rajac_types::FieldId> {
+    fn resolve_current_class_field_by_name(&self, ident: &Ident) -> Option<rajac_types::FieldId> {
         let current_class = self.current_class_internal_name.as_ref()?;
         let type_arena = self.symbol_table.type_arena();
 
