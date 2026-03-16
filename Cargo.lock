@@ -676,6 +676,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
+name = "rajac"
+version = "0.1.0"
+
+[[package]]
 name = "rajac-ast"
 version = "0.1.0"
 dependencies = [
