@@ -7,5 +7,5 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-rajac-base = { path = "../base" }
-rajac-types = { path = "../types" }
+rajac-base = { version = "0.1.0", path = "../base" }
+rajac-types = { version = "0.1.0", path = "../types" }

@@ -7,9 +7,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-rajac-token = { path = "../token" }
-rajac-diagnostics = { path = "../diagnostics" }
-rajac-base = { path = "../base" }
+rajac-token = { version = "0.1.0", path = "../token" }
+rajac-diagnostics = { version = "0.1.0", path = "../diagnostics" }
+rajac-base = { version = "0.1.0", path = "../base" }
 
 [dev-dependencies]
 expect-test = "1.5"

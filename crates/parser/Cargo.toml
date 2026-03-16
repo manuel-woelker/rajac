@@ -7,9 +7,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-rajac-lexer = { path = "../lexer" }
-rajac-ast = { path = "../ast" }
-rajac-token = { path = "../token" }
-rajac-base = { path = "../base" }
-rajac-types = { path = "../types" }
-rajac-diagnostics = { path = "../diagnostics" }
+rajac-lexer = { version = "0.1.0", path = "../lexer" }
+rajac-ast = { version = "0.1.0", path = "../ast" }
+rajac-token = { version = "0.1.0", path = "../token" }
+rajac-base = { version = "0.1.0", path = "../base" }
+rajac-types = { version = "0.1.0", path = "../types" }
+rajac-diagnostics = { version = "0.1.0", path = "../diagnostics" }

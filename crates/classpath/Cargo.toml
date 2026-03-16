@@ -7,9 +7,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-rajac-base = { path = "../base" }
-rajac-symbols = { path = "../symbols" }
-rajac-types = { path = "../types" }
+rajac-base = { version = "0.1.0", path = "../base" }
+rajac-symbols = { version = "0.1.0", path = "../symbols" }
+rajac-types = { version = "0.1.0", path = "../types" }
 ristretto_classfile = { workspace = true }
 walkdir = { workspace = true }
 zip = "2.2.2"
