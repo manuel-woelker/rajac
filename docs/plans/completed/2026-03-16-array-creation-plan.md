@@ -164,16 +164,18 @@ This array-creation milestone should be considered complete when:
 - `cargo run -p verification --bin verification` passes
 - `./scripts/check-code.sh` passes
 
+That completion bar is now met for the supported array-creation forms covered by this plan.
+
 ## What checklist tracks the work?
 
-- [ ] Audit the current `Expr::NewArray` AST and resolved-type shapes.
-- [ ] Add a dedicated bytecode helper for array creation lowering.
-- [ ] Implement primitive one-dimensional array allocation with `newarray`.
-- [ ] Implement reference one-dimensional array allocation with `anewarray`.
-- [ ] Implement multi-dimensional array allocation with `multianewarray`.
-- [ ] Update stack accounting for array allocation instructions if needed.
-- [ ] Add colocated bytecode-generation tests for array creation.
-- [ ] Add valid verification fixtures for primitive, reference, and multi-dimensional arrays.
-- [ ] Regenerate OpenJDK reference outputs with `./verification/compile.sh`.
-- [ ] Run `cargo run -p verification --bin verification`.
-- [ ] Run `./scripts/check-code.sh`.
+- [x] Audit the current `Expr::NewArray` AST and resolved-type shapes.
+- [x] Add a dedicated bytecode helper for array creation lowering.
+- [x] Implement primitive one-dimensional array allocation with `newarray`.
+- [x] Implement reference one-dimensional array allocation with `anewarray`.
+- [x] Implement multi-dimensional array allocation with `multianewarray`.
+- [x] Update stack accounting for array allocation instructions if needed.
+- [x] Add colocated bytecode-generation tests for array creation.
+- [x] Add valid verification fixtures for primitive, reference, and multi-dimensional arrays.
+- [x] Regenerate OpenJDK reference outputs with `./verification/compile.sh`.
+- [x] Run `cargo run -p verification --bin verification`.
+- [x] Run `./scripts/check-code.sh`.
