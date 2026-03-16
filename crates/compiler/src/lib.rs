@@ -41,4 +41,4 @@ mod stages;
 pub mod statistics;
 
 pub use compilation_result::CompilationResult;
-pub use compiler::{CompilationUnit, Compiler, CompilerConfig};
+pub use compiler::{CompilationUnit, Compiler, CompilerConfig, default_java_classpaths};

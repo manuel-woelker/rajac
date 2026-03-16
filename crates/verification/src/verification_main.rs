@@ -3,7 +3,7 @@ use rajac_base::file_path::FilePath;
 use rajac_base::logging::{debug, error, info, info_span, trace, warn};
 use rajac_base::result::{RajacResult, ResultExt};
 use rajac_bytecode::pretty_print::pretty_print_classfile;
-use rajac_compiler::{Compiler, CompilerConfig};
+use rajac_compiler::{default_java_classpaths, Compiler, CompilerConfig};
 use rajac_diagnostics::{Diagnostic, Diagnostics, Severity};
 use rajac_symbols::SymbolTable;
 use regex::Regex;
@@ -89,7 +89,12 @@ fn run() -> RajacResult<()> {
     let reference_output = Path::new("verification/output/openjdk_21");
     let rajac_base_output = Path::new("verification/output/rajac");
     let rajac_output = rajac_base_output;
-    let classpaths = vec![FilePath::new("/usr/lib/jvm/java-8-openjdk/jre/lib/rt.jar")];
+    let classpaths = default_java_classpaths();
+    if classpaths.is_empty() {
+        return Err(rajac_base::err!(
+            "failed to locate Java standard library classes; set JAVA_HOME or install a JDK with rt.jar or jmods"
+        ));
+    }
     info!("initializing verification");
     debug!(reference_output = %reference_output.display(), rajac_output = %rajac_output.display());
     let prepopulated_symbol_table = Compiler::symbol_table_from_classpaths(&classpaths)?;

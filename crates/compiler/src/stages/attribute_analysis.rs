@@ -1079,6 +1079,13 @@ impl<'a> SemanticAnalyzer<'a> {
             self.emit_error("array initializer expected", Some(marker));
             return false;
         };
+        if array_ty == TypeId::INVALID {
+            self.emit_error(
+                "array initializer requires a resolved array type",
+                Some(marker),
+            );
+            return false;
+        }
         let Type::Array(array_type) = self.symbol_table.type_arena().get(array_ty) else {
             self.emit_error(
                 format!(

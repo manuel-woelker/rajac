@@ -96,7 +96,10 @@ pub fn collect_classpath_symbols(
     for classpath_entry in classpaths {
         let path = classpath_entry.as_path();
         if path.exists() {
-            if path.extension().is_some_and(|ext| ext == "jar") {
+            if path
+                .extension()
+                .is_some_and(|ext| ext == "jar" || ext == "jmod")
+            {
                 classpath.add_jar(path);
             } else if path.is_dir() {
                 classpath.add_directory(path);

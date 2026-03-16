@@ -64,6 +64,7 @@ use rajac_base::logging::instrument;
 use rajac_base::result::{RajacResult, ResultExt};
 use rajac_diagnostics::Diagnostics;
 use rajac_symbols::SymbolTable;
+use std::path::{Path, PathBuf};
 
 use crate::compilation_result::CompilationResult;
 use crate::stages::{attribute_analysis, collection, discovery, generation, parsing, resolution};
@@ -129,6 +130,69 @@ pub struct CompilerConfig {
     /// Whether to emit compilation timing statistics
     /// Defaults to false for production use
     pub emit_timing_statistics: bool,
+}
+
+/// Discovers Java standard-library classpath entries for the current machine.
+///
+/// This prefers Java 8-style `rt.jar` when present and otherwise falls back to
+/// Java 9+ `jmods`. The returned paths are ordered deterministically.
+pub fn default_java_classpaths() -> Vec<FilePath> {
+    let mut homes = Vec::new();
+
+    if let Some(java_home) = std::env::var_os("JAVA_HOME") {
+        homes.push(PathBuf::from(java_home));
+    }
+
+    homes.extend(
+        [
+            "/usr/lib/jvm/default-runtime",
+            "/usr/lib/jvm/default",
+            "/usr/lib/jvm/java-21-openjdk",
+            "/usr/lib/jvm/java-17-openjdk",
+            "/usr/lib/jvm/java-11-openjdk",
+            "/usr/lib/jvm/java-8-openjdk",
+        ]
+        .into_iter()
+        .map(PathBuf::from),
+    );
+
+    for home in homes {
+        let classpaths = java_runtime_classpaths_from_home(&home);
+        if !classpaths.is_empty() {
+            return classpaths;
+        }
+    }
+
+    Vec::new()
+}
+
+fn java_runtime_classpaths_from_home(java_home: &Path) -> Vec<FilePath> {
+    let rt_jar_candidates = [
+        java_home.join("jre/lib/rt.jar"),
+        java_home.join("lib/rt.jar"),
+    ];
+    for candidate in rt_jar_candidates {
+        if candidate.is_file() {
+            return vec![FilePath::new(candidate)];
+        }
+    }
+
+    let jmods_dir = java_home.join("jmods");
+    if !jmods_dir.is_dir() {
+        return Vec::new();
+    }
+
+    let Ok(read_dir) = std::fs::read_dir(&jmods_dir) else {
+        return Vec::new();
+    };
+
+    let mut jmods = read_dir
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "jmod"))
+        .collect::<Vec<_>>();
+    jmods.sort();
+
+    jmods.into_iter().map(FilePath::new).collect()
 }
 
 /// Main compiler orchestrator that manages the compilation pipeline.
