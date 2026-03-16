@@ -127,7 +127,7 @@ pub(crate) fn method_from_ast(
 pub(crate) fn generate_method_bytecode(
     arena: &AstArena,
     constant_pool: &mut ConstantPool,
-    _this_internal_name: &str,
+    this_internal_name: &str,
     method: &AstMethod,
     body_id: rajac_ast::StmtId,
     generation_context: &mut ClassfileGenerationContext<'_>,
@@ -140,6 +140,7 @@ pub(crate) fn generate_method_bytecode(
         generation_context.symbol_table,
         constant_pool,
     );
+    code_gen.set_current_class_internal_name(this_internal_name);
     let (instructions, max_stack, max_locals) =
         code_gen.generate_method_body(is_static, &method.params, body_id)?;
     generation_context
@@ -221,6 +222,7 @@ pub(crate) fn constructor_from_ast(
         generation_context.symbol_table,
         constant_pool,
     );
+    code_gen.set_current_class_internal_name(_this_internal_name);
     let (instructions, max_stack, max_locals) = code_gen.generate_constructor_body(
         &constructor.params,
         constructor.body,
@@ -261,6 +263,7 @@ pub(crate) fn constructor_from_ast(
 pub(crate) fn enum_constructor_from_ast(
     arena: &AstArena,
     constant_pool: &mut ConstantPool,
+    this_internal_name: &str,
     constructor: &AstConstructor,
     class_modifiers: &Modifiers,
     generation_context: &mut ClassfileGenerationContext<'_>,
@@ -301,6 +304,7 @@ pub(crate) fn enum_constructor_from_ast(
         generation_context.symbol_table,
         constant_pool,
     );
+    code_gen.set_current_class_internal_name(this_internal_name);
     let (instructions, max_stack, max_locals) = code_gen.generate_enum_constructor_body(
         &constructor.params,
         constructor.body,

@@ -123,6 +123,8 @@ fn nested_class_access_flags(kind: ClassKind, modifiers: &Modifiers) -> NestedCl
         }
         ClassKind::Enum => {
             flags |= NestedClassAccessFlags::ENUM;
+            flags |= NestedClassAccessFlags::STATIC;
+            flags |= NestedClassAccessFlags::FINAL;
         }
         ClassKind::Annotation => {
             flags |= NestedClassAccessFlags::ANNOTATION;

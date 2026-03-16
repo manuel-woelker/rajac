@@ -136,6 +136,7 @@ pub struct CodeGenerator<'arena> {
     max_locals: u16,
     next_local_slot: u16,
     local_vars: std::collections::HashMap<String, LocalVar>,
+    current_class_internal_name: Option<SharedString>,
     control_flow_stack: Vec<ControlFlowFrame>,
     next_label_id: u32,
     unsupported_features: Vec<UnsupportedFeature>,
@@ -159,10 +160,15 @@ impl<'arena> CodeGenerator<'arena> {
             max_locals: 1,
             next_local_slot: 1, // slot 0 is for 'this'
             local_vars: std::collections::HashMap::new(),
+            current_class_internal_name: None,
             control_flow_stack: Vec::new(),
             next_label_id: 0,
             unsupported_features: Vec::new(),
         }
+    }
+
+    pub fn set_current_class_internal_name(&mut self, internal_name: &str) {
+        self.current_class_internal_name = Some(SharedString::new(internal_name));
     }
 
     pub fn generate_method_body(
@@ -754,6 +760,8 @@ impl<'arena> CodeGenerator<'arena> {
             AstExpr::Ident(ident) => {
                 if let Some(local) = self.local_vars.get(ident.as_str()) {
                     self.emit_load(local.slot, local.kind);
+                } else if let Some(field_id) = self.resolve_current_class_field_by_name(ident) {
+                    self.emit_instance_field_load(field_id)?;
                 }
             }
             AstExpr::Literal(literal) => {
@@ -810,8 +818,12 @@ impl<'arena> CodeGenerator<'arena> {
             AstExpr::InstanceOf { expr, ty } => {
                 self.emit_instanceof_expression(*expr, *ty)?;
             }
-            AstExpr::FieldAccess { expr, name, .. } => {
-                self.emit_field_access(*expr, name)?;
+            AstExpr::FieldAccess {
+                expr,
+                name,
+                field_id,
+            } => {
+                self.emit_field_access(*expr, name, *field_id)?;
             }
             AstExpr::MethodCall {
                 expr,
@@ -1277,17 +1289,134 @@ impl<'arena> CodeGenerator<'arena> {
     }
 
     fn emit_assignment(&mut self, lhs: ExprId, rhs: ExprId) -> RajacResult<()> {
-        let AstExpr::Ident(ident) = self.arena.expr(lhs) else {
+        match self.arena.expr(lhs) {
+            AstExpr::Ident(ident) => {
+                if let Some(local) = self.local_vars.get(ident.as_str()).copied() {
+                    self.emit_expression(rhs)?;
+                    self.emit_store(local.slot, local.kind);
+                } else if let Some(field_id) = self.resolve_current_class_field_by_name(ident) {
+                    self.emit_instance_field_store(field_id, rhs)?;
+                }
+                Ok(())
+            }
+            AstExpr::FieldAccess {
+                expr,
+                field_id: Some(field_id),
+                ..
+            } => self.emit_field_assignment(*expr, *field_id, rhs),
+            _ => Ok(()),
+        }
+    }
+
+    fn emit_field_assignment(
+        &mut self,
+        target: ExprId,
+        field_id: rajac_types::FieldId,
+        rhs: ExprId,
+    ) -> RajacResult<()> {
+        let Some((owner_internal_name, field)) = self.resolve_field_owner(field_id) else {
             return Ok(());
         };
 
-        let Some(local) = self.local_vars.get(ident.as_str()).copied() else {
-            return Ok(());
-        };
+        let descriptor = type_id_to_descriptor(field.ty, self.type_arena);
+        let owner_class = self.constant_pool.add_class(owner_internal_name.as_str())?;
+        let field_ref =
+            self.constant_pool
+                .add_field_ref(owner_class, field.name.as_str(), &descriptor)?;
 
-        self.emit_expression(rhs)?;
-        self.emit_store(local.slot, local.kind);
+        if field.modifiers.0 & rajac_types::FieldModifiers::STATIC != 0 {
+            self.emit_expression(rhs)?;
+            self.emit(Instruction::Putstatic(field_ref));
+        } else {
+            self.emit_expression(target)?;
+            self.emit_expression(rhs)?;
+            self.emit(Instruction::Putfield(field_ref));
+        }
+
         Ok(())
+    }
+
+    fn emit_instance_field_store(
+        &mut self,
+        field_id: rajac_types::FieldId,
+        rhs: ExprId,
+    ) -> RajacResult<()> {
+        let Some((owner_internal_name, field)) = self.resolve_field_owner(field_id) else {
+            return Ok(());
+        };
+        let descriptor = type_id_to_descriptor(field.ty, self.type_arena);
+        let owner_class = self.constant_pool.add_class(owner_internal_name.as_str())?;
+        let field_ref =
+            self.constant_pool
+                .add_field_ref(owner_class, field.name.as_str(), &descriptor)?;
+        self.emit(Instruction::Aload_0);
+        self.emit_expression(rhs)?;
+        self.emit(Instruction::Putfield(field_ref));
+        Ok(())
+    }
+
+    fn emit_instance_field_load(&mut self, field_id: rajac_types::FieldId) -> RajacResult<()> {
+        let Some((owner_internal_name, field)) = self.resolve_field_owner(field_id) else {
+            return Ok(());
+        };
+        let descriptor = type_id_to_descriptor(field.ty, self.type_arena);
+        let owner_class = self.constant_pool.add_class(owner_internal_name.as_str())?;
+        let field_ref =
+            self.constant_pool
+                .add_field_ref(owner_class, field.name.as_str(), &descriptor)?;
+        self.emit(Instruction::Aload_0);
+        self.emit(Instruction::Getfield(field_ref));
+        Ok(())
+    }
+
+    fn resolve_current_class_field_by_name(
+        &self,
+        ident: &Ident,
+    ) -> Option<rajac_types::FieldId> {
+        let current_class = self.current_class_internal_name.as_ref()?;
+        let type_arena = self.symbol_table.type_arena();
+
+        for index in 0..type_arena.len() {
+            let type_id = TypeId(index as u32);
+            let Type::Class(class_type) = type_arena.get(type_id) else {
+                continue;
+            };
+            if class_type.internal_name() != current_class.as_str() {
+                continue;
+            }
+            return class_type
+                .fields
+                .get(&ident.name)
+                .and_then(|field_ids| field_ids.first().copied());
+        }
+
+        None
+    }
+
+    fn resolve_field_owner(
+        &self,
+        field_id: rajac_types::FieldId,
+    ) -> Option<(SharedString, rajac_types::FieldSignature)> {
+        let type_arena = self.symbol_table.type_arena();
+        for index in 0..type_arena.len() {
+            let type_id = TypeId(index as u32);
+            let Type::Class(class_type) = type_arena.get(type_id) else {
+                continue;
+            };
+            if !class_type
+                .fields
+                .values()
+                .any(|field_ids| field_ids.contains(&field_id))
+            {
+                continue;
+            }
+
+            let owner_internal_name = SharedString::new(class_type.internal_name());
+            let field = self.symbol_table.field_arena().get(field_id).clone();
+            return Some((owner_internal_name, field));
+        }
+
+        None
     }
 
     fn ensure_clean_stack(&self, context: &str) -> RajacResult<()> {
@@ -1860,7 +1989,12 @@ impl<'arena> CodeGenerator<'arena> {
         Ok(())
     }
 
-    fn emit_field_access(&mut self, target: ExprId, name: &Ident) -> RajacResult<()> {
+    fn emit_field_access(
+        &mut self,
+        target: ExprId,
+        name: &Ident,
+        field_id: Option<rajac_types::FieldId>,
+    ) -> RajacResult<()> {
         let target_expr = self.arena.expr(target);
 
         let is_system_out = match target_expr {
@@ -1882,6 +2016,26 @@ impl<'arena> CodeGenerator<'arena> {
 
         if is_system_out {
             return self.emit_system_out();
+        }
+
+        let Some(field_id) = field_id else {
+            return Ok(());
+        };
+        let Some((owner_internal_name, field)) = self.resolve_field_owner(field_id) else {
+            return Ok(());
+        };
+
+        let descriptor = type_id_to_descriptor(field.ty, self.type_arena);
+        let owner_class = self.constant_pool.add_class(owner_internal_name.as_str())?;
+        let field_ref =
+            self.constant_pool
+                .add_field_ref(owner_class, field.name.as_str(), &descriptor)?;
+
+        if field.modifiers.0 & rajac_types::FieldModifiers::STATIC != 0 {
+            self.emit(Instruction::Getstatic(field_ref));
+        } else {
+            self.emit_expression(target)?;
+            self.emit(Instruction::Getfield(field_ref));
         }
 
         Ok(())

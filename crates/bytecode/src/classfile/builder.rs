@@ -3,7 +3,6 @@ use super::{
     collect_nested_class_infos, constructor_from_ast, enum_constructor_from_ast, field_from_ast,
     method_from_ast, type_to_descriptor, type_to_internal_class_name,
 };
-use crate::bytecode::CodeGenerator;
 use rajac_ast::{
     AstArena, ClassDecl, ClassDeclId, ClassKind, ClassMember, Constructor as AstConstructor,
     EnumEntry, Modifiers,
@@ -96,6 +95,14 @@ pub(crate) fn classfile_from_class_decl_with_context(
 
     if matches!(class.kind, ClassKind::Enum) {
         synthesize_enum_fields(&mut constant_pool, this_internal_name, class, &mut fields)?;
+        methods.push(synthesize_enum_values_method(
+            &mut constant_pool,
+            this_internal_name,
+        )?);
+        methods.push(synthesize_enum_value_of_method(
+            &mut constant_pool,
+            this_internal_name,
+        )?);
     }
 
     for member_id in &class.members {
@@ -130,6 +137,7 @@ pub(crate) fn classfile_from_class_decl_with_context(
                     enum_constructor_from_ast(
                         arena,
                         &mut constant_pool,
+                        this_internal_name,
                         constructor,
                         &class.modifiers,
                         generation_context,
@@ -179,6 +187,7 @@ pub(crate) fn classfile_from_class_decl_with_context(
                 methods.push(enum_constructor_from_ast(
                     arena,
                     &mut constant_pool,
+                    this_internal_name,
                     &AstConstructor {
                         name: class.name.clone(),
                         params: vec![],
@@ -195,20 +204,16 @@ pub(crate) fn classfile_from_class_decl_with_context(
     }
 
     if matches!(class.kind, ClassKind::Enum) {
-        methods.push(synthesize_enum_values_method(
+        methods.push(synthesize_enum_values_array_method(
             &mut constant_pool,
             this_internal_name,
-        )?);
-        methods.push(synthesize_enum_value_of_method(
-            &mut constant_pool,
-            this_internal_name,
+            class,
         )?);
         methods.push(synthesize_enum_clinit(
             arena,
             &mut constant_pool,
             this_internal_name,
             class,
-            generation_context,
         )?);
     }
 
@@ -221,6 +226,21 @@ pub(crate) fn classfile_from_class_decl_with_context(
         nested_classes,
     )? {
         attributes.push(inner_classes);
+    }
+    if let Some(nest_attribute) = build_nest_attribute(
+        &mut constant_pool,
+        this_class,
+        outer_internal_name,
+        nested_classes,
+    )? {
+        attributes.push(nest_attribute);
+    }
+    if matches!(class.kind, ClassKind::Enum) {
+        attributes.push(Attribute::Signature {
+            name_index: constant_pool.add_utf8("Signature")?,
+            signature_index: constant_pool
+                .add_utf8(format!("Ljava/lang/Enum<L{this_internal_name};>;"))?,
+        });
     }
 
     let access_flags = class_access_flags(class.kind.clone(), &class.modifiers);
@@ -285,17 +305,13 @@ fn synthesize_enum_values_method(
 ) -> RajacResult<Method> {
     let array_descriptor = format!("[L{this_internal_name};");
     let this_class = constant_pool.add_class(this_internal_name)?;
-    let object_class = constant_pool.add_class("java/lang/Object")?;
     let array_class = constant_pool.add_class(&array_descriptor)?;
     let values_field = constant_pool.add_field_ref(this_class, "$VALUES", &array_descriptor)?;
-    let clone_method =
-        constant_pool.add_method_ref(object_class, "clone", "()Ljava/lang/Object;")?;
+    let clone_method = constant_pool.add_method_ref(array_class, "clone", "()Ljava/lang/Object;")?;
     let code_name = constant_pool.add_utf8("Code")?;
 
     Ok(Method {
-        access_flags: MethodAccessFlags::PUBLIC
-            | MethodAccessFlags::STATIC
-            | MethodAccessFlags::FINAL,
+        access_flags: MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
         name_index: constant_pool.add_utf8("values")?,
         descriptor_index: constant_pool.add_utf8(format!("(){array_descriptor}"))?,
         attributes: vec![Attribute::Code {
@@ -308,6 +324,47 @@ fn synthesize_enum_values_method(
                 Instruction::Checkcast(array_class),
                 Instruction::Areturn,
             ],
+            exception_table: vec![],
+            attributes: vec![],
+        }],
+    })
+}
+
+fn synthesize_enum_values_array_method(
+    constant_pool: &mut ConstantPool,
+    this_internal_name: &str,
+    class: &ClassDecl,
+) -> RajacResult<Method> {
+    let this_class = constant_pool.add_class(this_internal_name)?;
+    let array_descriptor = format!("[L{this_internal_name};");
+    let code_name = constant_pool.add_utf8("Code")?;
+    let mut code = Vec::new();
+    push_small_int(&mut code, class.enum_entries.len() as i32);
+    code.push(Instruction::Anewarray(this_class));
+    for (ordinal, entry) in class.enum_entries.iter().enumerate() {
+        code.push(Instruction::Dup);
+        push_small_int(&mut code, ordinal as i32);
+        let field_ref = constant_pool.add_field_ref(
+            this_class,
+            entry.name.as_str(),
+            &format!("L{this_internal_name};"),
+        )?;
+        code.push(Instruction::Getstatic(field_ref));
+        code.push(Instruction::Aastore);
+    }
+    code.push(Instruction::Areturn);
+
+    Ok(Method {
+        access_flags: MethodAccessFlags::PRIVATE
+            | MethodAccessFlags::STATIC
+            | MethodAccessFlags::SYNTHETIC,
+        name_index: constant_pool.add_utf8("$values")?,
+        descriptor_index: constant_pool.add_utf8(format!("(){array_descriptor}"))?,
+        attributes: vec![Attribute::Code {
+            name_index: code_name,
+            max_stack: 4,
+            max_locals: 0,
+            code,
             exception_table: vec![],
             attributes: vec![],
         }],
@@ -354,28 +411,41 @@ fn synthesize_enum_clinit(
     constant_pool: &mut ConstantPool,
     this_internal_name: &str,
     class: &ClassDecl,
-    generation_context: &mut ClassfileGenerationContext<'_>,
 ) -> RajacResult<Method> {
-    let constructor_descriptors = class
-        .enum_entries
-        .iter()
-        .map(|entry| enum_constructor_descriptor_for_entry(arena, class, entry, generation_context))
-        .collect::<RajacResult<Vec<_>>>()?;
+    let this_class = constant_pool.add_class(this_internal_name)?;
+    let mut code = Vec::new();
 
-    let mut code_gen = CodeGenerator::new(
-        arena,
-        generation_context.type_arena,
-        generation_context.symbol_table,
-        constant_pool,
-    );
-    let (code, max_stack, max_locals) = code_gen.generate_enum_clinit_body(
-        this_internal_name,
-        &class.enum_entries,
-        &constructor_descriptors,
-    )?;
-    generation_context
-        .unsupported_features
-        .extend(code_gen.take_unsupported_features());
+    for (ordinal, entry) in class.enum_entries.iter().enumerate() {
+        code.push(Instruction::New(this_class));
+        code.push(Instruction::Dup);
+        let string_index = constant_pool.add_string(entry.name.as_str())?;
+        if string_index <= u8::MAX as u16 {
+            code.push(Instruction::Ldc(string_index as u8));
+        } else {
+            code.push(Instruction::Ldc_w(string_index));
+        }
+        push_small_int(&mut code, ordinal as i32);
+        for arg in &entry.args {
+            emit_enum_literal_argument(code.as_mut(), constant_pool, arena, *arg)?;
+        }
+        let descriptor = enum_constructor_descriptor_for_entry(arena, class, entry)?;
+        let ctor_ref = constant_pool.add_method_ref(this_class, "<init>", &descriptor)?;
+        code.push(Instruction::Invokespecial(ctor_ref));
+        let field_ref = constant_pool.add_field_ref(
+            this_class,
+            entry.name.as_str(),
+            &format!("L{this_internal_name};"),
+        )?;
+        code.push(Instruction::Putstatic(field_ref));
+    }
+
+    let values_ref =
+        constant_pool.add_method_ref(this_class, "$values", &format!("()[L{this_internal_name};"))?;
+    code.push(Instruction::Invokestatic(values_ref));
+    let values_field_ref =
+        constant_pool.add_field_ref(this_class, "$VALUES", &format!("[L{this_internal_name};"))?;
+    code.push(Instruction::Putstatic(values_field_ref));
+    code.push(Instruction::Return);
 
     Ok(Method {
         access_flags: MethodAccessFlags::STATIC,
@@ -383,8 +453,8 @@ fn synthesize_enum_clinit(
         descriptor_index: constant_pool.add_utf8("()V")?,
         attributes: vec![Attribute::Code {
             name_index: constant_pool.add_utf8("Code")?,
-            max_stack,
-            max_locals,
+            max_stack: 4,
+            max_locals: 0,
             code,
             exception_table: vec![],
             attributes: vec![],
@@ -396,7 +466,6 @@ fn enum_constructor_descriptor_for_entry(
     arena: &AstArena,
     class: &ClassDecl,
     entry: &EnumEntry,
-    generation_context: &ClassfileGenerationContext<'_>,
 ) -> RajacResult<String> {
     let matching_constructor = class
         .members
@@ -420,9 +489,78 @@ fn enum_constructor_descriptor_for_entry(
         descriptor.push_str(&type_to_descriptor(
             arena,
             param.ty,
-            generation_context.type_arena,
+            &rajac_types::TypeArena::new(),
         )?);
     }
     descriptor.push_str(")V");
     Ok(descriptor)
+}
+
+fn build_nest_attribute(
+    constant_pool: &mut ConstantPool,
+    _this_class: u16,
+    outer_internal_name: Option<&str>,
+    nested_classes: &[NestedClassInfo],
+) -> RajacResult<Option<Attribute>> {
+    if let Some(outer_internal_name) = outer_internal_name {
+        return Ok(Some(Attribute::NestHost {
+            name_index: constant_pool.add_utf8("NestHost")?,
+            host_class_index: constant_pool.add_class(outer_internal_name)?,
+        }));
+    }
+
+    if nested_classes.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(Attribute::NestMembers {
+        name_index: constant_pool.add_utf8("NestMembers")?,
+        class_indexes: nested_classes
+            .iter()
+            .map(|nested| constant_pool.add_class(&nested.internal_name))
+            .collect::<Result<Vec<_>, _>>()?,
+    }))
+}
+
+fn push_small_int(code: &mut Vec<Instruction>, value: i32) {
+    match value {
+        0 => code.push(Instruction::Iconst_0),
+        1 => code.push(Instruction::Iconst_1),
+        2 => code.push(Instruction::Iconst_2),
+        3 => code.push(Instruction::Iconst_3),
+        4 => code.push(Instruction::Iconst_4),
+        5 => code.push(Instruction::Iconst_5),
+        -128..=127 => code.push(Instruction::Bipush(value as i8)),
+        _ => code.push(Instruction::Sipush(value as i16)),
+    }
+}
+
+fn emit_enum_literal_argument(
+    code: &mut Vec<Instruction>,
+    constant_pool: &mut ConstantPool,
+    arena: &AstArena,
+    arg: rajac_ast::ExprId,
+) -> RajacResult<()> {
+    match arena.expr(arg) {
+        rajac_ast::Expr::Literal(literal) => match literal.kind {
+            rajac_ast::LiteralKind::Int => {
+                let value = literal.value.as_str().parse::<i32>().unwrap_or_default();
+                push_small_int(code, value);
+            }
+            rajac_ast::LiteralKind::String => {
+                let string_index = constant_pool.add_string(literal.value.as_str())?;
+                if string_index <= u8::MAX as u16 {
+                    code.push(Instruction::Ldc(string_index as u8));
+                } else {
+                    code.push(Instruction::Ldc_w(string_index));
+                }
+            }
+            rajac_ast::LiteralKind::Bool => {
+                push_small_int(code, if literal.value.as_str() == "true" { 1 } else { 0 });
+            }
+            _ => {}
+        },
+        _ => {}
+    }
+    Ok(())
 }
