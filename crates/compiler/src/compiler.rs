@@ -166,6 +166,40 @@ pub fn default_java_classpaths() -> Vec<FilePath> {
     Vec::new()
 }
 
+/// Discovers the minimal Java standard-library classpath entries needed by verification.
+///
+/// This prefers Java 8-style `rt.jar` when present and otherwise falls back to
+/// Java 9+ `java.base.jmod`. The returned paths are ordered deterministically.
+pub fn verification_java_classpaths() -> Vec<FilePath> {
+    let mut homes = Vec::new();
+
+    if let Some(java_home) = std::env::var_os("JAVA_HOME") {
+        homes.push(PathBuf::from(java_home));
+    }
+
+    homes.extend(
+        [
+            "/usr/lib/jvm/default-runtime",
+            "/usr/lib/jvm/default",
+            "/usr/lib/jvm/java-21-openjdk",
+            "/usr/lib/jvm/java-17-openjdk",
+            "/usr/lib/jvm/java-11-openjdk",
+            "/usr/lib/jvm/java-8-openjdk",
+        ]
+        .into_iter()
+        .map(PathBuf::from),
+    );
+
+    for home in homes {
+        let classpaths = verification_classpaths_from_home(&home);
+        if !classpaths.is_empty() {
+            return classpaths;
+        }
+    }
+
+    Vec::new()
+}
+
 fn java_runtime_classpaths_from_home(java_home: &Path) -> Vec<FilePath> {
     let rt_jar_candidates = [
         java_home.join("jre/lib/rt.jar"),
@@ -193,6 +227,25 @@ fn java_runtime_classpaths_from_home(java_home: &Path) -> Vec<FilePath> {
     jmods.sort();
 
     jmods.into_iter().map(FilePath::new).collect()
+}
+
+fn verification_classpaths_from_home(java_home: &Path) -> Vec<FilePath> {
+    let rt_jar_candidates = [
+        java_home.join("jre/lib/rt.jar"),
+        java_home.join("lib/rt.jar"),
+    ];
+    for candidate in rt_jar_candidates {
+        if candidate.is_file() {
+            return vec![FilePath::new(candidate)];
+        }
+    }
+
+    let java_base_jmod = java_home.join("jmods/java.base.jmod");
+    if java_base_jmod.is_file() {
+        return vec![FilePath::new(java_base_jmod)];
+    }
+
+    Vec::new()
 }
 
 /// Main compiler orchestrator that manages the compilation pipeline.
@@ -751,5 +804,61 @@ impl Default for Compiler {
             classpaths: Vec::new(),
             emit_timing_statistics: false,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{java_runtime_classpaths_from_home, verification_classpaths_from_home};
+    use std::fs;
+
+    #[test]
+    fn verification_classpaths_prefer_rt_jar() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let java_home = temp_dir.path();
+        let rt_jar = java_home.join("lib/rt.jar");
+        fs::create_dir_all(rt_jar.parent().unwrap()).unwrap();
+        fs::write(&rt_jar, []).unwrap();
+        let java_base = java_home.join("jmods/java.base.jmod");
+        fs::create_dir_all(java_base.parent().unwrap()).unwrap();
+        fs::write(&java_base, []).unwrap();
+
+        let classpaths = verification_classpaths_from_home(java_home);
+
+        assert_eq!(classpaths.len(), 1);
+        assert_eq!(classpaths[0].as_path(), rt_jar.as_path());
+    }
+
+    #[test]
+    fn verification_classpaths_fall_back_to_java_base_jmod() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let java_home = temp_dir.path();
+        let java_base = java_home.join("jmods/java.base.jmod");
+        fs::create_dir_all(java_base.parent().unwrap()).unwrap();
+        fs::write(&java_base, []).unwrap();
+        let extra_jmod = java_home.join("jmods/java.desktop.jmod");
+        fs::write(&extra_jmod, []).unwrap();
+
+        let classpaths = verification_classpaths_from_home(java_home);
+
+        assert_eq!(classpaths.len(), 1);
+        assert_eq!(classpaths[0].as_path(), java_base.as_path());
+    }
+
+    #[test]
+    fn default_java_classpaths_include_all_jmods() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let java_home = temp_dir.path();
+        let java_base = java_home.join("jmods/java.base.jmod");
+        let java_desktop = java_home.join("jmods/java.desktop.jmod");
+        fs::create_dir_all(java_base.parent().unwrap()).unwrap();
+        fs::write(&java_base, []).unwrap();
+        fs::write(&java_desktop, []).unwrap();
+
+        let classpaths = java_runtime_classpaths_from_home(java_home);
+
+        assert_eq!(classpaths.len(), 2);
+        assert_eq!(classpaths[0].as_path(), java_base.as_path());
+        assert_eq!(classpaths[1].as_path(), java_desktop.as_path());
     }
 }

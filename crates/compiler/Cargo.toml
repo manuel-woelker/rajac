@@ -26,3 +26,4 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 rajac-lexer = { version = "0.1.1", path = "../lexer" }
+tempfile = "3.20"
