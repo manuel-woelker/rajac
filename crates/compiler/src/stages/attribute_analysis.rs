@@ -1262,6 +1262,10 @@ impl<'a> SemanticAnalyzer<'a> {
             return false;
         }
 
+        if self.are_array_types_assignable(target_ty, source_ty) {
+            return true;
+        }
+
         let mut stack = vec![source_ty];
         let mut visited = HashSet::new();
         while let Some(current_ty) = stack.pop() {
@@ -1292,6 +1296,34 @@ impl<'a> SemanticAnalyzer<'a> {
         }
 
         false
+    }
+
+    fn are_array_types_assignable(&self, target_ty: TypeId, source_ty: TypeId) -> bool {
+        match (
+            self.symbol_table.type_arena().get(target_ty),
+            self.symbol_table.type_arena().get(source_ty),
+        ) {
+            (Type::Array(target_array), Type::Array(source_array)) => {
+                let target_element = target_array.element_type;
+                let source_element = source_array.element_type;
+
+                if target_element == source_element {
+                    return true;
+                }
+
+                match (
+                    self.symbol_table.type_arena().get(target_element),
+                    self.symbol_table.type_arena().get(source_element),
+                ) {
+                    (Type::Primitive(target_primitive), Type::Primitive(source_primitive)) => {
+                        target_primitive == source_primitive
+                    }
+                    (Type::Primitive(_), _) | (_, Type::Primitive(_)) => false,
+                    _ => self.is_reference_assignable(target_element, source_element),
+                }
+            }
+            _ => false,
+        }
     }
 
     fn are_equality_comparable(
@@ -2798,6 +2830,22 @@ class Example {
                 .iter()
                 .any(|diagnostic| diagnostic.message.as_str().contains("incompatible types"))
         );
+    }
+
+    #[test]
+    fn accepts_return_of_new_array_with_matching_array_type() {
+        let source = r#"
+class Example {
+    int[] run(int size) {
+        return new int[size];
+    }
+}
+"#;
+
+        let (mut units, mut symbol_table) = resolved_units(source);
+        let diagnostics = analyze_attributes(&mut units, &mut symbol_table);
+
+        assert!(diagnostics.is_empty());
     }
 
     #[test]

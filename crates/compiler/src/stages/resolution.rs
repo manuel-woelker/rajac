@@ -1003,17 +1003,22 @@ fn resolve_type(
         resolve_type(type_id, arena, symbol_table, context);
     }
 
-    let (element_type_id, needs_array) = match arena.ty(type_id) {
+    let (element_type_id, dimensions, needs_array) = match arena.ty(type_id) {
         AstType::Array {
-            element_type, ty, ..
-        } => (*element_type, *ty == TypeId::INVALID),
-        _ => (AstTypeId::INVALID, false),
+            element_type,
+            dimensions,
+            ty,
+        } => (*element_type, *dimensions, *ty == TypeId::INVALID),
+        _ => (AstTypeId::INVALID, 0, false),
     };
 
     if needs_array {
         let element_id = arena.ty(element_type_id).ty();
         if element_id != TypeId::INVALID {
-            let array_id = symbol_table.type_arena_mut().alloc(Type::array(element_id));
+            let mut array_id = element_id;
+            for _ in 0..dimensions {
+                array_id = symbol_table.type_arena_mut().alloc(Type::array(array_id));
+            }
             if let AstType::Array { ty, .. } = arena.ty_mut(type_id) {
                 *ty = array_id;
             }
@@ -1737,5 +1742,45 @@ class Example extends Base {}
         };
 
         assert_eq!(class_type.superclass, Some(base_type));
+    }
+
+    #[test]
+    fn resolves_multidimensional_array_types_with_full_rank() {
+        let source = r#"
+class Example {
+    int[][] run() {
+        return new int[1][2];
+    }
+}
+"#;
+        let parse_result = parse(source, FilePath::new("Example.java"));
+        let mut units = vec![CompilationUnit {
+            source_file: FilePath::new("Example.java"),
+            ast: parse_result.ast,
+            arena: parse_result.arena,
+            diagnostics: parse_result.diagnostics,
+        }];
+        let mut symbol_table = SymbolTable::new();
+        crate::stages::collection::collect_compilation_unit_symbols(&mut symbol_table, &units)
+            .unwrap();
+
+        resolve_identifiers(&mut units, &mut symbol_table);
+
+        let example_class = units[0].ast.classes[0];
+        let ClassMember::Method(run_method) = units[0]
+            .arena
+            .class_member(units[0].arena.class_decl(example_class).members[0])
+            .clone()
+        else {
+            panic!("expected run method");
+        };
+        let return_ty = units[0].arena.ty(run_method.return_ty).ty();
+        let Type::Array(outer_array) = symbol_table.type_arena().get(return_ty) else {
+            panic!("expected outer array type");
+        };
+        assert!(matches!(
+            symbol_table.type_arena().get(outer_array.element_type),
+            Type::Array(_)
+        ));
     }
 }

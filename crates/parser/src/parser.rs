@@ -769,6 +769,14 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse_type(&mut self) -> Option<AstTypeId> {
+        self.parse_type_with_array_suffix(true)
+    }
+
+    pub fn parse_type_without_array_suffix(&mut self) -> Option<AstTypeId> {
+        self.parse_type_with_array_suffix(false)
+    }
+
+    fn parse_type_with_array_suffix(&mut self, allow_array_suffix: bool) -> Option<AstTypeId> {
         let ty = match self.peek() {
             TokenKind::KwBoolean => {
                 self.bump();
@@ -838,6 +846,10 @@ impl<'a> Parser<'a> {
         };
 
         let ty_id = self.arena.alloc_type(ty);
+
+        if !allow_array_suffix {
+            return Some(ty_id);
+        }
 
         // Handle array notation
         let mut dimensions = 0;
@@ -952,6 +964,70 @@ mod tests {
         "#;
         let result = parse_src(source);
         assert_eq!(result.ast.classes.len(), 1);
+    }
+
+    #[test]
+    fn test_return_new_array_expression() {
+        let source = r#"
+            class Arrays {
+                int[] make(int size) {
+                    return new int[size];
+                }
+            }
+        "#;
+        let result = parse_src(source);
+        let class = result.arena.class_decl(result.ast.classes[0]);
+        let method = class
+            .members
+            .iter()
+            .find_map(|member_id| match result.arena.class_member(*member_id) {
+                ClassMember::Method(method) => Some(method),
+                _ => None,
+            })
+            .expect("method");
+        let body_id = method.body.expect("method body");
+        let Stmt::Block(statements) = result.arena.stmt(body_id) else {
+            panic!("expected method body block");
+        };
+        let Stmt::Return(Some(expr_id)) = result.arena.stmt(statements[0]) else {
+            panic!("expected return with expression");
+        };
+        let Expr::NewArray { dimensions, .. } = result.arena.expr(*expr_id) else {
+            panic!("expected new array expression");
+        };
+        assert_eq!(dimensions.len(), 1);
+    }
+
+    #[test]
+    fn test_return_multidimensional_new_array_expression() {
+        let source = r#"
+            class Arrays {
+                int[][] make(int rows, int cols) {
+                    return new int[rows][cols];
+                }
+            }
+        "#;
+        let result = parse_src(source);
+        let class = result.arena.class_decl(result.ast.classes[0]);
+        let method = class
+            .members
+            .iter()
+            .find_map(|member_id| match result.arena.class_member(*member_id) {
+                ClassMember::Method(method) => Some(method),
+                _ => None,
+            })
+            .expect("method");
+        let body_id = method.body.expect("method body");
+        let Stmt::Block(statements) = result.arena.stmt(body_id) else {
+            panic!("expected method body block");
+        };
+        let Stmt::Return(Some(expr_id)) = result.arena.stmt(statements[0]) else {
+            panic!("expected return with expression");
+        };
+        let Expr::NewArray { dimensions, .. } = result.arena.expr(*expr_id) else {
+            panic!("expected new array expression");
+        };
+        assert_eq!(dimensions.len(), 2);
     }
 
     #[test]

@@ -532,7 +532,7 @@ impl<'a> Parser<'a> {
             }
             TokenKind::KwNew => {
                 self.bump();
-                if let Some(ty) = self.parse_type() {
+                if let Some(ty) = self.parse_type_without_array_suffix() {
                     if self.is(TokenKind::LBracket) {
                         // Array instantiation
                         let mut dimensions = Vec::new();
