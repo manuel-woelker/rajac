@@ -199,7 +199,7 @@ This plan should include:
 - existing colocated bytecode tests in [bytecode.rs](/data/projects/rajac/crates/bytecode/src/bytecode.rs)
 - existing classfile tests in [classfile.rs](/data/projects/rajac/crates/bytecode/src/classfile.rs)
 - generation-stage tests in [generation.rs](/data/projects/rajac/crates/compiler/src/stages/generation.rs) where return shapes or report plumbing change
-- `cargo run -p verification --bin verification`
+- `cargo run -p rajac-verification --bin verification`
 - `./scripts/check-code.sh`
 
 New verification fixtures are probably not needed unless the refactor intentionally changes emitted bytecode or diagnostics.
@@ -225,7 +225,7 @@ This refactor should be considered complete when:
 - file and module boundaries better reflect responsibility where the split adds real clarity
 - generation-stage result plumbing is readable and robust
 - tests still cover the refactored paths
-- `cargo run -p verification --bin verification` passes
+- `cargo run -p rajac-verification --bin verification` passes
 - `./scripts/check-code.sh` passes
 
 ## What checklist should track the work?
@@ -237,5 +237,5 @@ This refactor should be considered complete when:
 - [x] Refactor selected `bytecode.rs` helpers or submodules that materially benefit from context ownership, or explicitly document why no split is warranted yet.
 - [x] Add or update colocated tests affected by the refactor.
 - [x] Confirm verification fixtures do not need changes, or update them if behavior changed.
-- [x] Run `cargo run -p verification --bin verification`.
+- [x] Run `cargo run -p rajac-verification --bin verification`.
 - [x] Run `./scripts/check-code.sh`.

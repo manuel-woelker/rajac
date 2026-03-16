@@ -71,7 +71,7 @@ When relevant, include tasks for:
 - adding or updating colocated tests
 - adding or updating verification fixtures
 - regenerating OpenJDK reference outputs
-- running `cargo run -p verification --bin verification`
+- running `cargo run -p rajac-verification --bin verification`
 - running `./scripts/check-code.sh`
 
 If the work is intentionally not covered by one of these mechanisms, state that clearly.

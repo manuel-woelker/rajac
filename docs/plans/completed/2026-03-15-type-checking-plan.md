@@ -238,7 +238,7 @@ The first robust type-checking milestone should be considered complete when:
 - local identifier expressions are typed through scoped lookup
 - bytecode generation no longer needs to invent local typing behavior that should come from semantic analysis
 - semantic diagnostics are precise enough to add or update verification overrides where appropriate
-- `cargo run -p verification --bin verification` remains green
+- `cargo run -p rajac-verification --bin verification` remains green
 - `./scripts/check-code.sh` remains green
 
 ## What checklist tracks the work?
@@ -257,5 +257,5 @@ The first robust type-checking milestone should be considered complete when:
 - [x] Remove bytecode-generation workarounds that duplicate semantic local typing.
 - [x] Add colocated tests for semantic typing and diagnostics.
 - [x] Add or update verification fixtures and error message overrides for semantic diagnostics.
-- [x] Run `cargo run -p verification --bin verification`.
+- [x] Run `cargo run -p rajac-verification --bin verification`.
 - [x] Run `./scripts/check-code.sh`.

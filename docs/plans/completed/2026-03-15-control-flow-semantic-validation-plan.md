@@ -209,7 +209,7 @@ This control-flow semantic-validation milestone should be considered complete wh
 - obvious unreachable statements after unconditional abrupt completion are diagnosed
 - colocated tests cover both valid and invalid control-flow semantics
 - invalid verification fixtures cover the new diagnostics where OpenJDK comparison is practical
-- `cargo run -p verification --bin verification` passes
+- `cargo run -p rajac-verification --bin verification` passes
 - `./scripts/check-code.sh` passes
 
 ## What checklist tracks the work?
@@ -230,5 +230,5 @@ This control-flow semantic-validation milestone should be considered complete wh
 - [x] Diagnose straightforward unreachable statements after unconditional abrupt completion.
 - [x] Add colocated tests for control-flow semantic diagnostics.
 - [x] Add or update invalid verification fixtures and any error-message overrides.
-- [x] Run `cargo run -p verification --bin verification`.
+- [x] Run `cargo run -p rajac-verification --bin verification`.
 - [x] Run `./scripts/check-code.sh`.

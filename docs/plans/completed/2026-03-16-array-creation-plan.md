@@ -115,7 +115,7 @@ If the new helper needs to store type names or messages, it should use `SharedSt
 7. Add colocated unit tests for primitive, reference, and multi-dimensional array creation.
 8. Add valid verification fixtures under `verification/sources` that exercise the new bytecode paths.
 9. Regenerate OpenJDK reference output with `./verification/compile.sh`.
-10. Run `cargo run -p verification --bin verification`.
+10. Run `cargo run -p rajac-verification --bin verification`.
 11. Run `./scripts/check-code.sh`.
 
 ## What tests and verification fixtures should be added?
@@ -161,7 +161,7 @@ This array-creation milestone should be considered complete when:
 - primitive, reference, and multi-dimensional array allocation emit the appropriate JVM instructions
 - colocated tests cover the core lowering paths
 - valid verification fixtures demonstrate OpenJDK-compatible array allocation bytecode
-- `cargo run -p verification --bin verification` passes
+- `cargo run -p rajac-verification --bin verification` passes
 - `./scripts/check-code.sh` passes
 
 That completion bar is now met for the supported array-creation forms covered by this plan.
@@ -177,5 +177,5 @@ That completion bar is now met for the supported array-creation forms covered by
 - [x] Add colocated bytecode-generation tests for array creation.
 - [x] Add valid verification fixtures for primitive, reference, and multi-dimensional arrays.
 - [x] Regenerate OpenJDK reference outputs with `./verification/compile.sh`.
-- [x] Run `cargo run -p verification --bin verification`.
+- [x] Run `cargo run -p rajac-verification --bin verification`.
 - [x] Run `./scripts/check-code.sh`.

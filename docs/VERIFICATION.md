@@ -54,7 +54,7 @@ Keep packages and folders aligned so the resulting class file paths are stable a
 Run the verification suite with:
 
 ```bash
-cargo run -p verification --bin verification
+cargo run -p rajac-verification --bin verification
 ```
 
 This compiles the valid fixtures with rajac, compares them against the OpenJDK references, then verifies invalid fixtures and prints a summary.
@@ -133,7 +133,7 @@ For verification-related work, use this sequence:
 
 1. Add or update fixtures under `verification/sources` or `verification/sources_invalid`.
 2. Regenerate OpenJDK reference output with `./verification/compile.sh` if fixture expectations changed.
-3. Run `cargo run -p verification --bin verification`.
+3. Run `cargo run -p rajac-verification --bin verification`.
 4. Run `./scripts/check-code.sh`.
 5. Commit both the fixture sources and any updated checked-in reference outputs.
 

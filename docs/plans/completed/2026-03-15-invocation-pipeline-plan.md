@@ -62,7 +62,7 @@ Verification covered both local backend behavior and full compiler output.
 - Added colocated tests in `crates/bytecode/src/bytecode.rs` for `invokestatic`,
   `invokeinterface`, and implicit private-method `invokespecial`.
 - Ran `cargo test -p rajac-bytecode`.
-- Ran `cargo run -p verification --bin verification`.
+- Ran `cargo run -p rajac-verification --bin verification`.
 - Ran `./scripts/check-code.sh`.
 
 # What concrete work items are planned?
@@ -74,5 +74,5 @@ Verification covered both local backend behavior and full compiler output.
 - [x] Refactor constructor/default-constructor/super-constructor lowering to use shared invocation helpers.
 - [x] Add or update colocated invocation tests.
 - [x] Run `cargo test -p rajac-bytecode`.
-- [x] Run `cargo run -p verification --bin verification`.
+- [x] Run `cargo run -p rajac-verification --bin verification`.
 - [x] Run `./scripts/check-code.sh`.

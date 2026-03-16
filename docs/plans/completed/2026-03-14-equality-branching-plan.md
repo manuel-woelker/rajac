@@ -10,7 +10,7 @@ That run also exposed a separate method call issue: `String.equals` was emitted 
 
 The bytecode generator now has label-based branch assembly, conditional lowering for equality, boolean materialization, `Stmt::If` emission, and loop emission for `Stmt::While`, `Stmt::DoWhile`, and `Stmt::For`.
 Verification coverage now includes equality fixtures plus control-flow fixtures for `if`, `while`, `do while`, and `for`.
-On 2026-03-15, `cargo run -p verification --bin verification` passed with 27 valid files matching and 11 invalid files verified, and `./scripts/check-code.sh` passed with 127 tests.
+On 2026-03-15, `cargo run -p rajac-verification --bin verification` passed with 27 valid files matching and 11 invalid files verified, and `./scripts/check-code.sh` passed with 127 tests.
 The remaining implementation work is no longer centered on control-flow emission.
 The bytecode generator now supports `break`, `continue`, labeled statements, and `switch` lowering in addition to equality, `if`, and loops.
 Verification coverage also includes fixtures for unlabeled and labeled control flow plus both `tableswitch` and `lookupswitch`.
@@ -94,5 +94,5 @@ Future work in this area is now about deeper semantic validation and broader swi
 - [x] Fix method invocation descriptor generation to include return types.
 - [x] Add verification sources that exercise equality inside `if` statements and loops.
 - [x] Add verification sources for `break`, `continue`, labeled statements, and `switch` when implemented.
-- [x] Run `cargo run -p verification` and compare the output.
+- [x] Run `cargo run -p rajac-verification` and compare the output.
 - [x] Run `./scripts/check-code.sh`.

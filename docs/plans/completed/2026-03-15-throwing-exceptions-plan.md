@@ -164,7 +164,7 @@ This exception-throwing milestone should be considered complete when:
 - valid verification fixtures demonstrate `athrow` in generated methods and constructors
 - abrupt completion after `throw` behaves consistently with existing semantic reachability checks
 - declared `throws` metadata is emitted if included in scope
-- `cargo run -p verification --bin verification` passes
+- `cargo run -p rajac-verification --bin verification` passes
 - `./scripts/check-code.sh` passes
 
 ## What checklist tracks the work?
@@ -178,5 +178,5 @@ This exception-throwing milestone should be considered complete when:
 - [x] Emit classfile `Exceptions` attributes from declared `throws` clauses if kept in scope.
 - [x] Add or update verification fixtures for declared `throws` metadata if emitted.
 - [x] Add or update invalid verification fixtures and error-message overrides if throw diagnostics change.
-- [x] Run `cargo run -p verification --bin verification`.
+- [x] Run `cargo run -p rajac-verification --bin verification`.
 - [x] Run `./scripts/check-code.sh`.

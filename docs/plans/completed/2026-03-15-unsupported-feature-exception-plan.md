@@ -178,7 +178,7 @@ This unsupported-feature handling milestone should be considered complete when:
 - generation surfaces a corresponding error message and diagnostic for unsupported features
 - no known user-reachable unsupported path still compiles as a silent no-op or with placeholder constant-pool indexes
 - colocated tests cover the helper and migrated unsupported cases
-- `cargo run -p verification --bin verification` passes if verification remains applicable
+- `cargo run -p rajac-verification --bin verification` passes if verification remains applicable
 - `./scripts/check-code.sh` passes
 
 ## What checklist tracks the work?
@@ -191,5 +191,5 @@ This unsupported-feature handling milestone should be considered complete when:
 - [x] Review user-reachable `unreachable!()` sites in bytecode generation and convert the unsupported ones.
 - [x] Add colocated tests for unsupported-feature exception emission and reporting.
 - [x] Add or update verification fixtures or explicitly document why verification is limited for generation-stage failures.
-- [x] Run `cargo run -p verification --bin verification` if applicable.
+- [x] Run `cargo run -p rajac-verification --bin verification` if applicable.
 - [x] Run `./scripts/check-code.sh`.

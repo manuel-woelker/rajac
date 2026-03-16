@@ -130,7 +130,7 @@ Any new persistent struct fields that store strings should use `SharedString`.
 8. Add colocated bytecode-generation tests for initializer lowering.
 9. Add valid and invalid verification fixtures for array initializer behavior.
 10. Regenerate OpenJDK reference outputs with `./verification/compile.sh`.
-11. Run `cargo run -p verification --bin verification`.
+11. Run `cargo run -p rajac-verification --bin verification`.
 12. Run `./scripts/check-code.sh`.
 
 ## What tests and verification fixtures should be added?
@@ -184,7 +184,7 @@ This array-initializer milestone should be considered complete when:
 - bytecode generation lowers supported array initializer expressions without unsupported-feature stubs
 - colocated tests cover parser, semantic, and bytecode behavior
 - verification fixtures demonstrate OpenJDK-compatible output for valid initializer cases
-- `cargo run -p verification --bin verification` passes
+- `cargo run -p rajac-verification --bin verification` passes
 - `./scripts/check-code.sh` passes
 
 That completion bar is now met for the explicit array-initializer forms covered by this plan.
@@ -203,5 +203,5 @@ That completion bar is now met for the explicit array-initializer forms covered 
 - [x] Add valid verification fixtures for array initializer bytecode.
 - [x] Add invalid verification fixtures and overrides if new semantic diagnostics need OpenJDK-compatible coverage.
 - [x] Regenerate OpenJDK reference outputs with `./verification/compile.sh`.
-- [x] Run `cargo run -p verification --bin verification`.
+- [x] Run `cargo run -p rajac-verification --bin verification`.
 - [x] Run `./scripts/check-code.sh`.
