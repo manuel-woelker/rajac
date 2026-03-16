@@ -46,4 +46,4 @@ jobs:
         run: cargo nextest run
 
       - name: Verification suite
-        run: cargo run -p verification
+        run: cargo run -p rajac-verification --bin verification
