@@ -2,6 +2,9 @@
 name = "rajac-compiler"
 version = "0.1.0"
 edition = "2024"
+description = "Compiler pipeline orchestration for rajac"
+license.workspace = true
+repository.workspace = true
 
 [[bin]]
 name = "rajac-compiler"

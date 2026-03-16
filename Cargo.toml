@@ -5,6 +5,10 @@ members = [
     "crates/base", "crates/bytecode", "crates/ballpit", "crates/token", "crates/lexer", "crates/compiler", "crates/ast", "crates/parser", "crates/verification", "crates/symbols", "crates/classpath", "crates/diagnostics", "crates/cli"
 ]
 
+[workspace.package]
+license = "MIT"
+repository = "https://github.com/manuel-woelker/rajac"
+
 [workspace.dependencies]
 expect-test = "1.5.1"
 anstream = "1.0.0"

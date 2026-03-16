@@ -2,6 +2,9 @@
 name = "rajac-parser"
 version = "0.1.0"
 edition = "2024"
+description = "Java parser for the rajac compiler"
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 rajac-lexer = { path = "../lexer" }

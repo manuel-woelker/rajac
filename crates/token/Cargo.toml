@@ -2,3 +2,6 @@
 name = "rajac-token"
 version = "0.1.0"
 edition = "2024"
+description = "Token definitions for the rajac Java frontend"
+license.workspace = true
+repository.workspace = true

@@ -2,6 +2,9 @@
 name = "rajac-classpath"
 version = "0.1.0"
 edition = "2024"
+description = "Classpath loading and symbol extraction for rajac"
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 rajac-base = { path = "../base" }
