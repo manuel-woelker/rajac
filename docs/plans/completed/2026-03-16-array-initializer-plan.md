@@ -187,19 +187,21 @@ This array-initializer milestone should be considered complete when:
 - `cargo run -p verification --bin verification` passes
 - `./scripts/check-code.sh` passes
 
+That completion bar is now met for the explicit array-initializer forms covered by this plan.
+
 ## What checklist tracks the work?
 
-- [ ] Define the AST representation for array initializer expressions.
-- [ ] Add parser support for explicit array initializer syntax.
-- [ ] Add parser regression tests for primitive, reference, and nested initializers.
-- [ ] Resolve and type array initializer expressions.
-- [ ] Add semantic diagnostics for incompatible initializer element types.
-- [ ] Lower primitive array initializer expressions in bytecode generation.
-- [ ] Lower reference array initializer expressions in bytecode generation.
-- [ ] Lower nested multidimensional array initializer expressions.
-- [ ] Add colocated bytecode-generation tests for initializer lowering.
-- [ ] Add valid verification fixtures for array initializer bytecode.
-- [ ] Add invalid verification fixtures and overrides if new semantic diagnostics need OpenJDK-compatible coverage.
-- [ ] Regenerate OpenJDK reference outputs with `./verification/compile.sh`.
-- [ ] Run `cargo run -p verification --bin verification`.
-- [ ] Run `./scripts/check-code.sh`.
+- [x] Define the AST representation for array initializer expressions.
+- [x] Add parser support for explicit array initializer syntax.
+- [x] Add parser regression tests for primitive, reference, and nested initializers.
+- [x] Resolve and type array initializer expressions.
+- [x] Add semantic diagnostics for incompatible initializer element types.
+- [x] Lower primitive array initializer expressions in bytecode generation.
+- [x] Lower reference array initializer expressions in bytecode generation.
+- [x] Lower nested multidimensional array initializer expressions.
+- [x] Add colocated bytecode-generation tests for initializer lowering.
+- [x] Add valid verification fixtures for array initializer bytecode.
+- [x] Add invalid verification fixtures and overrides if new semantic diagnostics need OpenJDK-compatible coverage.
+- [x] Regenerate OpenJDK reference outputs with `./verification/compile.sh`.
+- [x] Run `cargo run -p verification --bin verification`.
+- [x] Run `./scripts/check-code.sh`.

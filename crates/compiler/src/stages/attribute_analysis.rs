@@ -546,8 +546,13 @@ impl<'a> SemanticAnalyzer<'a> {
                 method_id,
             } => self.analyze_method_call_expr(expr_id, expr, name, args, method_id),
             Expr::New { ty, args } => self.analyze_new_expr(ty, args),
-            Expr::NewArray { ty, dimensions } => {
-                self.analyze_new_array_expr(expr_id, ty, dimensions)
+            Expr::NewArray {
+                ty,
+                dimensions,
+                initializer,
+            } => self.analyze_new_array_expr(expr_id, ty, dimensions, initializer),
+            Expr::ArrayInitializer { elements } => {
+                self.analyze_array_initializer_expr(expr_id, elements)
             }
             Expr::ArrayAccess { array, index } => self.analyze_array_access_expr(array, index),
             Expr::ArrayLength { array } => self.analyze_array_length_expr(array),
@@ -1027,7 +1032,14 @@ impl<'a> SemanticAnalyzer<'a> {
         expr_id: ExprId,
         ty: rajac_ast::AstTypeId,
         dimensions: Vec<ExprId>,
+        initializer: Option<ExprId>,
     ) -> TypeId {
+        if let Some(initializer) = initializer {
+            let array_ty = self.arena.ty(ty).ty();
+            self.validate_array_initializer(array_ty, initializer, "new");
+            return array_ty;
+        }
+
         for dimension in &dimensions {
             let dimension_ty = self.analyze_expr(*dimension);
             if !self.is_int_compatible_type(dimension_ty) {
@@ -1048,6 +1060,60 @@ impl<'a> SemanticAnalyzer<'a> {
 
         let _ = ty;
         TypeId::INVALID
+    }
+
+    fn analyze_array_initializer_expr(&mut self, expr_id: ExprId, elements: Vec<ExprId>) -> TypeId {
+        for element in elements {
+            self.analyze_expr(element);
+        }
+        self.arena.expr_typed(expr_id).ty
+    }
+
+    fn validate_array_initializer(
+        &mut self,
+        array_ty: TypeId,
+        initializer_expr: ExprId,
+        marker: &str,
+    ) -> bool {
+        let Expr::ArrayInitializer { elements } = self.arena.expr(initializer_expr).clone() else {
+            self.emit_error("array initializer expected", Some(marker));
+            return false;
+        };
+        let Type::Array(array_type) = self.symbol_table.type_arena().get(array_ty) else {
+            self.emit_error(
+                format!(
+                    "array initializer requires an array type, found {}",
+                    self.type_display_name(array_ty)
+                ),
+                Some(marker),
+            );
+            return false;
+        };
+
+        let element_ty = array_type.element_type;
+        let mut is_valid = true;
+        for element_expr in elements {
+            match self.arena.expr(element_expr).clone() {
+                Expr::ArrayInitializer { .. } => {
+                    if !self.validate_array_initializer(element_ty, element_expr, marker) {
+                        is_valid = false;
+                    }
+                }
+                _ => {
+                    let found_ty = self.analyze_expr(element_expr);
+                    if !self.check_assignment_compatibility(
+                        element_ty,
+                        found_ty,
+                        element_expr,
+                        marker,
+                    ) {
+                        is_valid = false;
+                    }
+                }
+            }
+        }
+
+        is_valid
     }
 
     fn analyze_array_access_expr(&mut self, array: ExprId, index: ExprId) -> TypeId {
@@ -2034,9 +2100,21 @@ fn fold_expr_sign_literals(expr_id: ExprId, arena: &mut AstArena) {
                 fold_expr_sign_literals(arg, arena);
             }
         }
-        Expr::NewArray { dimensions, .. } => {
+        Expr::NewArray {
+            dimensions,
+            initializer,
+            ..
+        } => {
             for dimension in dimensions {
                 fold_expr_sign_literals(dimension, arena);
+            }
+            if let Some(initializer) = initializer {
+                fold_expr_sign_literals(initializer, arena);
+            }
+        }
+        Expr::ArrayInitializer { elements } => {
+            for element in elements {
+                fold_expr_sign_literals(element, arena);
             }
         }
         Expr::ArrayAccess { array, index } => {
@@ -2846,6 +2924,42 @@ class Example {
         let diagnostics = analyze_attributes(&mut units, &mut symbol_table);
 
         assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn accepts_return_of_array_initializer() {
+        let source = r#"
+class Example {
+    int[] run() {
+        return new int[] { 1, 2, 3 };
+    }
+}
+"#;
+
+        let (mut units, mut symbol_table) = resolved_units(source);
+        let diagnostics = analyze_attributes(&mut units, &mut symbol_table);
+
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn reports_incompatible_array_initializer_element_types() {
+        let source = r#"
+class Example {
+    int[] run() {
+        return new int[] { true };
+    }
+}
+"#;
+
+        let (mut units, mut symbol_table) = resolved_units(source);
+        let diagnostics = analyze_attributes(&mut units, &mut symbol_table);
+
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| { diagnostic.message.as_str().contains("incompatible types") })
+        );
     }
 
     #[test]

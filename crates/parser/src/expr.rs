@@ -534,15 +534,31 @@ impl<'a> Parser<'a> {
                 self.bump();
                 if let Some(ty) = self.parse_type_without_array_suffix() {
                     if self.is(TokenKind::LBracket) {
-                        // Array instantiation
                         let mut dimensions = Vec::new();
+                        let mut empty_brackets = 0;
                         while self.consume(TokenKind::LBracket) {
                             if let Some(dim) = self.parse_expression() {
                                 dimensions.push(dim);
+                            } else {
+                                empty_brackets += 1;
                             }
                             self.expect(TokenKind::RBracket);
                         }
-                        let new_array = Expr::NewArray { ty, dimensions };
+                        let ty = if empty_brackets > 0 {
+                            self.arena.alloc_type(AstType::array(ty, empty_brackets))
+                        } else {
+                            ty
+                        };
+                        let initializer = if self.is(TokenKind::LBrace) {
+                            self.parse_array_initializer_expr()
+                        } else {
+                            None
+                        };
+                        let new_array = Expr::NewArray {
+                            ty,
+                            dimensions,
+                            initializer,
+                        };
                         Some(self.arena.alloc_expr(new_array))
                     } else if self.is(TokenKind::LParen) {
                         // Constructor call
@@ -566,6 +582,32 @@ impl<'a> Parser<'a> {
             }
             _ => None,
         }
+    }
+
+    fn parse_array_initializer_expr(&mut self) -> Option<ExprId> {
+        if !self.consume(TokenKind::LBrace) {
+            return None;
+        }
+
+        let mut elements = Vec::new();
+        while !self.is(TokenKind::RBrace) && !self.is(TokenKind::Eof) {
+            let element = if self.is(TokenKind::LBrace) {
+                self.parse_array_initializer_expr()
+            } else {
+                self.parse_expression()
+            }?;
+            elements.push(element);
+
+            if !self.consume(TokenKind::Comma) {
+                break;
+            }
+            if self.is(TokenKind::RBrace) {
+                break;
+            }
+        }
+
+        self.expect(TokenKind::RBrace);
+        Some(self.arena.alloc_expr(Expr::ArrayInitializer { elements }))
     }
 
     fn parse_arguments(&mut self) -> Vec<ExprId> {

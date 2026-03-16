@@ -315,6 +315,10 @@ pub enum Expr {
     NewArray {
         ty: AstTypeId,
         dimensions: Vec<ExprId>,
+        initializer: Option<ExprId>,
+    },
+    ArrayInitializer {
+        elements: Vec<ExprId>,
     },
     ArrayAccess {
         array: ExprId,

@@ -740,8 +740,15 @@ impl<'arena> CodeGenerator<'arena> {
                 self.emit(Instruction::Invokespecial(constructor_ref));
                 self.adjust_method_call_stack(&descriptor, true);
             }
-            AstExpr::NewArray { ty, dimensions } => {
-                self.emit_new_array_expression(*ty, dimensions, expr_ty)?;
+            AstExpr::NewArray {
+                ty,
+                dimensions,
+                initializer,
+            } => {
+                self.emit_new_array_expression(*ty, dimensions, *initializer, expr_ty)?;
+            }
+            AstExpr::ArrayInitializer { .. } => {
+                self.emit_unsupported_feature("array initializer expressions", "{")?;
             }
             AstExpr::ArrayAccess { array, index } => {
                 self.emit_expression(*array)?;
@@ -800,8 +807,14 @@ impl<'arena> CodeGenerator<'arena> {
         &mut self,
         ast_type_id: rajac_ast::AstTypeId,
         dimensions: &[ExprId],
+        initializer: Option<ExprId>,
         expr_ty: TypeId,
     ) -> RajacResult<()> {
+        if let Some(initializer) = initializer {
+            self.emit_array_initializer(expr_ty, initializer)?;
+            return Ok(());
+        }
+
         if dimensions.is_empty() || expr_ty == TypeId::INVALID {
             let _ = ast_type_id;
             self.emit_unsupported_feature("array creation expressions", "new")?;
@@ -832,6 +845,79 @@ impl<'arena> CodeGenerator<'arena> {
         let class_name = array_component_class_name(component_type, self.type_arena);
         let class_index = self.constant_pool.add_class(class_name)?;
         self.emit(Instruction::Anewarray(class_index));
+        Ok(())
+    }
+
+    fn emit_array_initializer(&mut self, array_ty: TypeId, initializer: ExprId) -> RajacResult<()> {
+        let AstExpr::ArrayInitializer { elements } = self.arena.expr(initializer).clone() else {
+            self.emit_unsupported_feature("array initializer expressions", "{")?;
+            return Ok(());
+        };
+
+        self.emit_int_constant(elements.len() as i32)?;
+        self.emit_array_allocation(array_ty, 1)?;
+
+        let element_ty = array_component_type(array_ty, self.type_arena);
+        for (index, element_expr) in elements.into_iter().enumerate() {
+            self.emit(Instruction::Dup);
+            self.emit_int_constant(index as i32)?;
+            self.emit_array_initializer_element(element_ty, element_expr)?;
+            self.emit(array_store_instruction(element_ty, self.type_arena));
+        }
+
+        Ok(())
+    }
+
+    fn emit_array_initializer_element(
+        &mut self,
+        element_ty: TypeId,
+        element_expr: ExprId,
+    ) -> RajacResult<()> {
+        match self.arena.expr(element_expr) {
+            AstExpr::ArrayInitializer { .. } => {
+                self.emit_array_initializer(element_ty, element_expr)
+            }
+            _ => self.emit_expression(element_expr),
+        }
+    }
+
+    fn emit_array_allocation(&mut self, array_ty: TypeId, dimensions: usize) -> RajacResult<()> {
+        if dimensions > 1 {
+            let array_descriptor = type_id_to_descriptor(array_ty, self.type_arena);
+            let class_index = self.constant_pool.add_class(array_descriptor)?;
+            self.emit(Instruction::Multianewarray(class_index, dimensions as u8));
+            self.adjust_multianewarray_stack(dimensions as i32);
+            return Ok(());
+        }
+
+        let component_type = array_component_type(array_ty, self.type_arena);
+        if let Some(array_type) = primitive_array_type(component_type, self.type_arena) {
+            self.emit(Instruction::Newarray(array_type));
+            return Ok(());
+        }
+
+        let class_name = array_component_class_name(component_type, self.type_arena);
+        let class_index = self.constant_pool.add_class(class_name)?;
+        self.emit(Instruction::Anewarray(class_index));
+        Ok(())
+    }
+
+    fn emit_int_constant(&mut self, value: i32) -> RajacResult<()> {
+        match value {
+            -1 => self.emit(Instruction::Iconst_m1),
+            0 => self.emit(Instruction::Iconst_0),
+            1 => self.emit(Instruction::Iconst_1),
+            2 => self.emit(Instruction::Iconst_2),
+            3 => self.emit(Instruction::Iconst_3),
+            4 => self.emit(Instruction::Iconst_4),
+            5 => self.emit(Instruction::Iconst_5),
+            -128..=127 => self.emit(Instruction::Bipush(value as i8)),
+            -32768..=32767 => self.emit(Instruction::Sipush(value as i16)),
+            _ => {
+                let constant_index = self.constant_pool.add_integer(value)?;
+                self.emit_loadable_constant(constant_index);
+            }
+        }
         Ok(())
     }
 
@@ -2175,6 +2261,7 @@ impl<'arena> CodeGenerator<'arena> {
             AstExpr::MethodCall { .. }
             | AstExpr::New { .. }
             | AstExpr::NewArray { .. }
+            | AstExpr::ArrayInitializer { .. }
             | AstExpr::ArrayAccess { .. }
             | AstExpr::ArrayLength { .. }
             | AstExpr::This(_)
@@ -2704,6 +2791,25 @@ fn array_component_class_name(type_id: TypeId, type_arena: &TypeArena) -> String
     }
 }
 
+fn array_store_instruction(type_id: TypeId, type_arena: &TypeArena) -> Instruction {
+    match type_arena.get(type_id) {
+        Type::Primitive(rajac_types::PrimitiveType::Boolean)
+        | Type::Primitive(rajac_types::PrimitiveType::Byte) => Instruction::Bastore,
+        Type::Primitive(rajac_types::PrimitiveType::Char) => Instruction::Castore,
+        Type::Primitive(rajac_types::PrimitiveType::Short) => Instruction::Sastore,
+        Type::Primitive(rajac_types::PrimitiveType::Int) => Instruction::Iastore,
+        Type::Primitive(rajac_types::PrimitiveType::Long) => Instruction::Lastore,
+        Type::Primitive(rajac_types::PrimitiveType::Float) => Instruction::Fastore,
+        Type::Primitive(rajac_types::PrimitiveType::Double) => Instruction::Dastore,
+        Type::Primitive(rajac_types::PrimitiveType::Void)
+        | Type::Class(_)
+        | Type::Array(_)
+        | Type::TypeVariable(_)
+        | Type::Wildcard(_)
+        | Type::Error => Instruction::Aastore,
+    }
+}
+
 fn method_descriptor_from_signature(
     signature: &rajac_types::MethodSignature,
     type_arena: &TypeArena,
@@ -2780,6 +2886,8 @@ fn stack_effect(instr: &Instruction) -> i32 {
         Newarray(_) => 0,
         Anewarray(_) => 0,
         Multianewarray(_, _) => 0,
+        Iastore | Fastore | Aastore | Bastore | Castore | Sastore => -3,
+        Lastore | Dastore => -4,
         Arraylength => 0,
         Athrow => -1,
         Checkcast(_) => 0,
@@ -3256,6 +3364,7 @@ mod tests {
         let new_array = arena.alloc_expr(AstExpr::NewArray {
             ty: ast_int_type,
             dimensions: vec![dimension],
+            initializer: None,
         });
         arena.expr_typed_mut(new_array).ty = array_type;
         let expr_stmt = arena.alloc_stmt(Stmt::Expr(new_array));
@@ -3308,6 +3417,7 @@ mod tests {
         let new_array = arena.alloc_expr(AstExpr::NewArray {
             ty: ast_string_type,
             dimensions: vec![dimension],
+            initializer: None,
         });
         arena.expr_typed_mut(new_array).ty = array_type;
         let expr_stmt = arena.alloc_stmt(Stmt::Expr(new_array));
@@ -3366,6 +3476,7 @@ mod tests {
         let new_array = arena.alloc_expr(AstExpr::NewArray {
             ty: ast_int_type,
             dimensions: vec![rows, cols],
+            initializer: None,
         });
         arena.expr_typed_mut(new_array).ty = array_type;
         let expr_stmt = arena.alloc_stmt(Stmt::Expr(new_array));
@@ -3394,6 +3505,143 @@ mod tests {
         );
         assert_eq!(instructions[3], Instruction::Pop);
         assert_eq!(instructions[4], Instruction::Return);
+
+        Ok(())
+    }
+
+    #[test]
+    fn primitive_array_initializer_expressions_emit_stores() -> RajacResult<()> {
+        let mut arena = AstArena::new();
+        let mut symbol_table = SymbolTable::new();
+        let mut constant_pool = ConstantPool::new();
+
+        let int_type = symbol_table
+            .primitive_type_id("int")
+            .expect("missing int type");
+        let array_type = symbol_table.type_arena_mut().alloc(Type::array(int_type));
+        let ast_element_type = arena.alloc_type(AstType::Primitive {
+            kind: PrimitiveType::Int,
+            ty: int_type,
+        });
+        let ast_int_type = arena.alloc_type(AstType::array(ast_element_type, 1));
+        let first = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Int,
+            value: "1".into(),
+        }));
+        let second = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Int,
+            value: "2".into(),
+        }));
+        let initializer = arena.alloc_expr(AstExpr::ArrayInitializer {
+            elements: vec![first, second],
+        });
+        let new_array = arena.alloc_expr(AstExpr::NewArray {
+            ty: ast_int_type,
+            dimensions: vec![],
+            initializer: Some(initializer),
+        });
+        arena.expr_typed_mut(new_array).ty = array_type;
+        let expr_stmt = arena.alloc_stmt(Stmt::Expr(new_array));
+        let body = arena.alloc_stmt(Stmt::Block(vec![expr_stmt]));
+
+        let mut generator = CodeGenerator::new(
+            &arena,
+            symbol_table.type_arena(),
+            &symbol_table,
+            &mut constant_pool,
+        );
+        let (instructions, _, _) = generator.generate_method_body(false, &[], body)?;
+
+        assert_eq!(
+            instructions,
+            vec![
+                Instruction::Iconst_2,
+                Instruction::Newarray(JvmArrayType::Int),
+                Instruction::Dup,
+                Instruction::Iconst_0,
+                Instruction::Iconst_1,
+                Instruction::Iastore,
+                Instruction::Dup,
+                Instruction::Iconst_1,
+                Instruction::Iconst_2,
+                Instruction::Iastore,
+                Instruction::Pop,
+                Instruction::Return,
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn nested_array_initializer_expressions_emit_recursive_array_construction() -> RajacResult<()> {
+        let mut arena = AstArena::new();
+        let mut symbol_table = SymbolTable::new();
+        let mut constant_pool = ConstantPool::new();
+
+        let int_type = symbol_table
+            .primitive_type_id("int")
+            .expect("missing int type");
+        let inner_array_type = symbol_table.type_arena_mut().alloc(Type::array(int_type));
+        let outer_array_type = symbol_table
+            .type_arena_mut()
+            .alloc(Type::array(inner_array_type));
+        let ast_int_type = arena.alloc_type(AstType::Primitive {
+            kind: PrimitiveType::Int,
+            ty: int_type,
+        });
+        let ast_array_type = arena.alloc_type(AstType::array(ast_int_type, 2));
+        let first_value = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Int,
+            value: "1".into(),
+        }));
+        let first_inner = arena.alloc_expr(AstExpr::ArrayInitializer {
+            elements: vec![first_value],
+        });
+        let second_value = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Int,
+            value: "2".into(),
+        }));
+        let third_value = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Int,
+            value: "3".into(),
+        }));
+        let second_inner = arena.alloc_expr(AstExpr::ArrayInitializer {
+            elements: vec![second_value, third_value],
+        });
+        let outer_initializer = arena.alloc_expr(AstExpr::ArrayInitializer {
+            elements: vec![first_inner, second_inner],
+        });
+        let new_array = arena.alloc_expr(AstExpr::NewArray {
+            ty: ast_array_type,
+            dimensions: vec![],
+            initializer: Some(outer_initializer),
+        });
+        arena.expr_typed_mut(new_array).ty = outer_array_type;
+        let expr_stmt = arena.alloc_stmt(Stmt::Expr(new_array));
+        let body = arena.alloc_stmt(Stmt::Block(vec![expr_stmt]));
+
+        let mut generator = CodeGenerator::new(
+            &arena,
+            symbol_table.type_arena(),
+            &symbol_table,
+            &mut constant_pool,
+        );
+        let (instructions, _, _) = generator.generate_method_body(false, &[], body)?;
+
+        assert!(matches!(instructions[0], Instruction::Iconst_2));
+        let Instruction::Anewarray(class_index) = instructions[1] else {
+            panic!("expected outer anewarray");
+        };
+        assert_eq!(
+            constant_pool
+                .try_get_class(class_index)
+                .expect("class constant"),
+            "[I"
+        );
+        assert!(instructions.contains(&Instruction::Iastore));
+        assert!(instructions.contains(&Instruction::Aastore));
+        assert_eq!(instructions.last(), Some(&Instruction::Return));
 
         Ok(())
     }

@@ -769,9 +769,19 @@ fn resolve_expr(
                 types.push(*ty);
                 exprs.extend(args.iter().copied());
             }
-            rajac_ast::Expr::NewArray { ty, dimensions } => {
+            rajac_ast::Expr::NewArray {
+                ty,
+                dimensions,
+                initializer,
+            } => {
                 types.push(*ty);
                 exprs.extend(dimensions.iter().copied());
+                if let Some(initializer) = initializer {
+                    exprs.push(*initializer);
+                }
+            }
+            rajac_ast::Expr::ArrayInitializer { elements } => {
+                exprs.extend(elements.iter().copied())
             }
             rajac_ast::Expr::ArrayAccess { array, index } => {
                 exprs.push(*array);
@@ -892,16 +902,25 @@ fn resolve_expr(
         rajac_ast::Expr::New { ty, .. } => {
             expr_ty = arena.ty(*ty).ty();
         }
-        rajac_ast::Expr::NewArray { ty, dimensions } => {
-            let element_id = arena.ty(*ty).ty();
-            if element_id != TypeId::INVALID {
-                let mut array_id = element_id;
-                for _ in 0..dimensions.len() {
-                    array_id = symbol_table.type_arena_mut().alloc(Type::array(array_id));
+        rajac_ast::Expr::NewArray {
+            ty,
+            dimensions,
+            initializer,
+        } => {
+            if initializer.is_some() {
+                expr_ty = arena.ty(*ty).ty();
+            } else {
+                let element_id = arena.ty(*ty).ty();
+                if element_id != TypeId::INVALID {
+                    let mut array_id = element_id;
+                    for _ in 0..dimensions.len() {
+                        array_id = symbol_table.type_arena_mut().alloc(Type::array(array_id));
+                    }
+                    expr_ty = array_id;
                 }
-                expr_ty = array_id;
             }
         }
+        rajac_ast::Expr::ArrayInitializer { .. } => {}
         rajac_ast::Expr::ArrayAccess { array, .. } => {
             let array_ty = arena.expr_typed(*array).ty;
             expr_ty = array_element_type(array_ty, symbol_table);

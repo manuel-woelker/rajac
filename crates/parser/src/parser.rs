@@ -992,10 +992,16 @@ mod tests {
         let Stmt::Return(Some(expr_id)) = result.arena.stmt(statements[0]) else {
             panic!("expected return with expression");
         };
-        let Expr::NewArray { dimensions, .. } = result.arena.expr(*expr_id) else {
+        let Expr::NewArray {
+            dimensions,
+            initializer,
+            ..
+        } = result.arena.expr(*expr_id)
+        else {
             panic!("expected new array expression");
         };
         assert_eq!(dimensions.len(), 1);
+        assert!(initializer.is_none());
     }
 
     #[test]
@@ -1024,10 +1030,100 @@ mod tests {
         let Stmt::Return(Some(expr_id)) = result.arena.stmt(statements[0]) else {
             panic!("expected return with expression");
         };
-        let Expr::NewArray { dimensions, .. } = result.arena.expr(*expr_id) else {
+        let Expr::NewArray {
+            dimensions,
+            initializer,
+            ..
+        } = result.arena.expr(*expr_id)
+        else {
             panic!("expected new array expression");
         };
         assert_eq!(dimensions.len(), 2);
+        assert!(initializer.is_none());
+    }
+
+    #[test]
+    fn test_return_new_array_initializer_expression() {
+        let source = r#"
+            class Arrays {
+                int[] make() {
+                    return new int[] { 1, 2, 3 };
+                }
+            }
+        "#;
+        let result = parse_src(source);
+        let class = result.arena.class_decl(result.ast.classes[0]);
+        let method = class
+            .members
+            .iter()
+            .find_map(|member_id| match result.arena.class_member(*member_id) {
+                ClassMember::Method(method) => Some(method),
+                _ => None,
+            })
+            .expect("method");
+        let body_id = method.body.expect("method body");
+        let Stmt::Block(statements) = result.arena.stmt(body_id) else {
+            panic!("expected method body block");
+        };
+        let Stmt::Return(Some(expr_id)) = result.arena.stmt(statements[0]) else {
+            panic!("expected return with expression");
+        };
+        let Expr::NewArray {
+            dimensions,
+            initializer: Some(initializer),
+            ..
+        } = result.arena.expr(*expr_id)
+        else {
+            panic!("expected new array with initializer");
+        };
+        assert!(dimensions.is_empty());
+        let Expr::ArrayInitializer { elements } = result.arena.expr(*initializer) else {
+            panic!("expected array initializer");
+        };
+        assert_eq!(elements.len(), 3);
+    }
+
+    #[test]
+    fn test_return_nested_array_initializer_expression() {
+        let source = r#"
+            class Arrays {
+                int[][] make() {
+                    return new int[][] { { 1 }, { 2, 3 } };
+                }
+            }
+        "#;
+        let result = parse_src(source);
+        let class = result.arena.class_decl(result.ast.classes[0]);
+        let method = class
+            .members
+            .iter()
+            .find_map(|member_id| match result.arena.class_member(*member_id) {
+                ClassMember::Method(method) => Some(method),
+                _ => None,
+            })
+            .expect("method");
+        let body_id = method.body.expect("method body");
+        let Stmt::Block(statements) = result.arena.stmt(body_id) else {
+            panic!("expected method body block");
+        };
+        let Stmt::Return(Some(expr_id)) = result.arena.stmt(statements[0]) else {
+            panic!("expected return with expression");
+        };
+        let Expr::NewArray {
+            initializer: Some(initializer),
+            ..
+        } = result.arena.expr(*expr_id)
+        else {
+            panic!("expected new array with initializer");
+        };
+        let Expr::ArrayInitializer { elements } = result.arena.expr(*initializer) else {
+            panic!("expected outer array initializer");
+        };
+        assert_eq!(elements.len(), 2);
+        assert!(matches!(
+            result.arena.expr(elements[0]),
+            Expr::ArrayInitializer { .. }
+        ));
     }
 
     #[test]
