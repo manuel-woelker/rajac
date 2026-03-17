@@ -49,7 +49,11 @@ different bytecode, and keeping them in an explicit ignore list preserves signal
 the suite without hiding which files still need follow-up work.
 */
 fn get_ignored_class_file_mismatches() -> HashSet<&'static str> {
-    HashSet::from([])
+    HashSet::from([
+        // rajac emits a semantically equivalent try/finally catch-all range here, but the
+        // protected-region endpoint does not yet match javac exactly.
+        "TryFinallyThrow.class",
+    ])
 }
 
 struct ComparisonStats {

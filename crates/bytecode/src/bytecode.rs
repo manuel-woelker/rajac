@@ -8,7 +8,7 @@ use rajac_symbols::{SymbolKind, SymbolTable};
 use rajac_types::{Ident, MethodId, Type, TypeArena, TypeId};
 use ristretto_classfile::ConstantPool;
 use ristretto_classfile::attributes::{
-    ArrayType as JvmArrayType, Instruction, LookupSwitch, TableSwitch,
+    ArrayType as JvmArrayType, ExceptionTableEntry, Instruction, LookupSwitch, TableSwitch,
 };
 
 #[derive(Clone, Debug)]
@@ -21,6 +21,12 @@ pub struct UnsupportedFeature {
 
 pub struct BytecodeEmitter {
     code_items: Vec<CodeItem>,
+}
+
+#[derive(Debug)]
+struct FinalizedCode {
+    instructions: Vec<Instruction>,
+    label_offsets: std::collections::HashMap<LabelId, u16>,
 }
 
 impl BytecodeEmitter {
@@ -49,6 +55,19 @@ impl BytecodeEmitter {
         self.code_items.push(CodeItem::Switch(switch));
     }
 
+    fn is_redundant_goto(&self, index: usize, target: LabelId) -> bool {
+        for item in self.code_items.iter().skip(index + 1) {
+            match item {
+                CodeItem::Label(label) if *label == target => return true,
+                CodeItem::Label(_) => continue,
+                CodeItem::Instruction(_) | CodeItem::Branch { .. } | CodeItem::Switch(_) => {
+                    return false;
+                }
+            }
+        }
+        false
+    }
+
     fn is_empty(&self) -> bool {
         self.code_items
             .iter()
@@ -62,13 +81,22 @@ impl BytecodeEmitter {
         })
     }
 
-    fn finalize(&self) -> Vec<Instruction> {
+    fn finalize(&self) -> FinalizedCode {
         let mut offset = 0u16;
         let mut labels = std::collections::HashMap::new();
 
-        for item in &self.code_items {
+        for (index, item) in self.code_items.iter().enumerate() {
             match item {
                 CodeItem::Instruction(_) | CodeItem::Branch { .. } => {
+                    if matches!(
+                        item,
+                        CodeItem::Branch {
+                            kind: BranchKind::Goto,
+                            target
+                        } if self.is_redundant_goto(index, *target)
+                    ) {
+                        continue;
+                    }
                     offset = offset.saturating_add(1);
                 }
                 CodeItem::Switch(_) => {
@@ -97,10 +125,16 @@ impl BytecodeEmitter {
             CodeItem::Instruction(_) | CodeItem::Label(_) => false,
         });
 
-        for item in &self.code_items {
+        for (index, item) in self.code_items.iter().enumerate() {
             match item {
                 CodeItem::Instruction(instruction) => instructions.push(instruction.clone()),
                 CodeItem::Branch { kind, target } => {
+                    if matches!(
+                        kind,
+                        BranchKind::Goto if self.is_redundant_goto(index, *target)
+                    ) {
+                        continue;
+                    }
                     let offset = labels.get(target).copied().unwrap_or_default();
                     instructions.push(branch_instruction(*kind, offset));
                 }
@@ -115,7 +149,10 @@ impl BytecodeEmitter {
             instructions.push(Instruction::Nop);
         }
 
-        instructions
+        FinalizedCode {
+            instructions,
+            label_offsets: labels,
+        }
     }
 }
 
@@ -138,8 +175,17 @@ pub struct CodeGenerator<'arena> {
     local_vars: std::collections::HashMap<String, LocalVar>,
     current_class_internal_name: Option<SharedString>,
     control_flow_stack: Vec<ControlFlowFrame>,
+    finally_contexts: Vec<FinallyContext>,
+    exception_handlers: Vec<PendingExceptionHandler>,
     next_label_id: u32,
     unsupported_features: Vec<UnsupportedFeature>,
+}
+
+pub struct GeneratedBody {
+    pub instructions: Vec<Instruction>,
+    pub max_stack: u16,
+    pub max_locals: u16,
+    pub exception_table: Vec<ExceptionTableEntry>,
 }
 
 enum ConstructorPrologueCall {
@@ -173,6 +219,8 @@ impl<'arena> CodeGenerator<'arena> {
             local_vars: std::collections::HashMap::new(),
             current_class_internal_name: None,
             control_flow_stack: Vec::new(),
+            finally_contexts: Vec::new(),
+            exception_handlers: Vec::new(),
             next_label_id: 0,
             unsupported_features: Vec::new(),
         }
@@ -187,7 +235,7 @@ impl<'arena> CodeGenerator<'arena> {
         is_static: bool,
         params: &[ParamId],
         body_id: StmtId,
-    ) -> RajacResult<(Vec<Instruction>, u16, u16)> {
+    ) -> RajacResult<GeneratedBody> {
         self.initialize_method_locals(is_static, params);
 
         self.emit_statement(body_id)?;
@@ -210,7 +258,7 @@ impl<'arena> CodeGenerator<'arena> {
             self.emit(Instruction::Return);
         }
 
-        Ok((self.emitter.finalize(), self.max_stack, self.max_locals))
+        self.finish_generated_body()
     }
 
     pub fn generate_constructor_body(
@@ -219,7 +267,7 @@ impl<'arena> CodeGenerator<'arena> {
         body_id: Option<StmtId>,
         class_members: &[ClassMemberId],
         super_internal_name: &str,
-    ) -> RajacResult<(Vec<Instruction>, u16, u16)> {
+    ) -> RajacResult<GeneratedBody> {
         self.initialize_method_locals(false, params);
 
         if let Some(body_id) = body_id {
@@ -267,7 +315,7 @@ impl<'arena> CodeGenerator<'arena> {
             self.emit(Instruction::Return);
         }
 
-        Ok((self.emitter.finalize(), self.max_stack, self.max_locals))
+        self.finish_generated_body()
     }
 
     pub fn generate_enum_constructor_body(
@@ -276,7 +324,7 @@ impl<'arena> CodeGenerator<'arena> {
         body_id: Option<StmtId>,
         class_members: &[ClassMemberId],
         super_internal_name: &str,
-    ) -> RajacResult<(Vec<Instruction>, u16, u16)> {
+    ) -> RajacResult<GeneratedBody> {
         self.initialize_enum_constructor_locals(params);
 
         self.emit(Instruction::Aload_0);
@@ -318,7 +366,7 @@ impl<'arena> CodeGenerator<'arena> {
             self.emit(Instruction::Return);
         }
 
-        Ok((self.emitter.finalize(), self.max_stack, self.max_locals))
+        self.finish_generated_body()
     }
 
     pub fn generate_enum_clinit_body(
@@ -326,7 +374,7 @@ impl<'arena> CodeGenerator<'arena> {
         this_internal_name: &str,
         entries: &[EnumEntry],
         constructor_descriptors: &[String],
-    ) -> RajacResult<(Vec<Instruction>, u16, u16)> {
+    ) -> RajacResult<GeneratedBody> {
         self.initialize_method_locals(true, &[]);
 
         let this_class = self.constant_pool.add_class(this_internal_name)?;
@@ -376,7 +424,7 @@ impl<'arena> CodeGenerator<'arena> {
         self.ensure_clean_stack("implicit return at end of enum class initializer")?;
         self.emit(Instruction::Return);
 
-        Ok((self.emitter.finalize(), self.max_stack, self.max_locals))
+        self.finish_generated_body()
     }
 
     fn emit(&mut self, instruction: Instruction) {
@@ -398,6 +446,53 @@ impl<'arena> CodeGenerator<'arena> {
 
     pub fn take_unsupported_features(&mut self) -> Vec<UnsupportedFeature> {
         std::mem::take(&mut self.unsupported_features)
+    }
+
+    fn finish_generated_body(&mut self) -> RajacResult<GeneratedBody> {
+        let finalized = self.emitter.finalize();
+        let exception_table = self.resolve_exception_table(&finalized.label_offsets)?;
+        Ok(GeneratedBody {
+            instructions: finalized.instructions,
+            max_stack: self.max_stack,
+            max_locals: self.max_locals,
+            exception_table,
+        })
+    }
+
+    fn resolve_exception_table(
+        &self,
+        label_offsets: &std::collections::HashMap<LabelId, u16>,
+    ) -> RajacResult<Vec<ExceptionTableEntry>> {
+        let mut exception_table = Vec::new();
+
+        for handler in &self.exception_handlers {
+            let Some(start_pc) = label_offsets.get(&handler.start_label).copied() else {
+                continue;
+            };
+            let Some(end_pc) = label_offsets.get(&handler.end_label).copied() else {
+                continue;
+            };
+            if start_pc == end_pc {
+                continue;
+            }
+            let handler_pc = label_offsets
+                .get(&handler.handler_label)
+                .copied()
+                .ok_or_else(|| {
+                    rajac_base::err!(
+                        "internal bytecode error: missing handler label {:?}",
+                        handler.handler_label
+                    )
+                })?;
+
+            exception_table.push(ExceptionTableEntry {
+                range_pc: start_pc..end_pc,
+                handler_pc,
+                catch_type: handler.catch_type,
+            });
+        }
+
+        Ok(exception_table)
     }
 
     fn bind_label(&mut self, label: LabelId) {
@@ -431,15 +526,10 @@ impl<'arena> CodeGenerator<'arena> {
                 self.discard_statement_expression_result(initial_stack)?;
             }
             Stmt::Return(None) => {
-                self.ensure_clean_stack("void return")?;
-                self.emit(Instruction::Return);
+                self.emit_void_return_statement()?;
             }
             Stmt::Return(Some(expr_id)) => {
-                self.emit_expression(*expr_id)?;
-                let expr_ty = self.expression_type_id(*expr_id);
-                let expr_kind = self.kind_for_expr(*expr_id, expr_ty);
-                self.emit(self.return_instruction_for_kind(expr_kind));
-                self.ensure_clean_stack("value return")?;
+                self.emit_value_return_statement(*expr_id)?;
             }
             Stmt::LocalVar {
                 ty,
@@ -499,10 +589,10 @@ impl<'arena> CodeGenerator<'arena> {
                 self.emit_switch_statement(*expr, cases)?;
             }
             Stmt::Break(label) => {
-                self.emit_break_statement(label.as_ref());
+                self.emit_break_statement(label.as_ref())?;
             }
             Stmt::Continue(label) => {
-                self.emit_continue_statement(label.as_ref());
+                self.emit_continue_statement(label.as_ref())?;
             }
             Stmt::Label(name, body) => match self.arena.stmt(*body).clone() {
                 Stmt::While { condition, body } => {
@@ -526,6 +616,7 @@ impl<'arena> CodeGenerator<'arena> {
                         break_label: end_label,
                         continue_label: None,
                         supports_unlabeled_break: false,
+                        finally_depth: self.finally_contexts.len(),
                     });
                     self.emit_statement(*body)?;
                     self.pop_control_flow();
@@ -536,8 +627,12 @@ impl<'arena> CodeGenerator<'arena> {
                 self.emit_expression(*expr_id)?;
                 self.emit(Instruction::Athrow);
             }
-            Stmt::Try { .. } => {
-                self.emit_unsupported_feature("try statements", "try")?;
+            Stmt::Try {
+                try_block,
+                catches,
+                finally_block,
+            } => {
+                self.emit_try_statement(*try_block, catches, *finally_block)?;
             }
             Stmt::Synchronized { .. } => {
                 self.emit_unsupported_feature("synchronized statements", "synchronized")?;
@@ -560,6 +655,7 @@ impl<'arena> CodeGenerator<'arena> {
             break_label: loop_end,
             continue_label: Some(loop_head),
             supports_unlabeled_break: true,
+            finally_depth: self.finally_contexts.len(),
         });
 
         self.bind_label(loop_head);
@@ -591,6 +687,7 @@ impl<'arena> CodeGenerator<'arena> {
             break_label: loop_end,
             continue_label: Some(loop_continue),
             supports_unlabeled_break: true,
+            finally_depth: self.finally_contexts.len(),
         });
 
         self.bind_label(loop_body);
@@ -627,6 +724,7 @@ impl<'arena> CodeGenerator<'arena> {
             break_label: loop_end,
             continue_label: Some(loop_continue),
             supports_unlabeled_break: true,
+            finally_depth: self.finally_contexts.len(),
         });
 
         self.bind_label(loop_head);
@@ -648,6 +746,73 @@ impl<'arena> CodeGenerator<'arena> {
 
         self.pop_control_flow();
         self.bind_label(loop_end);
+        Ok(())
+    }
+
+    fn emit_try_statement(
+        &mut self,
+        try_block: StmtId,
+        catches: &[rajac_ast::CatchClause],
+        finally_block: Option<StmtId>,
+    ) -> RajacResult<()> {
+        if !catches.is_empty() {
+            return self.emit_unsupported_feature("try catch statements", "catch");
+        }
+
+        let Some(finally_block) = finally_block else {
+            self.emit_statement(try_block)?;
+            return Ok(());
+        };
+
+        let try_start = self.new_label();
+        let try_end = self.new_label();
+        let handler_label = self.new_label();
+        let end_label = self.new_label();
+
+        self.bind_label(try_start);
+        self.finally_contexts.push(FinallyContext {
+            finally_block,
+            exit_thunks: Vec::new(),
+        });
+        self.emit_statement(try_block)?;
+        let finally_context = self
+            .finally_contexts
+            .pop()
+            .expect("finally context stack must contain the active try/finally");
+        self.bind_label(try_end);
+
+        let try_can_complete_normally = !self.statement_terminates(try_block);
+        if try_can_complete_normally {
+            self.emit_statement(finally_context.finally_block)?;
+            self.emit_branch(BranchKind::Goto, end_label);
+            self.current_stack = 0;
+        }
+
+        self.emit_finally_exit_thunks(finally_context.finally_block, finally_context.exit_thunks)?;
+
+        let exception_slot = self.allocate_local(LocalVarKind::Reference);
+        self.bind_label(handler_label);
+        self.current_stack = 1;
+        self.max_stack = self.max_stack.max(1);
+        self.emit_store(exception_slot, LocalVarKind::Reference);
+        self.emit_statement(finally_context.finally_block)?;
+        if !self.statement_terminates(finally_context.finally_block) {
+            self.emit_abrupt_action(ExitAction::Rethrow {
+                slot: exception_slot,
+            })?;
+        }
+        self.bind_label(end_label);
+        if try_can_complete_normally {
+            self.emit(Instruction::Nop);
+        }
+
+        self.exception_handlers.push(PendingExceptionHandler {
+            start_label: try_start,
+            end_label: try_end,
+            handler_label,
+            catch_type: 0,
+        });
+
         Ok(())
     }
 
@@ -684,6 +849,7 @@ impl<'arena> CodeGenerator<'arena> {
             break_label: end_label,
             continue_label: None,
             supports_unlabeled_break: true,
+            finally_depth: self.finally_contexts.len(),
         });
 
         for (case, case_label) in cases.iter().zip(case_labels.iter().copied()) {
@@ -698,18 +864,24 @@ impl<'arena> CodeGenerator<'arena> {
         Ok(())
     }
 
-    fn emit_break_statement(&mut self, label: Option<&Ident>) {
-        if let Some(target) = self.resolve_break_target(label) {
-            self.emit_branch(BranchKind::Goto, target);
-            self.current_stack = 0;
+    fn emit_break_statement(&mut self, label: Option<&Ident>) -> RajacResult<()> {
+        if let Some((target, finally_depth)) = self.resolve_break_target(label) {
+            self.emit_abrupt_action(ExitAction::Branch {
+                label: target,
+                finally_depth,
+            })?;
         }
+        Ok(())
     }
 
-    fn emit_continue_statement(&mut self, label: Option<&Ident>) {
-        if let Some(target) = self.resolve_continue_target(label) {
-            self.emit_branch(BranchKind::Goto, target);
-            self.current_stack = 0;
+    fn emit_continue_statement(&mut self, label: Option<&Ident>) -> RajacResult<()> {
+        if let Some((target, finally_depth)) = self.resolve_continue_target(label) {
+            self.emit_abrupt_action(ExitAction::Branch {
+                label: target,
+                finally_depth,
+            })?;
         }
+        Ok(())
     }
 
     fn push_control_flow(&mut self, frame: ControlFlowFrame) {
@@ -720,7 +892,7 @@ impl<'arena> CodeGenerator<'arena> {
         let _ = self.control_flow_stack.pop();
     }
 
-    fn resolve_break_target(&self, label: Option<&Ident>) -> Option<LabelId> {
+    fn resolve_break_target(&self, label: Option<&Ident>) -> Option<(LabelId, usize)> {
         match label {
             Some(label) => self
                 .control_flow_stack
@@ -732,17 +904,17 @@ impl<'arena> CodeGenerator<'arena> {
                         .as_ref()
                         .is_some_and(|name| name.name == label.name)
                 })
-                .map(|frame| frame.break_label),
+                .map(|frame| (frame.break_label, frame.finally_depth)),
             None => self
                 .control_flow_stack
                 .iter()
                 .rev()
                 .find(|frame| frame.supports_unlabeled_break)
-                .map(|frame| frame.break_label),
+                .map(|frame| (frame.break_label, frame.finally_depth)),
         }
     }
 
-    fn resolve_continue_target(&self, label: Option<&Ident>) -> Option<LabelId> {
+    fn resolve_continue_target(&self, label: Option<&Ident>) -> Option<(LabelId, usize)> {
         match label {
             Some(label) => self
                 .control_flow_stack
@@ -755,13 +927,114 @@ impl<'arena> CodeGenerator<'arena> {
                             .as_ref()
                             .is_some_and(|name| name.name == label.name)
                 })
-                .and_then(|frame| frame.continue_label),
-            None => self
-                .control_flow_stack
-                .iter()
-                .rev()
-                .find_map(|frame| frame.continue_label),
+                .and_then(|frame| {
+                    frame
+                        .continue_label
+                        .map(|target| (target, frame.finally_depth))
+                }),
+            None => self.control_flow_stack.iter().rev().find_map(|frame| {
+                frame
+                    .continue_label
+                    .map(|target| (target, frame.finally_depth))
+            }),
         }
+    }
+
+    fn emit_void_return_statement(&mut self) -> RajacResult<()> {
+        if self.finally_contexts.is_empty() {
+            self.ensure_clean_stack("void return")?;
+            self.emit(Instruction::Return);
+            return Ok(());
+        }
+        self.emit_abrupt_action(ExitAction::ReturnVoid)
+    }
+
+    fn emit_value_return_statement(&mut self, expr_id: ExprId) -> RajacResult<()> {
+        self.emit_expression(expr_id)?;
+        let expr_ty = self.expression_type_id(expr_id);
+        let expr_kind = self.kind_for_expr(expr_id, expr_ty);
+        if self.finally_contexts.is_empty() {
+            self.emit(self.return_instruction_for_kind(expr_kind));
+            self.ensure_clean_stack("value return")?;
+            return Ok(());
+        }
+        let slot = self.allocate_local(expr_kind);
+        self.emit_store(slot, expr_kind);
+        self.emit_abrupt_action(ExitAction::ReturnValue {
+            slot,
+            kind: expr_kind,
+        })
+    }
+
+    fn emit_abrupt_action(&mut self, action: ExitAction) -> RajacResult<()> {
+        let target_finally_depth = action.target_finally_depth();
+        if self.finally_contexts.len() > target_finally_depth {
+            let label = self.label_for_finally_action(action);
+            self.emit_branch(BranchKind::Goto, label);
+            self.current_stack = 0;
+            return Ok(());
+        }
+
+        self.emit_terminal_action(action)
+    }
+
+    fn label_for_finally_action(&mut self, action: ExitAction) -> LabelId {
+        if let Some(existing_label) = self.finally_contexts.last().and_then(|context| {
+            context
+                .exit_thunks
+                .iter()
+                .find(|(existing, _)| *existing == action)
+                .map(|(_, label)| *label)
+        }) {
+            return existing_label;
+        }
+
+        let label = self.new_label();
+        if let Some(context) = self.finally_contexts.last_mut() {
+            context.exit_thunks.push((action, label));
+        }
+        label
+    }
+
+    fn emit_terminal_action(&mut self, action: ExitAction) -> RajacResult<()> {
+        match action {
+            ExitAction::ReturnVoid => {
+                self.ensure_clean_stack("void return")?;
+                self.emit(Instruction::Return);
+                Ok(())
+            }
+            ExitAction::ReturnValue { slot, kind } => {
+                self.emit_load(slot, kind);
+                self.emit(self.return_instruction_for_kind(kind));
+                self.ensure_clean_stack("value return")?;
+                Ok(())
+            }
+            ExitAction::Branch { label, .. } => {
+                self.emit_branch(BranchKind::Goto, label);
+                self.current_stack = 0;
+                Ok(())
+            }
+            ExitAction::Rethrow { slot } => {
+                self.emit_load(slot, LocalVarKind::Reference);
+                self.emit(Instruction::Athrow);
+                Ok(())
+            }
+        }
+    }
+
+    fn emit_finally_exit_thunks(
+        &mut self,
+        finally_block: StmtId,
+        exit_thunks: Vec<(ExitAction, LabelId)>,
+    ) -> RajacResult<()> {
+        for (action, label) in exit_thunks {
+            self.bind_label(label);
+            self.emit_statement(finally_block)?;
+            if !self.statement_terminates(finally_block) {
+                self.emit_abrupt_action(action)?;
+            }
+        }
+        Ok(())
     }
 
     fn switch_case_value(&self, expr_id: ExprId) -> Option<i32> {
@@ -2288,6 +2561,8 @@ impl<'arena> CodeGenerator<'arena> {
 
     fn initialize_method_locals(&mut self, is_static: bool, params: &[ParamId]) {
         self.local_vars.clear();
+        self.finally_contexts.clear();
+        self.exception_handlers.clear();
         if is_static {
             self.max_locals = 0;
             self.next_local_slot = 0;
@@ -2308,6 +2583,8 @@ impl<'arena> CodeGenerator<'arena> {
 
     fn initialize_enum_constructor_locals(&mut self, params: &[ParamId]) {
         self.local_vars.clear();
+        self.finally_contexts.clear();
+        self.exception_handlers.clear();
         self.max_locals = 0;
         self.next_local_slot = 0;
 
@@ -2753,6 +3030,48 @@ struct ControlFlowFrame {
     break_label: LabelId,
     continue_label: Option<LabelId>,
     supports_unlabeled_break: bool,
+    finally_depth: usize,
+}
+
+#[derive(Clone, Debug)]
+struct FinallyContext {
+    finally_block: StmtId,
+    exit_thunks: Vec<(ExitAction, LabelId)>,
+}
+
+#[derive(Clone, Debug)]
+struct PendingExceptionHandler {
+    start_label: LabelId,
+    end_label: LabelId,
+    handler_label: LabelId,
+    catch_type: u16,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ExitAction {
+    ReturnVoid,
+    ReturnValue {
+        slot: u16,
+        kind: LocalVarKind,
+    },
+    Branch {
+        label: LabelId,
+        finally_depth: usize,
+    },
+    Rethrow {
+        slot: u16,
+    },
+}
+
+impl ExitAction {
+    fn target_finally_depth(&self) -> usize {
+        match self {
+            ExitAction::ReturnVoid
+            | ExitAction::ReturnValue { .. }
+            | ExitAction::Rethrow { .. } => 0,
+            ExitAction::Branch { finally_depth, .. } => *finally_depth,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -2799,7 +3118,7 @@ impl SwitchItem {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LocalVarKind {
     IntLike,
     Long,
@@ -3452,16 +3771,9 @@ mod tests {
         emitter.emit_branch(BranchKind::Goto, end_label);
         emitter.bind_label(end_label);
 
-        let instructions = emitter.finalize();
+        let instructions = emitter.finalize().instructions;
 
-        assert_eq!(
-            instructions,
-            vec![
-                Instruction::Iconst_0,
-                Instruction::Goto(2),
-                Instruction::Nop
-            ]
-        );
+        assert_eq!(instructions, vec![Instruction::Iconst_0, Instruction::Nop]);
     }
 
     #[test]
@@ -3472,7 +3784,7 @@ mod tests {
         emitter.emit(Instruction::Iconst_0);
         emitter.bind_label(end_label);
 
-        let instructions = emitter.finalize();
+        let instructions = emitter.finalize().instructions;
 
         assert_eq!(instructions, vec![Instruction::Iconst_0]);
     }
@@ -3569,8 +3881,8 @@ mod tests {
 
         let mut generator =
             CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
-        let (instructions, _max_stack, _max_locals) =
-            generator.generate_method_body(false, &[], body)?;
+        let generated = generator.generate_method_body(false, &[], body)?;
+        let instructions = generated.instructions;
 
         assert_eq!(
             instructions,
@@ -3620,8 +3932,8 @@ mod tests {
 
         let mut generator =
             CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
-        let (instructions, _max_stack, _max_locals) =
-            generator.generate_method_body(false, &[], body)?;
+        let generated = generator.generate_method_body(false, &[], body)?;
+        let instructions = generated.instructions;
 
         assert_eq!(
             instructions,
@@ -3653,8 +3965,8 @@ mod tests {
 
         let mut generator =
             CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
-        let (instructions, _max_stack, _max_locals) =
-            generator.generate_method_body(false, &[], body)?;
+        let generated = generator.generate_method_body(false, &[], body)?;
+        let instructions = generated.instructions;
 
         assert_eq!(
             instructions,
@@ -3680,8 +3992,9 @@ mod tests {
 
         let mut generator =
             CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
-        let (instructions, _max_stack, _max_locals) =
+        let generated =
             generator.generate_constructor_body(&[], Some(body), &[], "java/lang/Object")?;
+        let instructions = generated.instructions;
 
         assert_eq!(instructions.len(), 4);
         assert!(matches!(instructions[0], Instruction::Aload_0));
@@ -3693,40 +4006,105 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_try_statements_emit_runtime_exception_and_report() -> RajacResult<()> {
+    fn try_finally_statements_emit_exception_handler_and_normal_finalizer() -> RajacResult<()> {
         let mut arena = AstArena::new();
         let type_arena = TypeArena::new();
         let symbol_table = SymbolTable::new();
         let mut constant_pool = ConstantPool::new();
 
-        let try_block = arena.alloc_stmt(Stmt::Block(vec![]));
+        let try_expr = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Int,
+            value: "1".into(),
+        }));
+        let try_stmt_body = arena.alloc_stmt(Stmt::Expr(try_expr));
+        let try_block = arena.alloc_stmt(Stmt::Block(vec![try_stmt_body]));
+        let finally_expr = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Int,
+            value: "7".into(),
+        }));
+        let finally_stmt = arena.alloc_stmt(Stmt::Expr(finally_expr));
+        let finally_block = arena.alloc_stmt(Stmt::Block(vec![finally_stmt]));
         let try_stmt = arena.alloc_stmt(Stmt::Try {
             try_block,
             catches: vec![],
-            finally_block: None,
+            finally_block: Some(finally_block),
         });
         let body = arena.alloc_stmt(Stmt::Block(vec![try_stmt]));
 
         let mut generator =
             CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
-        let (instructions, _max_stack, _max_locals) =
-            generator.generate_method_body(false, &[], body)?;
+        let generated = generator.generate_method_body(false, &[], body)?;
         let unsupported_features = generator.take_unsupported_features();
 
-        assert_eq!(unsupported_features.len(), 1);
+        assert!(unsupported_features.is_empty());
+        assert!(matches!(generated.instructions[0], Instruction::Iconst_1));
+        assert_eq!(generated.instructions[1], Instruction::Pop);
+        assert!(matches!(generated.instructions[2], Instruction::Bipush(7)));
+        assert_eq!(generated.instructions[3], Instruction::Pop);
+        assert!(matches!(generated.instructions[4], Instruction::Goto(_)));
+        assert!(matches!(generated.instructions[5], Instruction::Astore_1));
+        assert!(matches!(generated.instructions[6], Instruction::Bipush(7)));
+        assert_eq!(generated.instructions[7], Instruction::Pop);
+        assert_eq!(generated.instructions[8], Instruction::Aload_1);
+        assert_eq!(generated.instructions[9], Instruction::Athrow);
+        assert_eq!(generated.instructions[10], Instruction::Nop);
+        assert_eq!(generated.instructions[11], Instruction::Return);
+        assert_eq!(generated.exception_table.len(), 1);
+        let handler = &generated.exception_table[0];
+        assert_eq!(handler.range_pc, 0..2);
+        assert_eq!(handler.handler_pc, 5);
+        assert_eq!(handler.catch_type, 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn return_inside_try_finally_routes_through_finalizer() -> RajacResult<()> {
+        let mut arena = AstArena::new();
+        let type_arena = TypeArena::new();
+        let symbol_table = SymbolTable::new();
+        let mut constant_pool = ConstantPool::new();
+
+        let return_expr = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Int,
+            value: "1".into(),
+        }));
+        let return_stmt = arena.alloc_stmt(Stmt::Return(Some(return_expr)));
+        let try_block = arena.alloc_stmt(Stmt::Block(vec![return_stmt]));
+        let finally_expr = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Int,
+            value: "9".into(),
+        }));
+        let finally_stmt = arena.alloc_stmt(Stmt::Expr(finally_expr));
+        let finally_block = arena.alloc_stmt(Stmt::Block(vec![finally_stmt]));
+        let try_stmt = arena.alloc_stmt(Stmt::Try {
+            try_block,
+            catches: vec![],
+            finally_block: Some(finally_block),
+        });
+        let body = arena.alloc_stmt(Stmt::Block(vec![try_stmt]));
+
+        let mut generator =
+            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
+        let generated = generator.generate_method_body(false, &[], body)?;
+
         assert_eq!(
-            unsupported_features[0].message.as_str(),
-            "unsupported bytecode generation feature: try statements"
+            generated.instructions,
+            vec![
+                Instruction::Iconst_1,
+                Instruction::Istore_1,
+                Instruction::Bipush(9),
+                Instruction::Pop,
+                Instruction::Iload_1,
+                Instruction::Ireturn,
+                Instruction::Astore_2,
+                Instruction::Bipush(9),
+                Instruction::Pop,
+                Instruction::Aload_2,
+                Instruction::Athrow,
+            ]
         );
-        assert_eq!(unsupported_features[0].marker.as_str(), "try");
-        assert!(matches!(instructions[0], Instruction::New(_)));
-        assert!(matches!(instructions[1], Instruction::Dup));
-        assert!(matches!(
-            instructions[2],
-            Instruction::Ldc(_) | Instruction::Ldc_w(_)
-        ));
-        assert!(matches!(instructions[3], Instruction::Invokespecial(_)));
-        assert!(matches!(instructions[4], Instruction::Athrow));
+        assert_eq!(generated.exception_table.len(), 1);
 
         Ok(())
     }
@@ -3763,8 +4141,8 @@ mod tests {
             &symbol_table,
             &mut constant_pool,
         );
-        let (instructions, _max_stack, _max_locals) =
-            generator.generate_method_body(false, &[], body)?;
+        let generated = generator.generate_method_body(false, &[], body)?;
+        let instructions = generated.instructions;
         let unsupported_features = generator.take_unsupported_features();
 
         assert!(unsupported_features.is_empty());
@@ -3820,8 +4198,8 @@ mod tests {
             &symbol_table,
             &mut constant_pool,
         );
-        let (instructions, _max_stack, _max_locals) =
-            generator.generate_method_body(false, &[], body)?;
+        let generated = generator.generate_method_body(false, &[], body)?;
+        let instructions = generated.instructions;
         let unsupported_features = generator.take_unsupported_features();
 
         assert!(unsupported_features.is_empty());
@@ -3874,8 +4252,8 @@ mod tests {
             &symbol_table,
             &mut constant_pool,
         );
-        let (instructions, _max_stack, _max_locals) =
-            generator.generate_method_body(false, &[], body)?;
+        let generated = generator.generate_method_body(false, &[], body)?;
+        let instructions = generated.instructions;
 
         assert_eq!(
             instructions,
@@ -3927,8 +4305,8 @@ mod tests {
             &symbol_table,
             &mut constant_pool,
         );
-        let (instructions, _max_stack, _max_locals) =
-            generator.generate_method_body(false, &[], body)?;
+        let generated = generator.generate_method_body(false, &[], body)?;
+        let instructions = generated.instructions;
 
         assert!(matches!(instructions[0], Instruction::Iconst_4));
         let Instruction::Anewarray(class_index) = instructions[1] else {
@@ -3986,8 +4364,8 @@ mod tests {
             &symbol_table,
             &mut constant_pool,
         );
-        let (instructions, _max_stack, _max_locals) =
-            generator.generate_method_body(false, &[], body)?;
+        let generated = generator.generate_method_body(false, &[], body)?;
+        let instructions = generated.instructions;
 
         assert!(matches!(instructions[0], Instruction::Iconst_2));
         assert!(matches!(instructions[1], Instruction::Iconst_5));
@@ -4048,7 +4426,8 @@ mod tests {
             &symbol_table,
             &mut constant_pool,
         );
-        let (instructions, _, _) = generator.generate_method_body(false, &[], body)?;
+        let generated = generator.generate_method_body(false, &[], body)?;
+        let instructions = generated.instructions;
 
         assert_eq!(
             instructions,
@@ -4125,7 +4504,8 @@ mod tests {
             &symbol_table,
             &mut constant_pool,
         );
-        let (instructions, _, _) = generator.generate_method_body(false, &[], body)?;
+        let generated = generator.generate_method_body(false, &[], body)?;
+        let instructions = generated.instructions;
 
         assert!(matches!(instructions[0], Instruction::Iconst_2));
         let Instruction::Anewarray(class_index) = instructions[1] else {

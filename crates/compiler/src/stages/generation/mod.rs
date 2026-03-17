@@ -111,7 +111,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn generate_classfiles_reports_unsupported_generation_features() -> RajacResult<()> {
+    fn generate_classfiles_supports_try_finally() -> RajacResult<()> {
         let source = r#"
 class Test {
     void run() {
@@ -132,20 +132,9 @@ class Test {
         )?;
 
         assert_eq!(result.class_count, 1);
-        assert_eq!(result.diagnostics.len(), 1);
-
-        let diagnostic = result
-            .diagnostics
-            .iter()
-            .next()
-            .expect("missing diagnostic");
-        assert_eq!(
-            diagnostic.message.as_str(),
-            "unsupported bytecode generation feature: try statements"
-        );
-        assert_eq!(diagnostic.chunks[0].line, 4);
-        assert_eq!(diagnostic.chunks[0].fragment.as_str().trim(), "try {");
-        assert_eq!(units[0].diagnostics.len(), 1);
+        assert!(result.diagnostics.is_empty());
+        assert!(units[0].diagnostics.is_empty());
+        assert!(target_dir.join("Test.class").exists());
 
         std::fs::remove_dir_all(&target_dir).ok();
         Ok(())

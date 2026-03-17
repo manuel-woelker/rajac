@@ -134,8 +134,7 @@ pub(crate) fn generate_method_bytecode(
         constant_pool,
     );
     code_gen.set_current_class_internal_name(this_internal_name);
-    let (instructions, max_stack, max_locals) =
-        code_gen.generate_method_body(is_static, &method.params, body_id)?;
+    let generated_body = code_gen.generate_method_body(is_static, &method.params, body_id)?;
     generation_context
         .unsupported_features
         .extend(code_gen.take_unsupported_features());
@@ -144,10 +143,10 @@ pub(crate) fn generate_method_bytecode(
 
     Ok(vec![Attribute::Code {
         name_index: code_name,
-        max_stack,
-        max_locals,
-        code: instructions,
-        exception_table: vec![],
+        max_stack: generated_body.max_stack,
+        max_locals: generated_body.max_locals,
+        code: generated_body.instructions,
+        exception_table: generated_body.exception_table,
         attributes: vec![],
     }])
 }
@@ -216,7 +215,7 @@ pub(crate) fn constructor_from_ast(
         constant_pool,
     );
     code_gen.set_current_class_internal_name(this_internal_name);
-    let (instructions, max_stack, max_locals) = code_gen.generate_constructor_body(
+    let generated_body = code_gen.generate_constructor_body(
         &constructor.params,
         constructor.body,
         &class.members,
@@ -229,10 +228,10 @@ pub(crate) fn constructor_from_ast(
     let code_name = constant_pool.add_utf8("Code")?;
     let code_attribute = Attribute::Code {
         name_index: code_name,
-        max_stack,
-        max_locals,
-        code: instructions,
-        exception_table: vec![],
+        max_stack: generated_body.max_stack,
+        max_locals: generated_body.max_locals,
+        code: generated_body.instructions,
+        exception_table: generated_body.exception_table,
         attributes: vec![],
     };
 
@@ -299,7 +298,7 @@ pub(crate) fn enum_constructor_from_ast(
         constant_pool,
     );
     code_gen.set_current_class_internal_name(this_internal_name);
-    let (instructions, max_stack, max_locals) = code_gen.generate_enum_constructor_body(
+    let generated_body = code_gen.generate_enum_constructor_body(
         &constructor.params,
         constructor.body,
         &class.members,
@@ -312,10 +311,10 @@ pub(crate) fn enum_constructor_from_ast(
     let code_name = constant_pool.add_utf8("Code")?;
     let code_attribute = Attribute::Code {
         name_index: code_name,
-        max_stack,
-        max_locals,
-        code: instructions,
-        exception_table: vec![],
+        max_stack: generated_body.max_stack,
+        max_locals: generated_body.max_locals,
+        code: generated_body.instructions,
+        exception_table: generated_body.exception_table,
         attributes: vec![],
     };
 
