@@ -142,6 +142,11 @@ pub struct CodeGenerator<'arena> {
     unsupported_features: Vec<UnsupportedFeature>,
 }
 
+enum ConstructorPrologueCall {
+    Super(Vec<ExprId>),
+    This(Vec<ExprId>, Option<MethodId>),
+}
+
 impl<'arena> CodeGenerator<'arena> {
     pub fn new(
         arena: &'arena AstArena,
@@ -211,8 +216,15 @@ impl<'arena> CodeGenerator<'arena> {
         self.initialize_method_locals(false, params);
 
         if let Some(body_id) = body_id {
-            if let Some((super_args, remaining_stmts)) = self.constructor_body_parts(body_id) {
-                self.emit_super_constructor_call(super_internal_name, &super_args)?;
+            if let Some((prologue_call, remaining_stmts)) = self.constructor_body_parts(body_id) {
+                match prologue_call {
+                    ConstructorPrologueCall::Super(args) => {
+                        self.emit_super_constructor_call(super_internal_name, &args)?;
+                    }
+                    ConstructorPrologueCall::This(args, method_id) => {
+                        self.emit_this_constructor_call(&args, method_id)?;
+                    }
+                }
 
                 for stmt_id in remaining_stmts {
                     self.emit_statement(stmt_id)?;
@@ -881,6 +893,7 @@ impl<'arena> CodeGenerator<'arena> {
             AstExpr::This(_) => {
                 self.emit(Instruction::Aload_0);
             }
+            AstExpr::ThisCall { .. } => {}
             AstExpr::Super => {
                 self.emit(Instruction::Aload_0);
             }
@@ -1193,6 +1206,42 @@ impl<'arena> CodeGenerator<'arena> {
             SharedString::new(descriptor),
         );
         self.emit_invocation(&invocation, super_class, args)?;
+        Ok(())
+    }
+
+    fn emit_this_constructor_call(
+        &mut self,
+        args: &[ExprId],
+        method_id: Option<MethodId>,
+    ) -> RajacResult<()> {
+        let Some(this_internal_name) = self.current_class_internal_name.clone() else {
+            return self
+                .emit_unsupported_feature("this constructor calls without class context", "this");
+        };
+        self.emit(Instruction::Aload_0);
+        let this_class = self.constant_pool.add_class(this_internal_name.as_str())?;
+        let descriptor = if let Some(method_id) = method_id {
+            SharedString::new(method_descriptor_from_signature(
+                self.symbol_table.method_arena().get(method_id),
+                self.type_arena,
+            ))
+        } else {
+            SharedString::new(method_descriptor_from_parts(
+                args.iter()
+                    .map(|arg| self.expression_type_id(*arg))
+                    .collect(),
+                self.symbol_table
+                    .primitive_type_id("void")
+                    .unwrap_or(TypeId::INVALID),
+                self.symbol_table.type_arena(),
+            ))
+        };
+        let invocation = ResolvedInvocation::special(
+            this_internal_name,
+            SharedString::new("<init>"),
+            descriptor,
+        );
+        self.emit_invocation(&invocation, this_class, args)?;
         Ok(())
     }
 
@@ -2261,7 +2310,10 @@ impl<'arena> CodeGenerator<'arena> {
         }
     }
 
-    fn constructor_body_parts(&self, body_id: StmtId) -> Option<(Vec<ExprId>, Vec<StmtId>)> {
+    fn constructor_body_parts(
+        &self,
+        body_id: StmtId,
+    ) -> Option<(ConstructorPrologueCall, Vec<StmtId>)> {
         let Stmt::Block(statements) = self.arena.stmt(body_id) else {
             return None;
         };
@@ -2269,11 +2321,15 @@ impl<'arena> CodeGenerator<'arena> {
         let Stmt::Expr(expr_id) = self.arena.stmt(*first_stmt) else {
             return None;
         };
-        let AstExpr::SuperCall { args, .. } = self.arena.expr(*expr_id) else {
-            return None;
+        let prologue_call = match self.arena.expr(*expr_id) {
+            AstExpr::SuperCall { args, .. } => ConstructorPrologueCall::Super(args.clone()),
+            AstExpr::ThisCall { args, method_id } => {
+                ConstructorPrologueCall::This(args.clone(), *method_id)
+            }
+            _ => return None,
         };
 
-        Some((args.clone(), statements.iter().skip(1).copied().collect()))
+        Some((prologue_call, statements.iter().skip(1).copied().collect()))
     }
 
     fn adjust_method_call_stack(&mut self, descriptor: &str, has_receiver: bool) {
@@ -2567,6 +2623,7 @@ impl<'arena> CodeGenerator<'arena> {
             | AstExpr::ArrayAccess { .. }
             | AstExpr::ArrayLength { .. }
             | AstExpr::This(_)
+            | AstExpr::ThisCall { .. }
             | AstExpr::Super
             | AstExpr::FieldAccess { .. }
             | AstExpr::SuperCall { .. } => LocalVarKind::Reference,

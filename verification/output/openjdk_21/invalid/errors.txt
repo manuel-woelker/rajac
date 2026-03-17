@@ -44,11 +44,19 @@
         System.out.println( "Hello, World! );
                             ^
 1 error
+/data/projects/rajac/verification/sources_invalid/typecheck/BlankFinalDoubleInitViaThis.java:6: error: variable value might already have been assigned
+        value = 2;
+        ^
+1 error
 /data/projects/rajac/verification/sources_invalid/typecheck/BlankFinalDuplicateAssignment.java:6: error: variable value might already have been assigned
         value = 2;
         ^
 1 error
 /data/projects/rajac/verification/sources_invalid/typecheck/BlankFinalMissingAssignment.java:8: error: variable value might not have been initialized
+    }
+    ^
+1 error
+/data/projects/rajac/verification/sources_invalid/typecheck/BlankFinalMissingViaThis.java:12: error: variable value might not have been initialized
     }
     ^
 1 error

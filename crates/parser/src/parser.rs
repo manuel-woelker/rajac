@@ -1211,6 +1211,40 @@ mod tests {
     }
 
     #[test]
+    fn test_this_constructor_invocation() {
+        let source = r#"
+            class Person {
+                Person() {
+                    this("anon");
+                }
+
+                Person(String name) {
+                }
+            }
+        "#;
+        let result = parse_src(source);
+        let class = result.arena.class_decl(result.ast.classes[0]);
+        let constructor = class
+            .members
+            .iter()
+            .find_map(|member_id| match result.arena.class_member(*member_id) {
+                ClassMember::Constructor(constructor) if constructor.params.is_empty() => {
+                    Some(constructor)
+                }
+                _ => None,
+            })
+            .expect("constructor");
+        let body_id = constructor.body.expect("constructor body");
+        let Stmt::Block(statements) = result.arena.stmt(body_id) else {
+            panic!("expected block");
+        };
+        let Stmt::Expr(expr_id) = result.arena.stmt(statements[0]) else {
+            panic!("expected expression statement");
+        };
+        assert!(matches!(result.arena.expr(*expr_id), Expr::ThisCall { .. }));
+    }
+
+    #[test]
     fn test_interface_declaration() {
         let source = r#"
             public interface Drawable {

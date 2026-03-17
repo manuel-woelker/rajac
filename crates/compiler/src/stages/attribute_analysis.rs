@@ -246,7 +246,7 @@ impl<'a> SemanticAnalyzer<'a> {
         }
 
         if let Some(body) = constructor.body {
-            self.validate_super_constructor_invocations(body);
+            self.validate_constructor_invocations(body);
             self.analyze_stmt(body);
         }
 
@@ -557,6 +557,9 @@ impl<'a> SemanticAnalyzer<'a> {
                     self.analyze_expr(expr_id);
                 }
                 self.current_class_type_id.unwrap_or(TypeId::INVALID)
+            }
+            Expr::ThisCall { args, method_id } => {
+                self.analyze_this_call_expr(expr_id, args, method_id)
             }
             Expr::Super => self.superclass_type_id(),
             Expr::SuperCall {
@@ -1212,7 +1215,63 @@ impl<'a> SemanticAnalyzer<'a> {
         TypeId::INVALID
     }
 
-    fn validate_super_constructor_invocations(&mut self, body: StmtId) {
+    fn analyze_this_call_expr(
+        &mut self,
+        expr_id: ExprId,
+        args: Vec<ExprId>,
+        method_id: Option<MethodId>,
+    ) -> TypeId {
+        if !self.current_member_is_constructor {
+            let _ = method_id;
+            self.emit_error(
+                "this constructor invocation is only allowed in constructors".to_string(),
+                Some("this"),
+            );
+            return TypeId::INVALID;
+        }
+
+        let receiver_ty = self.current_class_type_id.unwrap_or(TypeId::INVALID);
+        let arg_types = args
+            .iter()
+            .map(|arg| self.analyze_expr(*arg))
+            .collect::<Vec<_>>();
+        let constructor_name = match self.symbol_table.type_arena().get(receiver_ty) {
+            Type::Class(class_type) => class_type.name.clone(),
+            _ => SharedString::new("this"),
+        };
+
+        if let Some(resolved_method_id) = resolve_method_in_type(
+            receiver_ty,
+            &constructor_name,
+            &arg_types,
+            self.symbol_table,
+        ) {
+            if let Expr::ThisCall { method_id, .. } = self.arena.expr_mut(expr_id) {
+                *method_id = Some(resolved_method_id);
+            }
+            return self
+                .symbol_table
+                .primitive_type_id("void")
+                .unwrap_or(TypeId::INVALID);
+        }
+
+        let _ = method_id;
+        self.emit_error(
+            format!(
+                "no applicable constructor for {}({})",
+                self.type_display_name(receiver_ty),
+                arg_types
+                    .iter()
+                    .map(|ty| self.type_display_name(*ty))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Some("this"),
+        );
+        TypeId::INVALID
+    }
+
+    fn validate_constructor_invocations(&mut self, body: StmtId) {
         let Stmt::Block(statements) = self.arena.stmt(body).clone() else {
             return;
         };
@@ -1221,12 +1280,18 @@ impl<'a> SemanticAnalyzer<'a> {
             let Stmt::Expr(expr_id) = self.arena.stmt(*stmt_id).clone() else {
                 continue;
             };
-            if matches!(self.arena.expr(expr_id), Expr::SuperCall { .. }) && index != 0 {
-                self.emit_error(
+            match self.arena.expr(expr_id) {
+                Expr::SuperCall { .. } if index != 0 => self.emit_error(
                     "super constructor invocation must be the first statement in a constructor"
                         .to_string(),
                     Some("super"),
-                );
+                ),
+                Expr::ThisCall { .. } if index != 0 => self.emit_error(
+                    "this constructor invocation must be the first statement in a constructor"
+                        .to_string(),
+                    Some("this"),
+                ),
+                _ => {}
             }
         }
     }
@@ -2122,7 +2187,7 @@ fn fold_expr_sign_literals(expr_id: ExprId, arena: &mut AstArena) {
             fold_expr_sign_literals(array, arena);
         }
         Expr::This(None) => {}
-        Expr::SuperCall { args, .. } => {
+        Expr::ThisCall { args, .. } | Expr::SuperCall { args, .. } => {
             for arg in args {
                 fold_expr_sign_literals(arg, arena);
             }

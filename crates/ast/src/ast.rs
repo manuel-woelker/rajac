@@ -323,6 +323,10 @@ pub enum Expr {
         array: ExprId,
     },
     This(Option<ExprId>),
+    ThisCall {
+        args: Vec<ExprId>,
+        method_id: Option<ResolvedMethodId>,
+    },
     Super,
     SuperCall {
         name: Ident,

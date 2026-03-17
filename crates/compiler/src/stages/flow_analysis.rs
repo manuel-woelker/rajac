@@ -26,30 +26,40 @@ use rajac_base::file_path::FilePath;
 use rajac_base::logging::instrument;
 use rajac_base::shared_string::SharedString;
 use rajac_diagnostics::{Annotation, Diagnostic, Diagnostics, Severity, SourceChunk, Span};
+use rajac_symbols::SymbolTable;
+use rajac_types::TypeId;
 use std::collections::HashMap;
 
 /// Performs flow analysis on compilation units and returns the diagnostics
 /// produced by the stage.
 #[instrument(
     name = "compiler.phase.flow_analysis",
-    skip(compilation_units),
+    skip(compilation_units, symbol_table),
     fields(compilation_units = compilation_units.len())
 )]
-pub fn analyze_flows(compilation_units: &mut [CompilationUnit]) -> Diagnostics {
+pub fn analyze_flows(
+    compilation_units: &mut [CompilationUnit],
+    symbol_table: &SymbolTable,
+) -> Diagnostics {
     let mut diagnostics = Diagnostics::new();
 
     for compilation_unit in compilation_units {
-        analyze_compilation_unit(compilation_unit, &mut diagnostics);
+        analyze_compilation_unit(compilation_unit, &mut diagnostics, symbol_table);
     }
 
     diagnostics
 }
 
-fn analyze_compilation_unit(compilation_unit: &mut CompilationUnit, diagnostics: &mut Diagnostics) {
+fn analyze_compilation_unit(
+    compilation_unit: &mut CompilationUnit,
+    diagnostics: &mut Diagnostics,
+    symbol_table: &SymbolTable,
+) {
     let mut analyzer = FlowAnalyzer::new(
         &compilation_unit.source_file,
         compilation_unit.ast.source.as_str(),
         &compilation_unit.arena,
+        symbol_table,
     );
     analyzer.analyze_ast(&compilation_unit.ast);
 
@@ -64,9 +74,12 @@ struct FlowAnalyzer<'a> {
     source_file: &'a FilePath,
     source: &'a str,
     arena: &'a AstArena,
+    symbol_table: &'a SymbolTable,
     diagnostics: Diagnostics,
     ident_occurrences: HashMap<SharedString, usize>,
     current_blank_final_fields: HashMap<SharedString, TrackedField>,
+    current_constructors: HashMap<Vec<TypeId>, rajac_ast::Constructor>,
+    current_active_constructors: Vec<Vec<TypeId>>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -241,14 +254,22 @@ impl FlowState {
 }
 
 impl<'a> FlowAnalyzer<'a> {
-    fn new(source_file: &'a FilePath, source: &'a str, arena: &'a AstArena) -> Self {
+    fn new(
+        source_file: &'a FilePath,
+        source: &'a str,
+        arena: &'a AstArena,
+        symbol_table: &'a SymbolTable,
+    ) -> Self {
         Self {
             source_file,
             source,
             arena,
+            symbol_table,
             diagnostics: Diagnostics::new(),
             ident_occurrences: HashMap::new(),
             current_blank_final_fields: HashMap::new(),
+            current_constructors: HashMap::new(),
+            current_active_constructors: Vec::new(),
         }
     }
 
@@ -266,7 +287,9 @@ impl<'a> FlowAnalyzer<'a> {
         let class = self.arena.class_decl(class_id).clone();
         self.note_identifier_occurrence(&class.name.name);
         let previous_blank_final_fields = std::mem::take(&mut self.current_blank_final_fields);
+        let previous_constructors = std::mem::take(&mut self.current_constructors);
         self.current_blank_final_fields = self.collect_blank_final_fields(&class);
+        self.current_constructors = self.collect_constructors(&class);
 
         for entry in class.enum_entries {
             for member_id in entry.body.unwrap_or_default() {
@@ -279,16 +302,13 @@ impl<'a> FlowAnalyzer<'a> {
         }
 
         self.current_blank_final_fields = previous_blank_final_fields;
+        self.current_constructors = previous_constructors;
     }
 
     fn analyze_class_member(&mut self, member_id: ClassMemberId) {
         match self.arena.class_member(member_id).clone() {
             ClassMember::Method(method) => self.analyze_method(&method),
-            ClassMember::Constructor(constructor) => self.analyze_constructor_body(
-                constructor.name.name.as_str(),
-                constructor.body,
-                &constructor.params,
-            ),
+            ClassMember::Constructor(constructor) => self.analyze_constructor(&constructor),
             ClassMember::StaticBlock(stmt_id) => {
                 let mut state = FlowState::new();
                 state.push_scope();
@@ -307,39 +327,91 @@ impl<'a> FlowAnalyzer<'a> {
         self.analyze_callable_body(method.body, &method.params);
     }
 
-    fn analyze_constructor_body(
+    fn analyze_constructor(&mut self, constructor: &rajac_ast::Constructor) {
+        let signature_key = self.constructor_signature_key(&constructor.params);
+        let _ = self.analyze_constructor_by_signature(&signature_key, constructor);
+    }
+
+    fn analyze_constructor_by_signature(
         &mut self,
-        constructor_name: &str,
-        body: Option<StmtId>,
-        params: &[ParamId],
-    ) {
-        let Some(body) = body else {
-            return;
+        signature_key: &[TypeId],
+        constructor: &rajac_ast::Constructor,
+    ) -> FlowOutcome {
+        if self
+            .current_active_constructors
+            .iter()
+            .any(|active| active == signature_key)
+        {
+            return FlowOutcome::abrupt(self.base_constructor_state());
+        }
+
+        let Some(body) = constructor.body else {
+            return FlowOutcome::abrupt(self.base_constructor_state());
         };
 
-        let constructor_name = SharedString::new(constructor_name);
+        let constructor_name = constructor.name.name.clone();
         let constructor_occurrence = self.note_identifier_occurrence(&constructor_name);
+        self.current_active_constructors
+            .push(signature_key.to_vec());
 
-        let mut state = FlowState::new();
-        state.push_scope();
-        for (name, tracked_field) in &self.current_blank_final_fields {
-            state.declare_constructor_field(name.clone(), false, tracked_field.marker_occurrence);
-        }
-        for param_id in params {
-            let Param {
-                name, modifiers, ..
-            } = self.arena.param(*param_id).clone();
-            self.note_identifier_occurrence(&name.name);
-            state.declare_local(
-                name.name,
-                true,
-                modifiers.is_final(),
-                LocalOrigin::Parameter,
-            );
-        }
-        let outcome = self.analyze_stmt(body, state);
-        if outcome.completes_normally {
-            for (field_name, field_state) in &outcome.state.constructor_fields {
+        let mut state = if let Some((target_key, remaining_stmts)) =
+            self.constructor_body_this_call_parts(body)
+        {
+            let mut delegated_state = if let Some(target_constructor) =
+                self.current_constructors.get(&target_key).cloned()
+            {
+                let saved_occurrences = self.ident_occurrences.clone();
+                let delegated_outcome =
+                    self.analyze_constructor_by_signature(&target_key, &target_constructor);
+                self.ident_occurrences = saved_occurrences;
+                delegated_outcome.state
+            } else {
+                self.base_constructor_state()
+            };
+            delegated_state.push_scope();
+            for param_id in &constructor.params {
+                let Param {
+                    name, modifiers, ..
+                } = self.arena.param(*param_id).clone();
+                self.note_identifier_occurrence(&name.name);
+                delegated_state.declare_local(
+                    name.name,
+                    true,
+                    modifiers.is_final(),
+                    LocalOrigin::Parameter,
+                );
+            }
+            let mut outcome = FlowOutcome::normal(delegated_state);
+            for stmt_id in remaining_stmts {
+                if !outcome.completes_normally {
+                    break;
+                }
+                outcome = self.analyze_stmt(stmt_id, outcome.state);
+            }
+            self.current_active_constructors.pop();
+            outcome
+        } else {
+            let mut state = self.base_constructor_state();
+            state.push_scope();
+            for param_id in &constructor.params {
+                let Param {
+                    name, modifiers, ..
+                } = self.arena.param(*param_id).clone();
+                self.note_identifier_occurrence(&name.name);
+                state.declare_local(
+                    name.name,
+                    true,
+                    modifiers.is_final(),
+                    LocalOrigin::Parameter,
+                );
+            }
+            let outcome = self.analyze_stmt(body, state);
+            self.current_active_constructors.pop();
+            outcome
+        };
+
+        if state.completes_normally {
+            for (field_name, field_state) in &state.state.constructor_fields {
                 if !field_state.definitely_assigned {
                     self.emit_missing_final_field_initialization(
                         field_name,
@@ -349,6 +421,18 @@ impl<'a> FlowAnalyzer<'a> {
                 }
             }
         }
+
+        state.state.scopes.clear();
+
+        state
+    }
+
+    fn base_constructor_state(&self) -> FlowState {
+        let mut state = FlowState::new();
+        for (name, tracked_field) in &self.current_blank_final_fields {
+            state.declare_constructor_field(name.clone(), false, tracked_field.marker_occurrence);
+        }
+        state
     }
 
     fn analyze_callable_body(&mut self, body: Option<StmtId>, params: &[ParamId]) {
@@ -371,6 +455,56 @@ impl<'a> FlowAnalyzer<'a> {
             );
         }
         let _ = self.analyze_stmt(body, state);
+    }
+
+    fn collect_constructors(
+        &self,
+        class: &ClassDecl,
+    ) -> HashMap<Vec<TypeId>, rajac_ast::Constructor> {
+        let mut constructors = HashMap::new();
+        for member_id in &class.members {
+            if let ClassMember::Constructor(constructor) =
+                self.arena.class_member(*member_id).clone()
+            {
+                constructors.insert(
+                    self.constructor_signature_key(&constructor.params),
+                    constructor,
+                );
+            }
+        }
+        constructors
+    }
+
+    fn constructor_signature_key(&self, params: &[ParamId]) -> Vec<TypeId> {
+        params
+            .iter()
+            .map(|param_id| self.arena.ty(self.arena.param(*param_id).ty).ty())
+            .collect()
+    }
+
+    fn constructor_body_this_call_parts(
+        &self,
+        body_id: StmtId,
+    ) -> Option<(Vec<TypeId>, Vec<StmtId>)> {
+        let Stmt::Block(statements) = self.arena.stmt(body_id) else {
+            return None;
+        };
+        let first_stmt = statements.first()?;
+        let Stmt::Expr(expr_id) = self.arena.stmt(*first_stmt) else {
+            return None;
+        };
+        let Expr::ThisCall {
+            method_id: Some(method_id),
+            ..
+        } = self.arena.expr(*expr_id)
+        else {
+            return None;
+        };
+        let signature = self.symbol_table.method_arena().get(*method_id);
+        Some((
+            signature.params.clone(),
+            statements.iter().skip(1).copied().collect(),
+        ))
     }
 
     fn analyze_stmt(&mut self, stmt_id: StmtId, state: FlowState) -> FlowOutcome {
@@ -736,6 +870,13 @@ impl<'a> FlowAnalyzer<'a> {
                 }
                 state
             }
+            Expr::ThisCall { args, .. } | Expr::SuperCall { args, .. } => {
+                let mut state = state;
+                for arg in args {
+                    state = self.analyze_expr(arg, state);
+                }
+                state
+            }
             Expr::New { args, .. } => {
                 let mut state = state;
                 for arg in args {
@@ -770,13 +911,6 @@ impl<'a> FlowAnalyzer<'a> {
             }
             Expr::ArrayLength { array } | Expr::This(Some(array)) => {
                 self.analyze_expr(array, state)
-            }
-            Expr::SuperCall { args, .. } => {
-                let mut state = state;
-                for arg in args {
-                    state = self.analyze_expr(arg, state);
-                }
-                state
             }
         }
     }
@@ -1347,12 +1481,76 @@ class Example {
 "#;
 
         let diagnostics = analyze_source(source);
-        assert!(diagnostics.iter().any(|diagnostic| {
-            diagnostic
-                .message
-                .as_str()
-                .contains("variable value might already have been assigned")
+        let messages = diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str().to_owned())
+            .collect::<Vec<_>>();
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic
+                    .message
+                    .as_str()
+                    .contains("variable value might already have been assigned")
+            }),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn allows_blank_final_field_assignment_via_this_call() {
+        let source = r#"
+class Example {
+    final int value;
+
+    Example() {
+        this(1);
+    }
+
+    Example(int value) {
+        this.value = value;
+    }
+}
+"#;
+
+        let diagnostics = analyze_source(source);
+        assert!(!diagnostics.iter().any(|diagnostic| {
+            let message = diagnostic.message.as_str();
+            message.contains("already have been assigned")
+                || message.contains("might not have been initialized")
         }));
+    }
+
+    #[test]
+    fn reports_blank_final_field_reassignment_via_this_call() {
+        let source = r#"
+class Example {
+    final int value;
+
+    Example() {
+        this(1);
+        value = 2;
+    }
+
+    Example(int value) {
+        this.value = value;
+    }
+}
+"#;
+
+        let diagnostics = analyze_source(source);
+        let messages = diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str().to_owned())
+            .collect::<Vec<_>>();
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic
+                    .message
+                    .as_str()
+                    .contains("variable value might already have been assigned")
+            }),
+            "{messages:?}"
+        );
     }
 
     fn analyze_source(source: &str) -> Diagnostics {
@@ -1369,6 +1567,6 @@ class Example {
             .expect("collect symbols");
         resolution::resolve_identifiers(&mut units, &mut symbol_table);
         let _ = attribute_analysis::analyze_attributes(&mut units, &mut symbol_table);
-        analyze_flows(&mut units)
+        analyze_flows(&mut units, &symbol_table)
     }
 }

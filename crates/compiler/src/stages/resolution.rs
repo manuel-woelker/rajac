@@ -754,6 +754,9 @@ fn resolve_expr(
                     exprs.push(*expr_id);
                 }
             }
+            rajac_ast::Expr::ThisCall { args, .. } => {
+                exprs.extend(args.iter().copied());
+            }
             rajac_ast::Expr::Super => {}
             rajac_ast::Expr::SuperCall {
                 type_args, args, ..
@@ -893,6 +896,25 @@ fn resolve_expr(
         }
         rajac_ast::Expr::This(_) => {
             expr_ty = current_class_type_id.unwrap_or(TypeId::INVALID);
+        }
+        rajac_ast::Expr::ThisCall { method_id, args } => {
+            let receiver_ty = current_class_type_id.unwrap_or(TypeId::INVALID);
+            let arg_types = args
+                .iter()
+                .map(|arg| arena.expr_typed(*arg).ty)
+                .collect::<Vec<_>>();
+            let constructor_name = match symbol_table.type_arena().get(receiver_ty) {
+                Type::Class(class_type) => class_type.name.clone(),
+                _ => SharedString::new("this"),
+            };
+            if let Some(method) =
+                resolve_method_in_type(receiver_ty, &constructor_name, &arg_types, symbol_table)
+            {
+                *method_id = Some(method);
+                expr_ty = symbol_table
+                    .primitive_type_id("void")
+                    .unwrap_or(TypeId::INVALID);
+            }
         }
         rajac_ast::Expr::Super => {
             expr_ty = superclass_type_id(current_class_type_id, symbol_table);

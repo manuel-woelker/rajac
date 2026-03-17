@@ -503,15 +503,17 @@ impl<'a> Parser<'a> {
             }
             TokenKind::KwThis => {
                 self.bump();
-                let expr = if self.is(TokenKind::LParen) {
+                if self.is(TokenKind::LParen) {
                     self.bump();
-                    Some(self.arena.alloc_expr(Expr::Ident(Ident::new(
-                        rajac_base::shared_string::SharedString::new("this"),
-                    ))))
+                    let args = self.parse_arguments();
+                    self.expect(TokenKind::RParen);
+                    Some(self.arena.alloc_expr(Expr::ThisCall {
+                        args,
+                        method_id: None,
+                    }))
                 } else {
-                    None
-                };
-                Some(self.arena.alloc_expr(Expr::This(expr)))
+                    Some(self.arena.alloc_expr(Expr::This(None)))
+                }
             }
             TokenKind::KwSuper => {
                 self.bump();

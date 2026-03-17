@@ -735,7 +735,8 @@ impl Compiler {
         fields(compilation_units = self.compilation_units.len())
     )]
     fn analyze_flow(&mut self) {
-        let diagnostics = flow_analysis::analyze_flows(&mut self.compilation_units);
+        let diagnostics =
+            flow_analysis::analyze_flows(&mut self.compilation_units, &self.symbol_table);
         self.diagnostics.extend(diagnostics);
     }
 
