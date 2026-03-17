@@ -19,8 +19,8 @@ loops, and abrupt completion. Keeping that work in its own stage preserves the
 
 use crate::CompilationUnit;
 use rajac_ast::{
-    Ast, AstArena, ClassDeclId, ClassMember, ClassMemberId, Expr, ExprId, ForInit, Method,
-    Modifiers, Param, ParamId, Stmt, StmtId, SwitchCase, SwitchLabel,
+    Ast, AstArena, ClassDecl, ClassDeclId, ClassMember, ClassMemberId, Expr, ExprId, Field,
+    ForInit, Method, Modifiers, Param, ParamId, Stmt, StmtId, SwitchCase, SwitchLabel,
 };
 use rajac_base::file_path::FilePath;
 use rajac_base::logging::instrument;
@@ -66,11 +66,13 @@ struct FlowAnalyzer<'a> {
     arena: &'a AstArena,
     diagnostics: Diagnostics,
     ident_occurrences: HashMap<SharedString, usize>,
+    current_blank_final_fields: HashMap<SharedString, TrackedField>,
 }
 
 #[derive(Clone, Debug, Default)]
 struct FlowState {
     scopes: Vec<HashMap<SharedString, LocalState>>,
+    constructor_fields: HashMap<SharedString, ConstructorFieldState>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -88,9 +90,26 @@ enum AssignLocalResult {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AssignFieldResult {
+    Assigned,
+    ReassignedFinal,
+    Missing,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LocalOrigin {
     Local,
     Parameter,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TrackedField {
+    marker_occurrence: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ConstructorFieldState {
+    definitely_assigned: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -169,6 +188,39 @@ impl FlowState {
         AssignLocalResult::Missing
     }
 
+    fn declare_constructor_field(
+        &mut self,
+        name: SharedString,
+        definitely_assigned: bool,
+        marker_occurrence: usize,
+    ) {
+        self.constructor_fields.insert(
+            name,
+            ConstructorFieldState {
+                definitely_assigned,
+            },
+        );
+        let _ = marker_occurrence;
+    }
+
+    fn lookup_constructor_field(&self, name: &SharedString) -> Option<ConstructorFieldState> {
+        self.constructor_fields.get(name).copied()
+    }
+
+    fn assign_constructor_field(&mut self, name: &SharedString) -> AssignFieldResult {
+        match self.constructor_fields.get_mut(name) {
+            Some(field) => {
+                if field.definitely_assigned {
+                    AssignFieldResult::ReassignedFinal
+                } else {
+                    field.definitely_assigned = true;
+                    AssignFieldResult::Assigned
+                }
+            }
+            None => AssignFieldResult::Missing,
+        }
+    }
+
     fn intersect(&self, other: &Self) -> Self {
         let mut merged = self.clone();
         for (merged_scope, other_scope) in merged.scopes.iter_mut().zip(&other.scopes) {
@@ -177,6 +229,12 @@ impl FlowState {
                     .get(name)
                     .is_some_and(|other_state| other_state.definitely_assigned);
             }
+        }
+        for (name, state) in &mut merged.constructor_fields {
+            state.definitely_assigned &= other
+                .constructor_fields
+                .get(name)
+                .is_some_and(|other_state| other_state.definitely_assigned);
         }
         merged
     }
@@ -190,6 +248,7 @@ impl<'a> FlowAnalyzer<'a> {
             arena,
             diagnostics: Diagnostics::new(),
             ident_occurrences: HashMap::new(),
+            current_blank_final_fields: HashMap::new(),
         }
     }
 
@@ -205,6 +264,9 @@ impl<'a> FlowAnalyzer<'a> {
 
     fn analyze_class_decl(&mut self, class_id: ClassDeclId) {
         let class = self.arena.class_decl(class_id).clone();
+        self.note_identifier_occurrence(&class.name.name);
+        let previous_blank_final_fields = std::mem::take(&mut self.current_blank_final_fields);
+        self.current_blank_final_fields = self.collect_blank_final_fields(&class);
 
         for entry in class.enum_entries {
             for member_id in entry.body.unwrap_or_default() {
@@ -215,14 +277,18 @@ impl<'a> FlowAnalyzer<'a> {
         for member_id in class.members {
             self.analyze_class_member(member_id);
         }
+
+        self.current_blank_final_fields = previous_blank_final_fields;
     }
 
     fn analyze_class_member(&mut self, member_id: ClassMemberId) {
         match self.arena.class_member(member_id).clone() {
             ClassMember::Method(method) => self.analyze_method(&method),
-            ClassMember::Constructor(constructor) => {
-                self.analyze_callable_body(constructor.body, &constructor.params)
-            }
+            ClassMember::Constructor(constructor) => self.analyze_constructor_body(
+                constructor.name.name.as_str(),
+                constructor.body,
+                &constructor.params,
+            ),
             ClassMember::StaticBlock(stmt_id) => {
                 let mut state = FlowState::new();
                 state.push_scope();
@@ -239,6 +305,50 @@ impl<'a> FlowAnalyzer<'a> {
 
     fn analyze_method(&mut self, method: &Method) {
         self.analyze_callable_body(method.body, &method.params);
+    }
+
+    fn analyze_constructor_body(
+        &mut self,
+        constructor_name: &str,
+        body: Option<StmtId>,
+        params: &[ParamId],
+    ) {
+        let Some(body) = body else {
+            return;
+        };
+
+        let constructor_name = SharedString::new(constructor_name);
+        let constructor_occurrence = self.note_identifier_occurrence(&constructor_name);
+
+        let mut state = FlowState::new();
+        state.push_scope();
+        for (name, tracked_field) in &self.current_blank_final_fields {
+            state.declare_constructor_field(name.clone(), false, tracked_field.marker_occurrence);
+        }
+        for param_id in params {
+            let Param {
+                name, modifiers, ..
+            } = self.arena.param(*param_id).clone();
+            self.note_identifier_occurrence(&name.name);
+            state.declare_local(
+                name.name,
+                true,
+                modifiers.is_final(),
+                LocalOrigin::Parameter,
+            );
+        }
+        let outcome = self.analyze_stmt(body, state);
+        if outcome.completes_normally {
+            for (field_name, field_state) in &outcome.state.constructor_fields {
+                if !field_state.definitely_assigned {
+                    self.emit_missing_final_field_initialization(
+                        field_name,
+                        &constructor_name,
+                        constructor_occurrence,
+                    );
+                }
+            }
+        }
     }
 
     fn analyze_callable_body(&mut self, body: Option<StmtId>, params: &[ParamId]) {
@@ -561,9 +671,13 @@ impl<'a> FlowAnalyzer<'a> {
             Expr::Error | Expr::Literal(_) | Expr::Super | Expr::This(None) => state,
             Expr::Ident(name) => {
                 self.note_identifier_occurrence(&name.name);
-                if state
-                    .lookup_local(&name.name)
-                    .is_some_and(|local| !local.definitely_assigned)
+                if let Some(local) = state.lookup_local(&name.name) {
+                    if !local.definitely_assigned {
+                        self.emit_uninitialized_local(&name.name);
+                    }
+                } else if state
+                    .lookup_constructor_field(&name.name)
+                    .is_some_and(|field| !field.definitely_assigned)
                 {
                     self.emit_uninitialized_local(&name.name);
                 }
@@ -599,7 +713,18 @@ impl<'a> FlowAnalyzer<'a> {
             Expr::Cast { expr, .. } | Expr::InstanceOf { expr, .. } => {
                 self.analyze_expr(expr, state)
             }
-            Expr::FieldAccess { expr, .. } => self.analyze_expr(expr, state),
+            Expr::FieldAccess { expr, name, .. } => {
+                let state = self.analyze_expr(expr, state);
+                if self.is_current_instance_field_receiver(expr)
+                    && state
+                        .lookup_constructor_field(&name.name)
+                        .is_some_and(|field| !field.definitely_assigned)
+                {
+                    self.note_identifier_occurrence(&name.name);
+                    self.emit_uninitialized_local(&name.name);
+                }
+                state
+            }
             Expr::MethodCall { expr, args, .. } => {
                 let mut state = if let Some(expr_id) = expr {
                     self.analyze_expr(expr_id, state)
@@ -668,7 +793,20 @@ impl<'a> FlowAnalyzer<'a> {
         {
             self.note_identifier_occurrence(&name);
             let mut state = self.analyze_expr(rhs, state);
-            self.apply_local_assignment(&name, &mut state);
+            if state.lookup_local(&name).is_some() {
+                self.apply_local_assignment(&name, &mut state);
+            } else {
+                self.apply_field_assignment(&name, &mut state);
+            }
+            return state;
+        }
+
+        if matches!(op, rajac_ast::AssignOp::Eq)
+            && let Some(name) = self.current_instance_field_name(lhs)
+        {
+            self.note_identifier_occurrence(&name);
+            let mut state = self.analyze_expr(rhs, state);
+            self.apply_field_assignment(&name, &mut state);
             return state;
         }
 
@@ -677,6 +815,9 @@ impl<'a> FlowAnalyzer<'a> {
         if let Some(name) = self.local_ident_name(lhs) {
             self.note_identifier_occurrence(&name);
             self.apply_local_assignment(&name, &mut state);
+        } else if let Some(name) = self.current_instance_field_name(lhs) {
+            self.note_identifier_occurrence(&name);
+            self.apply_field_assignment(&name, &mut state);
         }
         state
     }
@@ -710,6 +851,99 @@ impl<'a> FlowAnalyzer<'a> {
             message: SharedString::new(&message),
             chunks: vec![chunk],
         });
+    }
+
+    fn apply_field_assignment(&mut self, name: &SharedString, state: &mut FlowState) {
+        if state.assign_constructor_field(name) == AssignFieldResult::ReassignedFinal {
+            self.emit_blank_final_field_reassignment(name);
+        }
+    }
+
+    fn emit_blank_final_field_reassignment(&mut self, name: &SharedString) {
+        let occurrence = self.ident_occurrences.get(name).copied().unwrap_or(1);
+        let message = format!(
+            "variable {} might already have been assigned",
+            name.as_str()
+        );
+        let chunk = source_chunk_for_marker_occurrence(
+            self.source_file,
+            self.source,
+            name.as_str(),
+            occurrence,
+        );
+        self.diagnostics.add(Diagnostic {
+            severity: Severity::Error,
+            message: SharedString::new(&message),
+            chunks: vec![chunk],
+        });
+    }
+
+    fn emit_missing_final_field_initialization(
+        &mut self,
+        name: &SharedString,
+        constructor_name: &SharedString,
+        constructor_occurrence: usize,
+    ) {
+        let message = format!("variable {} might not have been initialized", name.as_str());
+        let chunk = constructor_body_closing_offset(
+            self.source,
+            constructor_name.as_str(),
+            constructor_occurrence,
+        )
+        .map(|offset| source_chunk_for_offset(self.source_file, self.source, offset))
+        .unwrap_or_else(|| {
+            source_chunk_for_marker_occurrence(
+                self.source_file,
+                self.source,
+                constructor_name.as_str(),
+                constructor_occurrence,
+            )
+        });
+        self.diagnostics.add(Diagnostic {
+            severity: Severity::Error,
+            message: SharedString::new(&message),
+            chunks: vec![chunk],
+        });
+    }
+
+    fn collect_blank_final_fields(
+        &mut self,
+        class: &ClassDecl,
+    ) -> HashMap<SharedString, TrackedField> {
+        let mut fields = HashMap::new();
+        for member_id in &class.members {
+            if let ClassMember::Field(field) = self.arena.class_member(*member_id).clone()
+                && self.is_blank_final_instance_field(&field)
+            {
+                let occurrence = self.note_identifier_occurrence(&field.name.name);
+                fields.insert(
+                    field.name.name,
+                    TrackedField {
+                        marker_occurrence: occurrence,
+                    },
+                );
+            }
+        }
+        fields
+    }
+
+    fn is_blank_final_instance_field(&self, field: &Field) -> bool {
+        field.modifiers.is_final() && !field.modifiers.is_static() && field.initializer.is_none()
+    }
+
+    fn current_instance_field_name(&self, expr_id: ExprId) -> Option<SharedString> {
+        match self.arena.expr(expr_id) {
+            Expr::FieldAccess { expr, name, .. }
+                if self.is_current_instance_field_receiver(*expr) =>
+            {
+                Some(name.name.clone())
+            }
+            _ => None,
+        }
+    }
+
+    fn is_current_instance_field_receiver(&self, expr_id: ExprId) -> bool {
+        matches!(self.arena.expr(expr_id), Expr::This(None))
     }
 
     fn merge_branch_outcomes(
@@ -767,10 +1001,16 @@ fn source_chunk_for_marker_occurrence(
     occurrence: usize,
 ) -> SourceChunk {
     let offset = marker_offset(source, marker, occurrence).unwrap_or(0);
+    source_chunk_for_offset(source_file, source, offset)
+}
+
+fn source_chunk_for_offset(source_file: &FilePath, source: &str, offset: usize) -> SourceChunk {
     let (line, line_start, line_end) = line_bounds_for_offset(source, offset);
     let fragment = &source[line_start..line_end];
-    let annotation_start = fragment.find(marker).unwrap_or(0);
-    let annotation_end = annotation_start + marker.len().max(1);
+    let annotation_start = offset
+        .saturating_sub(line_start)
+        .min(fragment.len().saturating_sub(1));
+    let annotation_end = (annotation_start + 1).min(fragment.len());
 
     SourceChunk {
         path: source_file.clone(),
@@ -799,6 +1039,31 @@ fn marker_offset(source: &str, marker: &str, occurrence: usize) -> Option<usize>
         search_start = found_at + marker.len();
     }
 
+    None
+}
+
+fn constructor_body_closing_offset(
+    source: &str,
+    constructor_name: &str,
+    occurrence: usize,
+) -> Option<usize> {
+    let constructor_offset = marker_offset(source, constructor_name, occurrence)?;
+    let body_start = source[constructor_offset..]
+        .find('{')
+        .map(|offset| constructor_offset + offset)?;
+    let mut depth = 0usize;
+    for (relative_offset, ch) in source[body_start..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(body_start + relative_offset);
+                }
+            }
+            _ => {}
+        }
+    }
     None
 }
 
@@ -1018,6 +1283,75 @@ class Example {
                 .message
                 .as_str()
                 .contains("cannot assign a value to final variable value")
+        }));
+    }
+
+    #[test]
+    fn allows_blank_final_field_assignment_in_both_constructor_branches() {
+        let source = r#"
+class Example {
+    final int value;
+
+    Example(boolean flag) {
+        if (flag) {
+            value = 1;
+        } else {
+            value = 2;
+        }
+    }
+}
+"#;
+
+        let diagnostics = analyze_source(source);
+        assert!(!diagnostics.iter().any(|diagnostic| {
+            let message = diagnostic.message.as_str();
+            message.contains("final variable")
+                || message.contains("might not have been initialized")
+        }));
+    }
+
+    #[test]
+    fn reports_blank_final_field_missing_assignment() {
+        let source = r#"
+class Example {
+    final int value;
+
+    Example(boolean flag) {
+        if (flag) {
+            value = 1;
+        }
+    }
+}
+"#;
+
+        let diagnostics = analyze_source(source);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .as_str()
+                .contains("variable value might not have been initialized")
+        }));
+    }
+
+    #[test]
+    fn reports_blank_final_field_reassignment() {
+        let source = r#"
+class Example {
+    final int value;
+
+    Example() {
+        value = 1;
+        value = 2;
+    }
+}
+"#;
+
+        let diagnostics = analyze_source(source);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .as_str()
+                .contains("variable value might already have been assigned")
         }));
     }
 
