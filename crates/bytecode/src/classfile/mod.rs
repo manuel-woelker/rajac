@@ -125,6 +125,7 @@ mod tests {
         let param_id = arena.alloc_param(Param {
             ty: int_ty,
             name: Ident::new(SharedString::new("x")),
+            modifiers: rajac_ast::Modifiers::default(),
             varargs: false,
         });
 
@@ -423,6 +424,7 @@ mod tests {
         let param_id = arena.alloc_param(Param {
             ty: int_ty,
             name: Ident::new(SharedString::new("x")),
+            modifiers: rajac_ast::Modifiers::default(),
             varargs: false,
         });
         let body = arena.alloc_stmt(rajac_ast::Stmt::Block(vec![]));

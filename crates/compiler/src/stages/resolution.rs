@@ -568,6 +568,7 @@ fn resolve_stmt(
                         rajac_ast::ForInit::LocalVar {
                             ty,
                             name: _,
+                            modifiers: _,
                             initializer,
                         } => {
                             types.push(*ty);
@@ -637,6 +638,7 @@ fn resolve_stmt(
             rajac_ast::Stmt::LocalVar {
                 ty,
                 name: _,
+                modifiers: _,
                 initializer,
             } => {
                 types.push(*ty);

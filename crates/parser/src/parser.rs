@@ -757,6 +757,7 @@ impl<'a> Parser<'a> {
         }
 
         loop {
+            let modifiers = self.parse_local_modifiers();
             if let Some(ty) = self.parse_type() {
                 let varargs = self.consume(TokenKind::Dot)
                     && self.consume(TokenKind::Dot)
@@ -766,7 +767,12 @@ impl<'a> Parser<'a> {
                     let name = Ident::new(self.ident_text());
                     self.bump();
 
-                    let param = Param { ty, name, varargs };
+                    let param = Param {
+                        ty,
+                        name,
+                        modifiers,
+                        varargs,
+                    };
                     params.push(self.arena.alloc_param(param));
                 }
             }
@@ -777,6 +783,14 @@ impl<'a> Parser<'a> {
         }
 
         params
+    }
+
+    pub(crate) fn parse_local_modifiers(&mut self) -> Modifiers {
+        let mut flags = 0u32;
+        while self.consume(TokenKind::KwFinal) {
+            flags |= Modifiers::FINAL;
+        }
+        Modifiers(flags)
     }
 
     fn type_matches_constructor_name(&self, ty: AstTypeId, class_name: &Ident) -> bool {
@@ -982,6 +996,38 @@ mod tests {
         "#;
         let result = parse_src(source);
         assert_eq!(result.ast.classes.len(), 1);
+    }
+
+    #[test]
+    fn test_final_parameter_and_local_declaration() {
+        let source = r#"
+            class Example {
+                int run(final int input) {
+                    final int value = input;
+                    return value;
+                }
+            }
+        "#;
+        let result = parse_src(source);
+        let class = result.arena.class_decl(result.ast.classes[0]);
+        let method = class
+            .members
+            .iter()
+            .find_map(|member_id| match result.arena.class_member(*member_id) {
+                ClassMember::Method(method) => Some(method),
+                _ => None,
+            })
+            .expect("method");
+        let param = result.arena.param(method.params[0]);
+        assert!(param.modifiers.is_final());
+        let body_id = method.body.expect("method body");
+        let Stmt::Block(statements) = result.arena.stmt(body_id) else {
+            panic!("expected block");
+        };
+        let Stmt::LocalVar { modifiers, .. } = result.arena.stmt(statements[0]) else {
+            panic!("expected local variable");
+        };
+        assert!(modifiers.is_final());
     }
 
     #[test]

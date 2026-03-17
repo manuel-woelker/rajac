@@ -225,6 +225,7 @@ pub enum Stmt {
     LocalVar {
         ty: AstTypeId,
         name: Ident,
+        modifiers: Modifiers,
         initializer: Option<ExprId>,
     },
 }
@@ -235,6 +236,7 @@ pub enum ForInit {
     LocalVar {
         ty: AstTypeId,
         name: Ident,
+        modifiers: Modifiers,
         initializer: Option<ExprId>,
     },
 }
@@ -349,6 +351,7 @@ impl TypedExpr {
 pub struct Param {
     pub ty: AstTypeId,
     pub name: Ident,
+    pub modifiers: Modifiers,
     pub varargs: bool,
 }
 

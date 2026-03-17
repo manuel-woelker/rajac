@@ -43,6 +43,7 @@ impl<'a> Parser<'a> {
             TokenKind::KwThrow => self.parse_throw_stmt(),
             TokenKind::KwTry => self.parse_try_stmt(),
             TokenKind::KwSynchronized => self.parse_synchronized_stmt(),
+            TokenKind::KwFinal => self.parse_local_var_decl(),
             // Type keywords indicate local variable declaration
             TokenKind::KwBoolean
             | TokenKind::KwByte
@@ -77,7 +78,22 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn is_local_var_decl(&self) -> bool {
+    fn is_local_var_decl(&mut self) -> bool {
+        if self.peek() == TokenKind::KwFinal {
+            return matches!(
+                self.peek_n(1),
+                TokenKind::KwBoolean
+                    | TokenKind::KwByte
+                    | TokenKind::KwChar
+                    | TokenKind::KwShort
+                    | TokenKind::KwInt
+                    | TokenKind::KwLong
+                    | TokenKind::KwFloat
+                    | TokenKind::KwDouble
+                    | TokenKind::KwVoid
+                    | TokenKind::KwVar
+            );
+        }
         matches!(
             self.peek(),
             TokenKind::KwBoolean
@@ -94,6 +110,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_local_var_decl(&mut self) -> Option<StmtId> {
+        let modifiers = self.parse_local_modifiers();
         if let Some(ty) = self.parse_type()
             && self.peek() == TokenKind::Ident
         {
@@ -111,6 +128,7 @@ impl<'a> Parser<'a> {
             let stmt = Stmt::LocalVar {
                 ty,
                 name,
+                modifiers,
                 initializer,
             };
             return Some(self.arena.alloc_stmt(stmt));
@@ -181,6 +199,7 @@ impl<'a> Parser<'a> {
         let init = if self.is(TokenKind::Semi) {
             None
         } else if self.is_local_var_decl() {
+            let modifiers = self.parse_local_modifiers();
             let ty = self.parse_type()?;
             let name = if self.peek() == TokenKind::Ident {
                 Ident::new(self.ident_text())
@@ -198,6 +217,7 @@ impl<'a> Parser<'a> {
             Some(ForInit::LocalVar {
                 ty,
                 name,
+                modifiers,
                 initializer,
             })
         } else {
@@ -392,6 +412,7 @@ impl<'a> Parser<'a> {
                 param: self.arena.alloc_param(Param {
                     ty,
                     name,
+                    modifiers: Modifiers::default(),
                     varargs: false,
                 }),
                 body,

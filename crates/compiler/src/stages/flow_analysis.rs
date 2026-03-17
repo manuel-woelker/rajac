@@ -19,8 +19,8 @@ loops, and abrupt completion. Keeping that work in its own stage preserves the
 
 use crate::CompilationUnit;
 use rajac_ast::{
-    Ast, AstArena, ClassDeclId, ClassMember, ClassMemberId, Expr, ExprId, ForInit, Method, Param,
-    ParamId, Stmt, StmtId, SwitchCase, SwitchLabel,
+    Ast, AstArena, ClassDeclId, ClassMember, ClassMemberId, Expr, ExprId, ForInit, Method,
+    Modifiers, Param, ParamId, Stmt, StmtId, SwitchCase, SwitchLabel,
 };
 use rajac_base::file_path::FilePath;
 use rajac_base::logging::instrument;
@@ -73,9 +73,24 @@ struct FlowState {
     scopes: Vec<HashMap<SharedString, LocalState>>,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 struct LocalState {
     definitely_assigned: bool,
+    is_final: bool,
+    origin: LocalOrigin,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AssignLocalResult {
+    Assigned,
+    ReassignedFinal,
+    Missing,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LocalOrigin {
+    Local,
+    Parameter,
 }
 
 #[derive(Clone, Debug)]
@@ -113,7 +128,13 @@ impl FlowState {
         self.scopes.pop();
     }
 
-    fn declare_local(&mut self, name: SharedString, definitely_assigned: bool) {
+    fn declare_local(
+        &mut self,
+        name: SharedString,
+        definitely_assigned: bool,
+        is_final: bool,
+        origin: LocalOrigin,
+    ) {
         let scope = self
             .scopes
             .last_mut()
@@ -122,6 +143,8 @@ impl FlowState {
             name,
             LocalState {
                 definitely_assigned,
+                is_final,
+                origin,
             },
         );
     }
@@ -133,14 +156,17 @@ impl FlowState {
             .find_map(|scope| scope.get(name).copied())
     }
 
-    fn assign_local(&mut self, name: &SharedString) -> bool {
+    fn assign_local(&mut self, name: &SharedString) -> AssignLocalResult {
         for scope in self.scopes.iter_mut().rev() {
             if let Some(local) = scope.get_mut(name) {
+                if local.is_final && local.definitely_assigned {
+                    return AssignLocalResult::ReassignedFinal;
+                }
                 local.definitely_assigned = true;
-                return true;
+                return AssignLocalResult::Assigned;
             }
         }
-        false
+        AssignLocalResult::Missing
     }
 
     fn intersect(&self, other: &Self) -> Self {
@@ -223,9 +249,16 @@ impl<'a> FlowAnalyzer<'a> {
         let mut state = FlowState::new();
         state.push_scope();
         for param_id in params {
-            let Param { name, .. } = self.arena.param(*param_id).clone();
+            let Param {
+                name, modifiers, ..
+            } = self.arena.param(*param_id).clone();
             self.note_identifier_occurrence(&name.name);
-            state.declare_local(name.name, true);
+            state.declare_local(
+                name.name,
+                true,
+                modifiers.is_final(),
+                LocalOrigin::Parameter,
+            );
         }
         let _ = self.analyze_stmt(body, state);
     }
@@ -274,8 +307,11 @@ impl<'a> FlowAnalyzer<'a> {
                 self.analyze_stmt(block, state)
             }
             Stmt::LocalVar {
-                name, initializer, ..
-            } => self.analyze_local_var_stmt(name.name, initializer, state),
+                name,
+                modifiers,
+                initializer,
+                ..
+            } => self.analyze_local_var_stmt(name.name, modifiers, initializer, state),
         }
     }
 
@@ -352,8 +388,11 @@ impl<'a> FlowAnalyzer<'a> {
         let mut state = match init {
             Some(ForInit::Expr(expr_id)) => self.analyze_expr(expr_id, state),
             Some(ForInit::LocalVar {
-                name, initializer, ..
-            }) => self.analyze_local_var(name.name, initializer, state),
+                name,
+                modifiers,
+                initializer,
+                ..
+            }) => self.analyze_local_var(name.name, modifiers, initializer, state),
             None => state,
         };
 
@@ -443,9 +482,16 @@ impl<'a> FlowAnalyzer<'a> {
         for catch_clause in catches {
             let mut catch_state = state.clone();
             catch_state.push_scope();
-            let Param { name, .. } = self.arena.param(catch_clause.param).clone();
+            let Param {
+                name, modifiers, ..
+            } = self.arena.param(catch_clause.param).clone();
             self.note_identifier_occurrence(&name.name);
-            catch_state.declare_local(name.name, true);
+            catch_state.declare_local(
+                name.name,
+                true,
+                modifiers.is_final(),
+                LocalOrigin::Parameter,
+            );
             let mut catch_outcome = self.analyze_stmt(catch_clause.body, catch_state);
             catch_outcome.state.pop_scope();
 
@@ -481,15 +527,17 @@ impl<'a> FlowAnalyzer<'a> {
     fn analyze_local_var_stmt(
         &mut self,
         name: SharedString,
+        modifiers: Modifiers,
         initializer: Option<ExprId>,
         state: FlowState,
     ) -> FlowOutcome {
-        FlowOutcome::normal(self.analyze_local_var(name, initializer, state))
+        FlowOutcome::normal(self.analyze_local_var(name, modifiers, initializer, state))
     }
 
     fn analyze_local_var(
         &mut self,
         name: SharedString,
+        modifiers: Modifiers,
         initializer: Option<ExprId>,
         mut state: FlowState,
     ) -> FlowState {
@@ -499,7 +547,12 @@ impl<'a> FlowAnalyzer<'a> {
         } else {
             state
         };
-        state.declare_local(name, initializer.is_some());
+        state.declare_local(
+            name,
+            initializer.is_some(),
+            modifiers.is_final(),
+            LocalOrigin::Local,
+        );
         state
     }
 
@@ -523,7 +576,8 @@ impl<'a> FlowAnalyzer<'a> {
                     rajac_ast::UnaryOp::Increment | rajac_ast::UnaryOp::Decrement
                 ) && let Some(name) = self.local_ident_name(expr)
                 {
-                    state.assign_local(&name);
+                    self.note_identifier_occurrence(&name);
+                    self.apply_local_assignment(&name, &mut state);
                 }
                 state
             }
@@ -614,16 +668,48 @@ impl<'a> FlowAnalyzer<'a> {
         {
             self.note_identifier_occurrence(&name);
             let mut state = self.analyze_expr(rhs, state);
-            state.assign_local(&name);
+            self.apply_local_assignment(&name, &mut state);
             return state;
         }
 
         let mut state = self.analyze_expr(lhs, state);
         state = self.analyze_expr(rhs, state);
         if let Some(name) = self.local_ident_name(lhs) {
-            state.assign_local(&name);
+            self.note_identifier_occurrence(&name);
+            self.apply_local_assignment(&name, &mut state);
         }
         state
+    }
+
+    fn apply_local_assignment(&mut self, name: &SharedString, state: &mut FlowState) {
+        if state.assign_local(name) == AssignLocalResult::ReassignedFinal {
+            let origin = state
+                .lookup_local(name)
+                .map(|local| local.origin)
+                .unwrap_or(LocalOrigin::Local);
+            self.emit_final_reassignment(name, origin);
+        }
+    }
+
+    fn emit_final_reassignment(&mut self, name: &SharedString, origin: LocalOrigin) {
+        let occurrence = self.ident_occurrences.get(name).copied().unwrap_or(1);
+        let message = match origin {
+            LocalOrigin::Local => {
+                format!("cannot assign a value to final variable {}", name.as_str())
+            }
+            LocalOrigin::Parameter => format!("final parameter {} may not be assigned", name),
+        };
+        let chunk = source_chunk_for_marker_occurrence(
+            self.source_file,
+            self.source,
+            name.as_str(),
+            occurrence,
+        );
+        self.diagnostics.add(Diagnostic {
+            severity: Severity::Error,
+            message: SharedString::new(&message),
+            chunks: vec![chunk],
+        });
     }
 
     fn merge_branch_outcomes(
@@ -846,6 +932,92 @@ class Example {
                 .message
                 .as_str()
                 .contains("might not have been initialized")
+        }));
+    }
+
+    #[test]
+    fn reports_final_local_reassignment() {
+        let source = r#"
+class Example {
+    int run() {
+        final int value = 1;
+        value = 2;
+        return value;
+    }
+}
+"#;
+
+        let diagnostics = analyze_source(source);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .as_str()
+                .contains("cannot assign a value to final variable value")
+        }));
+    }
+
+    #[test]
+    fn reports_final_parameter_reassignment() {
+        let source = r#"
+class Example {
+    int run(final int value) {
+        value = 2;
+        return value;
+    }
+}
+"#;
+
+        let diagnostics = analyze_source(source);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .as_str()
+                .contains("final parameter value may not be assigned")
+        }));
+    }
+
+    #[test]
+    fn allows_final_assignment_in_both_if_branches() {
+        let source = r#"
+class Example {
+    int run(boolean flag) {
+        final int value;
+        if (flag) {
+            value = 1;
+        } else {
+            value = 2;
+        }
+        return value;
+    }
+}
+"#;
+
+        let diagnostics = analyze_source(source);
+        assert!(!diagnostics.iter().any(|diagnostic| {
+            let message = diagnostic.message.as_str();
+            message.contains("final variable")
+                || message.contains("might not have been initialized")
+        }));
+    }
+
+    #[test]
+    fn reports_final_increment() {
+        let source = r#"
+class Example {
+    int run() {
+        final int value = 1;
+        value++;
+        return value;
+    }
+}
+"#;
+
+        let diagnostics = analyze_source(source);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .as_str()
+                .contains("cannot assign a value to final variable value")
         }));
     }
 

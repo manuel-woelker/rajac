@@ -64,6 +64,18 @@
             default:
             ^
 1 error
+/data/projects/rajac/verification/sources_invalid/typecheck/FinalLocalReassignment.java:4: error: cannot assign a value to final variable value
+        value = 2;
+        ^
+1 error
+/data/projects/rajac/verification/sources_invalid/typecheck/FinalMaybeUninitialized.java:7: error: variable value might not have been initialized
+        return value;
+               ^
+1 error
+/data/projects/rajac/verification/sources_invalid/typecheck/FinalParameterReassignment.java:3: error: final parameter value may not be assigned
+        value = 2;
+        ^
+1 error
 /data/projects/rajac/verification/sources_invalid/typecheck/LoopMaybeUninitialized.java:7: error: variable value might not have been initialized
         return value;
                ^

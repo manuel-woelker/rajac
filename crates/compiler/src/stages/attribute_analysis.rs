@@ -326,6 +326,7 @@ impl<'a> SemanticAnalyzer<'a> {
                         ForInit::LocalVar {
                             ty,
                             name,
+                            modifiers: _,
                             initializer,
                         } => {
                             self.analyze_local_var(ty, name, initializer);
@@ -484,6 +485,7 @@ impl<'a> SemanticAnalyzer<'a> {
             Stmt::LocalVar {
                 ty,
                 name,
+                modifiers: _,
                 initializer,
             } => {
                 self.analyze_local_var(ty, name, initializer);

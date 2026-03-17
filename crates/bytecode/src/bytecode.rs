@@ -418,6 +418,7 @@ impl<'arena> CodeGenerator<'arena> {
             Stmt::LocalVar {
                 ty,
                 name,
+                modifiers: _,
                 initializer,
             } => self.emit_local_var_declaration(*ty, name, *initializer)?,
             Stmt::If {
@@ -1283,6 +1284,7 @@ impl<'arena> CodeGenerator<'arena> {
             rajac_ast::ForInit::LocalVar {
                 ty,
                 name,
+                modifiers: _,
                 initializer,
             } => self.emit_local_var_declaration(*ty, name, *initializer),
         }
@@ -3291,6 +3293,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rajac_ast::Modifiers;
     use rajac_types::{ClassType, MethodModifiers, MethodSignature, Type};
     use ristretto_classfile::ConstantPool;
 
@@ -3477,6 +3480,7 @@ mod tests {
         let local_var = arena.alloc_stmt(Stmt::LocalVar {
             ty: int_ty,
             name: Ident::new("value".into()),
+            modifiers: Modifiers::default(),
             initializer: Some(initializer),
         });
         let assigned = arena.alloc_expr(AstExpr::Literal(Literal {
