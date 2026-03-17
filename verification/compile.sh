@@ -49,10 +49,12 @@ for STAGE in lexer parser typecheck; do
         continue
     fi
 
-    if javac -d "$INVALID_OUTPUT_DIR" "${STAGE_FILES[@]}" >> "$INVALID_OUTPUT_FILE" 2>&1; then
-        echo "ERROR: javac succeeded but should have failed for invalid ${STAGE} sources"
-        exit 1
-    fi
+    for JAVA_FILE in "${STAGE_FILES[@]}"; do
+        if javac -d "$INVALID_OUTPUT_DIR" "$JAVA_FILE" >> "$INVALID_OUTPUT_FILE" 2>&1; then
+            echo "ERROR: javac succeeded but should have failed for invalid source $JAVA_FILE"
+            exit 1
+        fi
+    done
 done
 
 echo "Compiled invalid Java files to: $INVALID_OUTPUT_FILE"

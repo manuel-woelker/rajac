@@ -65,6 +65,7 @@ impl CompilationStatistics {
             CompilationPhase::Collection,
             CompilationPhase::Resolution,
             CompilationPhase::AttributeAnalysis,
+            CompilationPhase::FlowAnalysis,
             CompilationPhase::Generation,
         ];
 
@@ -152,6 +153,7 @@ pub enum CompilationPhase {
     Collection,
     Resolution,
     AttributeAnalysis,
+    FlowAnalysis,
     Generation,
 }
 
@@ -164,6 +166,7 @@ impl CompilationPhase {
             CompilationPhase::Collection => "Collection",
             CompilationPhase::Resolution => "Resolution",
             CompilationPhase::AttributeAnalysis => "Attribute Analysis",
+            CompilationPhase::FlowAnalysis => "Flow Analysis",
             CompilationPhase::Generation => "Generation",
         }
     }

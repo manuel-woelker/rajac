@@ -7,51 +7,76 @@
 /data/projects/rajac/verification/sources_invalid/lexer/BadUnicodeEscape.java:3: error: unclosed character literal
         char c = '\u00G1';
                         ^
+3 errors
 /data/projects/rajac/verification/sources_invalid/lexer/EmptyCharLiteral.java:3: error: empty character literal
         char c = '';
                  ^
+1 error
 /data/projects/rajac/verification/sources_invalid/lexer/IllegalCharacter.java:3: error: ';' expected
         int price = 20£;
                       ^
+1 error
 /data/projects/rajac/verification/sources_invalid/lexer/InvalidEscapeSequence.java:3: error: illegal escape character
         String s = "\q";
                      ^
+1 error
 /data/projects/rajac/verification/sources_invalid/lexer/InvalidIdentifierStart.java:3: error: not a statement
         int 2value = 42;
         ^
 /data/projects/rajac/verification/sources_invalid/lexer/InvalidIdentifierStart.java:3: error: ';' expected
         int 2value = 42;
            ^
+2 errors
 /data/projects/rajac/verification/sources_invalid/lexer/MalformedNumber.java:3: error: ';' expected
         double d = 1.2.3;
                       ^
+1 error
 /data/projects/rajac/verification/sources_invalid/lexer/UnclosedCharLiteral.java:3: error: unclosed character literal
         char c = 'a;
                  ^
+1 error
 /data/projects/rajac/verification/sources_invalid/lexer/UnclosedComment.java:1: error: unclosed comment
 /* comment
 ^
 /data/projects/rajac/verification/sources_invalid/lexer/UnclosedComment.java:2: error: reached end of file while parsing
+2 errors
 /data/projects/rajac/verification/sources_invalid/lexer/UnterminatedString.java:5: error: unclosed string literal
         System.out.println( "Hello, World! );
                             ^
-13 errors
+1 error
+/data/projects/rajac/verification/sources_invalid/typecheck/BranchMaybeUninitialized.java:7: error: variable value might not have been initialized
+        return value;
+               ^
+1 error
 /data/projects/rajac/verification/sources_invalid/typecheck/BreakOutsideLoop.java:3: error: break outside switch or loop
         break;
         ^
+1 error
 /data/projects/rajac/verification/sources_invalid/typecheck/ContinueOutsideLoop.java:3: error: continue outside of loop
         continue;
         ^
+1 error
 /data/projects/rajac/verification/sources_invalid/typecheck/DuplicateActiveLabel.java:5: error: label outer already in use
             outer:
             ^
+1 error
 /data/projects/rajac/verification/sources_invalid/typecheck/DuplicateSwitchDefault.java:6: error: duplicate default label
             default:
             ^
+1 error
+/data/projects/rajac/verification/sources_invalid/typecheck/LoopMaybeUninitialized.java:7: error: variable value might not have been initialized
+        return value;
+               ^
+1 error
 /data/projects/rajac/verification/sources_invalid/typecheck/NonBooleanWhile.java:3: error: incompatible types: int cannot be converted to boolean
         while (1) {
                ^
+1 error
 /data/projects/rajac/verification/sources_invalid/typecheck/ReturnTypeMismatch.java:3: error: incompatible types: boolean cannot be converted to int
         return true;
                ^
-6 errors
+1 error
+/data/projects/rajac/verification/sources_invalid/typecheck/UninitializedLocalRead.java:4: error: variable value might not have been initialized
+        return value;
+               ^
+1 error

@@ -13,7 +13,8 @@
 //! 3. **Collection** (`collection`) - Builds symbol tables from ASTs
 //! 4. **Resolution** (`resolution`) - Resolves identifiers and types
 //! 5. **Attribute Analysis** (`attribute_analysis`) - Performs semantic checks
-//! 6. **Generation** (`generation`) - Emits bytecode class files
+//! 6. **Flow Analysis** (`flow_analysis`) - Tracks path-sensitive semantic facts
+//! 7. **Generation** (`generation`) - Emits bytecode class files
 //!
 //! ## Design Principles
 //!
@@ -37,7 +38,8 @@ The compilation process is naturally divided into distinct stages:
 3. Collection - building symbol tables
 4. Resolution - resolving identifiers and types
 5. Attribute analysis - semantic checks on resolved ASTs
-6. Generation - emitting bytecode
+6. Flow analysis - definite assignment and other path-sensitive checks
+7. Generation - emitting bytecode
 
 Separating these into modules makes the code more organized,
 easier to test individual stages, and clearer to understand
@@ -47,6 +49,7 @@ the compilation pipeline flow.
 pub mod attribute_analysis;
 pub mod collection;
 pub mod discovery;
+pub mod flow_analysis;
 pub mod generation;
 pub mod parsing;
 pub mod resolution;

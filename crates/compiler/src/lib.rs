@@ -12,7 +12,8 @@
 //! 3. **Collection** - Building symbol tables from ASTs
 //! 4. **Resolution** - Resolving identifiers and types
 //! 5. **Attribute Analysis** - Performing semantic checks on resolved ASTs
-//! 6. **Generation** - Emitting Java bytecode class files
+//! 6. **Flow Analysis** - Performing path-sensitive semantic checks
+//! 7. **Generation** - Emitting Java bytecode class files
 //!
 //! ## Usage
 //!

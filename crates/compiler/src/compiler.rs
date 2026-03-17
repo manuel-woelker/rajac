@@ -67,7 +67,9 @@ use rajac_symbols::SymbolTable;
 use std::path::{Path, PathBuf};
 
 use crate::compilation_result::CompilationResult;
-use crate::stages::{attribute_analysis, collection, discovery, generation, parsing, resolution};
+use crate::stages::{
+    attribute_analysis, collection, discovery, flow_analysis, generation, parsing, resolution,
+};
 use crate::statistics::{CompilationPhase, CompilationStatistics};
 
 /// Represents a single compilation unit containing a parsed source file.
@@ -266,7 +268,8 @@ fn verification_classpaths_from_home(java_home: &Path) -> Vec<FilePath> {
 /// 3. **Collection** - Build symbol tables
 /// 4. **Resolution** - Resolve identifiers and types
 /// 5. **Attribute Analysis** - Perform semantic checks on resolved ASTs
-/// 6. **Generation** - Emit bytecode class files
+/// 6. **Flow Analysis** - Perform path-sensitive semantic checks
+/// 7. **Generation** - Emit bytecode class files
 ///
 /// # Usage Patterns
 ///
@@ -423,7 +426,8 @@ impl Compiler {
     /// 3. **Collection** - Build symbol tables from ASTs
     /// 4. **Resolution** - Resolve identifiers and types
     /// 5. **Attribute Analysis** - Perform semantic checks on resolved ASTs
-    /// 6. **Generation** - Emit bytecode class files
+    /// 6. **Flow Analysis** - Perform path-sensitive semantic checks
+    /// 7. **Generation** - Emit bytecode class files
     ///
     /// # Errors
     ///
@@ -521,7 +525,12 @@ impl Compiler {
         self.statistics
             .end_phase(CompilationPhase::AttributeAnalysis);
 
-        // Stage 6: Generation - Emit bytecode
+        // Stage 6: Flow analysis - Definite assignment and related checks
+        self.statistics.begin_phase(CompilationPhase::FlowAnalysis);
+        self.analyze_flow();
+        self.statistics.end_phase(CompilationPhase::FlowAnalysis);
+
+        // Stage 7: Generation - Emit bytecode
         self.statistics.begin_phase(CompilationPhase::Generation);
         self.generate_classfiles()?;
         self.statistics.end_phase(CompilationPhase::Generation);
@@ -656,6 +665,7 @@ impl Compiler {
     /// compiler.collect_symbols()?;
     /// compiler.resolve_identifiers();
     /// compiler.analyze_attributes();
+    /// compiler.analyze_flow();
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[instrument(
@@ -709,6 +719,26 @@ impl Compiler {
         self.diagnostics.extend(diagnostics);
     }
 
+    /// Performs flow analysis on semantically checked compilation units.
+    ///
+    /// This method executes the flow-analysis stage of the compilation pipeline.
+    /// It performs path-sensitive checks such as definite assignment for locals
+    /// and parameters.
+    ///
+    /// # Prerequisites
+    ///
+    /// Attribute analysis should run first so typing and statement legality are
+    /// already established.
+    #[instrument(
+        name = "compiler.analyze_flow",
+        skip(self),
+        fields(compilation_units = self.compilation_units.len())
+    )]
+    fn analyze_flow(&mut self) {
+        let diagnostics = flow_analysis::analyze_flows(&mut self.compilation_units);
+        self.diagnostics.extend(diagnostics);
+    }
+
     /// Generates bytecode class files from the resolved compilation units.
     ///
     /// This method executes only the generation stage of the compilation pipeline.
@@ -747,6 +777,7 @@ impl Compiler {
     /// compiler.collect_symbols()?;
     /// compiler.resolve_identifiers();
     /// compiler.analyze_attributes();
+    /// compiler.analyze_flow();
     /// let class_count = compiler.generate_classfiles()?;
     ///
     /// println!("Generated {} class files", class_count);
