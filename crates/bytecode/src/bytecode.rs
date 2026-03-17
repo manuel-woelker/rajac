@@ -765,7 +765,7 @@ impl<'arena> CodeGenerator<'arena> {
         };
 
         let try_start = self.new_label();
-        let try_end = self.new_label();
+        let protected_end = self.new_label();
         let handler_label = self.new_label();
         let end_label = self.new_label();
 
@@ -779,9 +779,12 @@ impl<'arena> CodeGenerator<'arena> {
             .finally_contexts
             .pop()
             .expect("finally context stack must contain the active try/finally");
-        self.bind_label(try_end);
+        let has_exit_thunks = !finally_context.exit_thunks.is_empty();
 
         let try_can_complete_normally = !self.statement_terminates(try_block);
+        if try_can_complete_normally || has_exit_thunks {
+            self.bind_label(protected_end);
+        }
         if try_can_complete_normally {
             self.emit_statement(finally_context.finally_block)?;
             self.emit_branch(BranchKind::Goto, end_label);
@@ -795,6 +798,9 @@ impl<'arena> CodeGenerator<'arena> {
         self.current_stack = 1;
         self.max_stack = self.max_stack.max(1);
         self.emit_store(exception_slot, LocalVarKind::Reference);
+        if !try_can_complete_normally && !has_exit_thunks {
+            self.bind_label(protected_end);
+        }
         self.emit_statement(finally_context.finally_block)?;
         if !self.statement_terminates(finally_context.finally_block) {
             self.emit_abrupt_action(ExitAction::Rethrow {
@@ -808,7 +814,7 @@ impl<'arena> CodeGenerator<'arena> {
 
         self.exception_handlers.push(PendingExceptionHandler {
             start_label: try_start,
-            end_label: try_end,
+            end_label: protected_end,
             handler_label,
             catch_type: 0,
         });
@@ -4105,6 +4111,42 @@ mod tests {
             ]
         );
         assert_eq!(generated.exception_table.len(), 1);
+        let handler = &generated.exception_table[0];
+        assert_eq!(handler.range_pc, 0..2);
+        assert_eq!(handler.handler_pc, 6);
+
+        Ok(())
+    }
+
+    #[test]
+    fn throw_only_try_finally_extends_handler_range_past_astore() -> RajacResult<()> {
+        let mut arena = AstArena::new();
+        let type_arena = TypeArena::new();
+        let symbol_table = SymbolTable::new();
+        let mut constant_pool = ConstantPool::new();
+
+        let thrown = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Null,
+            value: "null".into(),
+        }));
+        let throw_stmt = arena.alloc_stmt(Stmt::Throw(thrown));
+        let try_block = arena.alloc_stmt(Stmt::Block(vec![throw_stmt]));
+        let finally_block = arena.alloc_stmt(Stmt::Block(vec![]));
+        let try_stmt = arena.alloc_stmt(Stmt::Try {
+            try_block,
+            catches: vec![],
+            finally_block: Some(finally_block),
+        });
+        let body = arena.alloc_stmt(Stmt::Block(vec![try_stmt]));
+
+        let mut generator =
+            CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
+        let generated = generator.generate_method_body(false, &[], body)?;
+
+        assert_eq!(generated.exception_table.len(), 1);
+        let handler = &generated.exception_table[0];
+        assert_eq!(handler.range_pc, 0..3);
+        assert_eq!(handler.handler_pc, 2);
 
         Ok(())
     }
