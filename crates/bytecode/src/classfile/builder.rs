@@ -138,8 +138,8 @@ pub(crate) fn classfile_from_class_decl_with_context(
                         arena,
                         &mut constant_pool,
                         this_internal_name,
+                        class,
                         constructor,
-                        &class.modifiers,
                         generation_context,
                     )?
                 } else {
@@ -147,8 +147,8 @@ pub(crate) fn classfile_from_class_decl_with_context(
                         arena,
                         &mut constant_pool,
                         this_internal_name,
+                        class,
                         constructor,
-                        &class.modifiers,
                         &super_internal_name,
                         generation_context,
                     )?
@@ -156,6 +156,7 @@ pub(crate) fn classfile_from_class_decl_with_context(
                 methods.push(method);
             }
             ClassMember::StaticBlock(_)
+            | ClassMember::InstanceBlock(_)
             | ClassMember::NestedClass(_)
             | ClassMember::NestedInterface(_)
             | ClassMember::NestedEnum(_)
@@ -171,6 +172,7 @@ pub(crate) fn classfile_from_class_decl_with_context(
                     arena,
                     &mut constant_pool,
                     this_internal_name,
+                    class,
                     &AstConstructor {
                         name: class.name.clone(),
                         params: vec![],
@@ -178,7 +180,6 @@ pub(crate) fn classfile_from_class_decl_with_context(
                         throws: vec![],
                         modifiers: class.modifiers.clone(),
                     },
-                    &class.modifiers,
                     &super_internal_name,
                     generation_context,
                 )?);
@@ -188,6 +189,7 @@ pub(crate) fn classfile_from_class_decl_with_context(
                     arena,
                     &mut constant_pool,
                     this_internal_name,
+                    class,
                     &AstConstructor {
                         name: class.name.clone(),
                         params: vec![],
@@ -195,7 +197,6 @@ pub(crate) fn classfile_from_class_decl_with_context(
                         throws: vec![],
                         modifiers: Modifiers(Modifiers::PRIVATE),
                     },
-                    &class.modifiers,
                     generation_context,
                 )?);
             }

@@ -157,6 +157,7 @@ pub enum ClassMember {
     Method(Method),
     Constructor(Constructor),
     StaticBlock(StmtId),
+    InstanceBlock(StmtId),
     NestedClass(ClassDeclId),
     NestedInterface(ClassDeclId),
     NestedEnum(ClassDeclId),

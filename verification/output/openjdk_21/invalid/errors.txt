@@ -52,6 +52,14 @@
         value = 2;
         ^
 1 error
+/data/projects/rajac/verification/sources_invalid/typecheck/BlankFinalInitializerBlockDuplicateAssignment.java:9: error: variable value might already have been assigned
+        value = 2;
+        ^
+1 error
+/data/projects/rajac/verification/sources_invalid/typecheck/BlankFinalInitializerBlockMissingAssignment.java:12: error: variable value might not have been initialized
+    }
+    ^
+1 error
 /data/projects/rajac/verification/sources_invalid/typecheck/BlankFinalMissingAssignment.java:8: error: variable value might not have been initialized
     }
     ^
@@ -79,6 +87,10 @@
 /data/projects/rajac/verification/sources_invalid/typecheck/DuplicateSwitchDefault.java:6: error: duplicate default label
             default:
             ^
+1 error
+/data/projects/rajac/verification/sources_invalid/typecheck/FinalFieldInitializerReassignment.java:5: error: cannot assign a value to final variable value
+        value = new Object();
+        ^
 1 error
 /data/projects/rajac/verification/sources_invalid/typecheck/FinalLocalReassignment.java:4: error: cannot assign a value to final variable value
         value = 2;

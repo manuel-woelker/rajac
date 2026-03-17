@@ -1,6 +1,6 @@
 use rajac_ast::{
-    AstArena, AstType, EnumEntry, Expr as AstExpr, ExprId, Literal, LiteralKind, ParamId,
-    PrimitiveType, Stmt, StmtId, SwitchCase, SwitchLabel,
+    AstArena, AstType, ClassMember, ClassMemberId, EnumEntry, Expr as AstExpr, ExprId, Field,
+    Literal, LiteralKind, ParamId, PrimitiveType, Stmt, StmtId, SwitchCase, SwitchLabel,
 };
 use rajac_base::result::RajacResult;
 use rajac_base::shared_string::SharedString;
@@ -147,6 +147,12 @@ enum ConstructorPrologueCall {
     This(Vec<ExprId>, Option<MethodId>),
 }
 
+#[derive(Clone)]
+enum InstanceInitializerStep {
+    Field(Field),
+    Block(StmtId),
+}
+
 impl<'arena> CodeGenerator<'arena> {
     pub fn new(
         arena: &'arena AstArena,
@@ -211,6 +217,7 @@ impl<'arena> CodeGenerator<'arena> {
         &mut self,
         params: &[ParamId],
         body_id: Option<StmtId>,
+        class_members: &[ClassMemberId],
         super_internal_name: &str,
     ) -> RajacResult<(Vec<Instruction>, u16, u16)> {
         self.initialize_method_locals(false, params);
@@ -220,21 +227,26 @@ impl<'arena> CodeGenerator<'arena> {
                 match prologue_call {
                     ConstructorPrologueCall::Super(args) => {
                         self.emit_super_constructor_call(super_internal_name, &args)?;
+                        self.emit_instance_initializers(class_members)?;
+                        for stmt_id in remaining_stmts {
+                            self.emit_statement(stmt_id)?;
+                        }
                     }
                     ConstructorPrologueCall::This(args, method_id) => {
                         self.emit_this_constructor_call(&args, method_id)?;
+                        for stmt_id in remaining_stmts {
+                            self.emit_statement(stmt_id)?;
+                        }
                     }
-                }
-
-                for stmt_id in remaining_stmts {
-                    self.emit_statement(stmt_id)?;
                 }
             } else {
                 self.emit_super_constructor_call(super_internal_name, &[])?;
+                self.emit_instance_initializers(class_members)?;
                 self.emit_statement(body_id)?;
             }
         } else {
             self.emit_super_constructor_call(super_internal_name, &[])?;
+            self.emit_instance_initializers(class_members)?;
         }
 
         if self.emulator().is_empty()
@@ -262,6 +274,7 @@ impl<'arena> CodeGenerator<'arena> {
         &mut self,
         params: &[ParamId],
         body_id: Option<StmtId>,
+        class_members: &[ClassMemberId],
         super_internal_name: &str,
     ) -> RajacResult<(Vec<Instruction>, u16, u16)> {
         self.initialize_enum_constructor_locals(params);
@@ -275,6 +288,7 @@ impl<'arena> CodeGenerator<'arena> {
                 .add_method_ref(super_class, "<init>", "(Ljava/lang/String;I)V")?;
         self.emit(Instruction::Invokespecial(super_ctor));
         self.adjust_method_call_stack("(Ljava/lang/String;I)V", true);
+        self.emit_instance_initializers(class_members)?;
 
         if let Some(body_id) = body_id {
             if let Some((_, remaining_stmts)) = self.constructor_body_parts(body_id) {
@@ -2332,6 +2346,57 @@ impl<'arena> CodeGenerator<'arena> {
         Some((prologue_call, statements.iter().skip(1).copied().collect()))
     }
 
+    fn emit_instance_initializers(&mut self, class_members: &[ClassMemberId]) -> RajacResult<()> {
+        for step in self.collect_instance_initializers(class_members) {
+            match step {
+                InstanceInitializerStep::Field(field) => {
+                    self.emit_instance_field_initializer(&field)?;
+                }
+                InstanceInitializerStep::Block(stmt_id) => self.emit_statement(stmt_id)?,
+            }
+        }
+        Ok(())
+    }
+
+    fn collect_instance_initializers(
+        &self,
+        class_members: &[ClassMemberId],
+    ) -> Vec<InstanceInitializerStep> {
+        let mut steps = Vec::new();
+        for member_id in class_members {
+            match self.arena.class_member(*member_id).clone() {
+                ClassMember::Field(field)
+                    if !field.modifiers.is_static() && field.initializer.is_some() =>
+                {
+                    steps.push(InstanceInitializerStep::Field(field));
+                }
+                ClassMember::InstanceBlock(stmt_id) => {
+                    steps.push(InstanceInitializerStep::Block(stmt_id));
+                }
+                ClassMember::Field(_)
+                | ClassMember::Method(_)
+                | ClassMember::Constructor(_)
+                | ClassMember::StaticBlock(_)
+                | ClassMember::NestedClass(_)
+                | ClassMember::NestedInterface(_)
+                | ClassMember::NestedEnum(_)
+                | ClassMember::NestedRecord(_)
+                | ClassMember::NestedAnnotation(_) => {}
+            }
+        }
+        steps
+    }
+
+    fn emit_instance_field_initializer(&mut self, field: &Field) -> RajacResult<()> {
+        let Some(initializer) = field.initializer else {
+            return Ok(());
+        };
+        let Some(field_id) = self.resolve_current_class_field_by_name(&field.name) else {
+            return Ok(());
+        };
+        self.emit_instance_field_store(field_id, initializer)
+    }
+
     fn adjust_method_call_stack(&mut self, descriptor: &str, has_receiver: bool) {
         let actual_delta =
             method_call_stack_delta(descriptor, has_receiver).unwrap_or(-i32::from(has_receiver));
@@ -3616,7 +3681,7 @@ mod tests {
         let mut generator =
             CodeGenerator::new(&arena, &type_arena, &symbol_table, &mut constant_pool);
         let (instructions, _max_stack, _max_locals) =
-            generator.generate_constructor_body(&[], Some(body), "java/lang/Object")?;
+            generator.generate_constructor_body(&[], Some(body), &[], "java/lang/Object")?;
 
         assert_eq!(instructions.len(), 4);
         assert!(matches!(instructions[0], Instruction::Aload_0));

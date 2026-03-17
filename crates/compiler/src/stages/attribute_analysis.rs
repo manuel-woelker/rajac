@@ -185,6 +185,11 @@ impl<'a> SemanticAnalyzer<'a> {
                 self.analyze_stmt(stmt_id);
                 self.pop_scope();
             }
+            ClassMember::InstanceBlock(stmt_id) => {
+                self.push_scope();
+                self.analyze_stmt(stmt_id);
+                self.pop_scope();
+            }
             ClassMember::NestedClass(class_id)
             | ClassMember::NestedInterface(class_id)
             | ClassMember::NestedRecord(class_id)
@@ -1996,7 +2001,9 @@ fn fold_class_member_sign_literals(member_id: ClassMemberId, arena: &mut AstAren
                 fold_stmt_sign_literals(body, arena);
             }
         }
-        ClassMember::StaticBlock(stmt_id) => fold_stmt_sign_literals(stmt_id, arena),
+        ClassMember::StaticBlock(stmt_id) | ClassMember::InstanceBlock(stmt_id) => {
+            fold_stmt_sign_literals(stmt_id, arena)
+        }
         ClassMember::NestedClass(class_id)
         | ClassMember::NestedInterface(class_id)
         | ClassMember::NestedRecord(class_id)

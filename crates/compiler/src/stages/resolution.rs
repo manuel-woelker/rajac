@@ -383,6 +383,13 @@ fn resolve_class_member(
             context,
             current_class_type_id,
         ),
+        rajac_ast::ClassMember::InstanceBlock(stmt_id) => resolve_stmt(
+            *stmt_id,
+            arena,
+            symbol_table,
+            context,
+            current_class_type_id,
+        ),
         rajac_ast::ClassMember::NestedClass(class_id)
         | rajac_ast::ClassMember::NestedInterface(class_id)
         | rajac_ast::ClassMember::NestedRecord(class_id)
@@ -424,7 +431,7 @@ fn resolve_class_member_signatures(
                 resolve_type(throws_id, arena, symbol_table, context);
             }
         }
-        ClassMember::StaticBlock(_) => {}
+        ClassMember::StaticBlock(_) | ClassMember::InstanceBlock(_) => {}
         ClassMember::NestedClass(class_id)
         | ClassMember::NestedInterface(class_id)
         | ClassMember::NestedRecord(class_id)

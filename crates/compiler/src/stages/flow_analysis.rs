@@ -77,7 +77,8 @@ struct FlowAnalyzer<'a> {
     symbol_table: &'a SymbolTable,
     diagnostics: Diagnostics,
     ident_occurrences: HashMap<SharedString, usize>,
-    current_blank_final_fields: HashMap<SharedString, TrackedField>,
+    current_final_instance_fields: HashMap<SharedString, TrackedField>,
+    current_instance_initializers: Vec<InstanceInitializerStep>,
     current_constructors: HashMap<Vec<TypeId>, rajac_ast::Constructor>,
     current_active_constructors: Vec<Vec<TypeId>>,
 }
@@ -118,11 +119,21 @@ enum LocalOrigin {
 #[derive(Clone, Copy, Debug)]
 struct TrackedField {
     marker_occurrence: usize,
+    has_declaration_initializer: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
 struct ConstructorFieldState {
     definitely_assigned: bool,
+}
+
+#[derive(Clone, Debug)]
+enum InstanceInitializerStep {
+    FieldInitializer {
+        name: SharedString,
+        initializer: ExprId,
+    },
+    Block(StmtId),
 }
 
 #[derive(Clone, Debug)]
@@ -267,7 +278,8 @@ impl<'a> FlowAnalyzer<'a> {
             symbol_table,
             diagnostics: Diagnostics::new(),
             ident_occurrences: HashMap::new(),
-            current_blank_final_fields: HashMap::new(),
+            current_final_instance_fields: HashMap::new(),
+            current_instance_initializers: Vec::new(),
             current_constructors: HashMap::new(),
             current_active_constructors: Vec::new(),
         }
@@ -286,9 +298,13 @@ impl<'a> FlowAnalyzer<'a> {
     fn analyze_class_decl(&mut self, class_id: ClassDeclId) {
         let class = self.arena.class_decl(class_id).clone();
         self.note_identifier_occurrence(&class.name.name);
-        let previous_blank_final_fields = std::mem::take(&mut self.current_blank_final_fields);
+        let previous_final_instance_fields =
+            std::mem::take(&mut self.current_final_instance_fields);
+        let previous_instance_initializers =
+            std::mem::take(&mut self.current_instance_initializers);
         let previous_constructors = std::mem::take(&mut self.current_constructors);
-        self.current_blank_final_fields = self.collect_blank_final_fields(&class);
+        self.current_final_instance_fields = self.collect_final_instance_fields(&class);
+        self.current_instance_initializers = self.collect_instance_initializers(&class);
         self.current_constructors = self.collect_constructors(&class);
 
         for entry in class.enum_entries {
@@ -301,7 +317,8 @@ impl<'a> FlowAnalyzer<'a> {
             self.analyze_class_member(member_id);
         }
 
-        self.current_blank_final_fields = previous_blank_final_fields;
+        self.current_final_instance_fields = previous_final_instance_fields;
+        self.current_instance_initializers = previous_instance_initializers;
         self.current_constructors = previous_constructors;
     }
 
@@ -314,6 +331,7 @@ impl<'a> FlowAnalyzer<'a> {
                 state.push_scope();
                 let _ = self.analyze_stmt(stmt_id, state);
             }
+            ClassMember::InstanceBlock(_) => {}
             ClassMember::NestedClass(class_id)
             | ClassMember::NestedInterface(class_id)
             | ClassMember::NestedRecord(class_id)
@@ -392,6 +410,7 @@ impl<'a> FlowAnalyzer<'a> {
             outcome
         } else {
             let mut state = self.base_constructor_state();
+            state = self.apply_instance_initializers(state);
             state.push_scope();
             for param_id in &constructor.params {
                 let Param {
@@ -429,7 +448,7 @@ impl<'a> FlowAnalyzer<'a> {
 
     fn base_constructor_state(&self) -> FlowState {
         let mut state = FlowState::new();
-        for (name, tracked_field) in &self.current_blank_final_fields {
+        for (name, tracked_field) in &self.current_final_instance_fields {
             state.declare_constructor_field(name.clone(), false, tracked_field.marker_occurrence);
         }
         state
@@ -989,16 +1008,24 @@ impl<'a> FlowAnalyzer<'a> {
 
     fn apply_field_assignment(&mut self, name: &SharedString, state: &mut FlowState) {
         if state.assign_constructor_field(name) == AssignFieldResult::ReassignedFinal {
-            self.emit_blank_final_field_reassignment(name);
+            self.emit_final_field_reassignment(name);
         }
     }
 
-    fn emit_blank_final_field_reassignment(&mut self, name: &SharedString) {
+    fn emit_final_field_reassignment(&mut self, name: &SharedString) {
         let occurrence = self.ident_occurrences.get(name).copied().unwrap_or(1);
-        let message = format!(
-            "variable {} might already have been assigned",
-            name.as_str()
-        );
+        let message = if self
+            .current_final_instance_fields
+            .get(name)
+            .is_some_and(|field| field.has_declaration_initializer)
+        {
+            format!("cannot assign a value to final variable {}", name.as_str())
+        } else {
+            format!(
+                "variable {} might already have been assigned",
+                name.as_str()
+            )
+        };
         let chunk = source_chunk_for_marker_occurrence(
             self.source_file,
             self.source,
@@ -1040,20 +1067,21 @@ impl<'a> FlowAnalyzer<'a> {
         });
     }
 
-    fn collect_blank_final_fields(
+    fn collect_final_instance_fields(
         &mut self,
         class: &ClassDecl,
     ) -> HashMap<SharedString, TrackedField> {
         let mut fields = HashMap::new();
         for member_id in &class.members {
             if let ClassMember::Field(field) = self.arena.class_member(*member_id).clone()
-                && self.is_blank_final_instance_field(&field)
+                && self.is_final_instance_field(&field)
             {
                 let occurrence = self.note_identifier_occurrence(&field.name.name);
                 fields.insert(
                     field.name.name,
                     TrackedField {
                         marker_occurrence: occurrence,
+                        has_declaration_initializer: field.initializer.is_some(),
                     },
                 );
             }
@@ -1061,8 +1089,56 @@ impl<'a> FlowAnalyzer<'a> {
         fields
     }
 
-    fn is_blank_final_instance_field(&self, field: &Field) -> bool {
-        field.modifiers.is_final() && !field.modifiers.is_static() && field.initializer.is_none()
+    fn collect_instance_initializers(&self, class: &ClassDecl) -> Vec<InstanceInitializerStep> {
+        let mut steps = Vec::new();
+        for member_id in &class.members {
+            match self.arena.class_member(*member_id).clone() {
+                ClassMember::Field(field)
+                    if self.is_final_instance_field(&field) && field.initializer.is_some() =>
+                {
+                    steps.push(InstanceInitializerStep::FieldInitializer {
+                        name: field.name.name,
+                        initializer: field.initializer.expect("checked initializer presence"),
+                    });
+                }
+                ClassMember::InstanceBlock(stmt_id) => {
+                    steps.push(InstanceInitializerStep::Block(stmt_id));
+                }
+                ClassMember::Field(_)
+                | ClassMember::Method(_)
+                | ClassMember::Constructor(_)
+                | ClassMember::StaticBlock(_)
+                | ClassMember::NestedClass(_)
+                | ClassMember::NestedInterface(_)
+                | ClassMember::NestedRecord(_)
+                | ClassMember::NestedAnnotation(_)
+                | ClassMember::NestedEnum(_) => {}
+            }
+        }
+        steps
+    }
+
+    fn is_final_instance_field(&self, field: &Field) -> bool {
+        field.modifiers.is_final() && !field.modifiers.is_static()
+    }
+
+    fn apply_instance_initializers(&mut self, mut state: FlowState) -> FlowState {
+        for step in self.current_instance_initializers.clone() {
+            match step {
+                InstanceInitializerStep::FieldInitializer { name, initializer } => {
+                    state = self.analyze_expr(initializer, state);
+                    self.apply_field_assignment(&name, &mut state);
+                }
+                InstanceInitializerStep::Block(stmt_id) => {
+                    let outcome = self.analyze_stmt(stmt_id, state);
+                    state = outcome.state;
+                    if !outcome.completes_normally {
+                        break;
+                    }
+                }
+            }
+        }
+        state
     }
 
     fn current_instance_field_name(&self, expr_id: ExprId) -> Option<SharedString> {
@@ -1551,6 +1627,96 @@ class Example {
             }),
             "{messages:?}"
         );
+    }
+
+    #[test]
+    fn allows_final_field_declaration_initializer() {
+        let source = r#"
+class Example {
+    final int value = 1;
+
+    Example() {
+    }
+}
+"#;
+
+        let diagnostics = analyze_source(source);
+        assert!(!diagnostics.iter().any(|diagnostic| {
+            let message = diagnostic.message.as_str();
+            message.contains("final variable")
+                || message.contains("might not have been initialized")
+                || message.contains("might already have been assigned")
+        }));
+    }
+
+    #[test]
+    fn allows_blank_final_field_assignment_in_instance_initializer() {
+        let source = r#"
+class Example {
+    final int value;
+
+    {
+        value = 1;
+    }
+
+    Example() {
+    }
+}
+"#;
+
+        let diagnostics = analyze_source(source);
+        assert!(!diagnostics.iter().any(|diagnostic| {
+            let message = diagnostic.message.as_str();
+            message.contains("final variable")
+                || message.contains("might not have been initialized")
+                || message.contains("might already have been assigned")
+        }));
+    }
+
+    #[test]
+    fn reports_final_field_reassignment_after_declaration_initializer() {
+        let source = r#"
+class Example {
+    final int value = 1;
+
+    Example() {
+        value = 2;
+    }
+}
+"#;
+
+        let diagnostics = analyze_source(source);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .as_str()
+                .contains("cannot assign a value to final variable value")
+        }));
+    }
+
+    #[test]
+    fn reports_blank_final_field_reassignment_after_instance_initializer() {
+        let source = r#"
+class Example {
+    final int value;
+
+    {
+        value = 1;
+    }
+
+    Example() {
+        value = 2;
+    }
+}
+"#;
+
+        let diagnostics = analyze_source(source);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .as_str()
+                .contains("variable value might already have been assigned")
+        }));
     }
 
     fn analyze_source(source: &str) -> Diagnostics {

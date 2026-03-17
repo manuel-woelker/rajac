@@ -22,7 +22,8 @@ pub(crate) fn collect_nested_class_infos(
             ClassMember::Field(_)
             | ClassMember::Method(_)
             | ClassMember::Constructor(_)
-            | ClassMember::StaticBlock(_) => continue,
+            | ClassMember::StaticBlock(_)
+            | ClassMember::InstanceBlock(_) => continue,
         };
 
         let nested_decl = arena.class_decl(class_id);

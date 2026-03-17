@@ -4,8 +4,8 @@ use super::{
 };
 use crate::bytecode::CodeGenerator;
 use rajac_ast::{
-    AstArena, ClassKind, Constructor as AstConstructor, Field as AstField, Method as AstMethod,
-    Modifiers,
+    AstArena, ClassDecl as AstClassDecl, ClassKind, Constructor as AstConstructor,
+    Field as AstField, Method as AstMethod, Modifiers,
 };
 use rajac_base::result::{RajacResult, ResultExt};
 use ristretto_classfile::attributes::Attribute;
@@ -19,13 +19,6 @@ pub(crate) fn field_from_ast(
     field: &AstField,
     type_arena: &rajac_types::TypeArena,
 ) -> RajacResult<Option<Field>> {
-    let is_static = field.modifiers.0 & Modifiers::STATIC != 0;
-    let has_initializer = field.initializer.is_some();
-
-    if has_initializer && !is_static {
-        return Ok(None);
-    }
-
     let name_index = constant_pool.add_utf8(field.name.as_str())?;
     let descriptor = type_to_descriptor(arena, field.ty, type_arena)?;
     let descriptor_index = constant_pool.add_utf8(&descriptor)?;
@@ -190,9 +183,9 @@ pub(crate) fn method_access_flags(modifiers: &Modifiers) -> MethodAccessFlags {
 pub(crate) fn constructor_from_ast(
     arena: &AstArena,
     constant_pool: &mut ConstantPool,
-    _this_internal_name: &str,
+    this_internal_name: &str,
+    class: &AstClassDecl,
     constructor: &AstConstructor,
-    class_modifiers: &Modifiers,
     super_internal_name: &str,
     generation_context: &mut ClassfileGenerationContext<'_>,
 ) -> RajacResult<Method> {
@@ -205,7 +198,7 @@ pub(crate) fn constructor_from_ast(
         || constructor.modifiers.is_protected()
         || constructor.modifiers.is_private();
     if constructor.modifiers.is_public()
-        || (!has_explicit_visibility && class_modifiers.is_public())
+        || (!has_explicit_visibility && class.modifiers.is_public())
     {
         access_flags |= MethodAccessFlags::PUBLIC;
     }
@@ -222,10 +215,11 @@ pub(crate) fn constructor_from_ast(
         generation_context.symbol_table,
         constant_pool,
     );
-    code_gen.set_current_class_internal_name(_this_internal_name);
+    code_gen.set_current_class_internal_name(this_internal_name);
     let (instructions, max_stack, max_locals) = code_gen.generate_constructor_body(
         &constructor.params,
         constructor.body,
+        &class.members,
         super_internal_name,
     )?;
     generation_context
@@ -264,8 +258,8 @@ pub(crate) fn enum_constructor_from_ast(
     arena: &AstArena,
     constant_pool: &mut ConstantPool,
     this_internal_name: &str,
+    class: &AstClassDecl,
     constructor: &AstConstructor,
-    class_modifiers: &Modifiers,
     generation_context: &mut ClassfileGenerationContext<'_>,
 ) -> RajacResult<Method> {
     let name_index = constant_pool.add_utf8("<init>")?;
@@ -287,7 +281,7 @@ pub(crate) fn enum_constructor_from_ast(
         || constructor.modifiers.is_protected()
         || constructor.modifiers.is_private();
     if constructor.modifiers.is_public()
-        || (!has_explicit_visibility && class_modifiers.is_public())
+        || (!has_explicit_visibility && class.modifiers.is_public())
     {
         access_flags |= MethodAccessFlags::PUBLIC;
     }
@@ -308,6 +302,7 @@ pub(crate) fn enum_constructor_from_ast(
     let (instructions, max_stack, max_locals) = code_gen.generate_enum_constructor_body(
         &constructor.params,
         constructor.body,
+        &class.members,
         "java/lang/Enum",
     )?;
     generation_context

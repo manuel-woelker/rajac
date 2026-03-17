@@ -408,6 +408,15 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
+            // Instance initializer block
+            if self.is(TokenKind::LBrace) {
+                if let Some(body) = self.parse_block() {
+                    let member = ClassMember::InstanceBlock(body);
+                    members.push(self.arena.alloc_class_member(member));
+                }
+                continue;
+            }
+
             let modifiers = self.parse_modifiers();
 
             // Check for nested types
@@ -1242,6 +1251,23 @@ mod tests {
             panic!("expected expression statement");
         };
         assert!(matches!(result.arena.expr(*expr_id), Expr::ThisCall { .. }));
+    }
+
+    #[test]
+    fn test_instance_initializer_block() {
+        let source = r#"
+            class Person {
+                {
+                    int value = 1;
+                }
+            }
+        "#;
+        let result = parse_src(source);
+        let class = result.arena.class_decl(result.ast.classes[0]);
+        assert!(class.members.iter().any(|member_id| matches!(
+            result.arena.class_member(*member_id),
+            ClassMember::InstanceBlock(_)
+        )));
     }
 
     #[test]
