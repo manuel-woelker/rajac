@@ -13,7 +13,7 @@ Note: All developer documentation should be written in English.
 ## Tech Stack
 
 - Implementation Language: Rust
-- Use `rajac_base::SharedString` instead of plain `String` for string fields in structs
+- Use `rajac_base::shared_string::SharedString` instead of plain `String` for string fields in structs when shared immutable strings are a good fit
 
 ## Documentation Strategy
 
@@ -63,6 +63,8 @@ Keep documentation focused and concise—explain the "Why", not the "What" (the 
 
 Functions, interfaces, structs and classes should be documented using the standard language syntax (e.g. JsDoc/TsDoc or RustDoc).
 Use this standard documentation style by default.
+The question-driven documentation style does not apply to RustDoc comments.
+RustDoc should be written classically, telling the reader what the item does.
 Fields on interfaces, structs, and classes should also be documented (including private/internal fields where useful for maintenance).
 
 ## Testing strategy
@@ -117,6 +119,10 @@ Below the first line include detail information about the changes made.
 
 **Important:** Append all user prompts included in this commit to the commit message body under a `User Prompts:` section.
 Also include the agent model identifier used for the commit in a `Model:` section in the commit message body.
+Always run `git add` and `git commit` as separate commands.
+
+**Commit message note:** When crafting commit messages, use `git commit -F -` with heredoc syntax such as `git commit -F - <<'EO_COMMIT_MESSAGE'`.
+This avoids shell escaping issues and keeps multiline commit bodies predictable without creating temporary files.
 
 **Shell escaping note:** When using fish shell, avoid special characters like `-` and `:` in commit messages that might be interpreted as command options. Use simple commit messages or properly escape special characters.
 
@@ -124,11 +130,11 @@ Never push code or ask to push code.
 
 ## File naming and organization
 
-Prefer small source files.
+Prefer small source files. If not otherwise instructed, put each struct, enum, trait, etc. in its own file.
 
 Only use lib.rs files to declare modules, do not put any structs, traits or functions there.
 
-Each struct, enum, trait, and their associated impl blocks should be in its own file.
+Each and every struct, enum, trait, and their associated impl blocks should be in its own file.
 
 Choose descriptive names for files. Avoid names like "index.ts" or "types.ts".
 Do not bulk export items using "export * from 'submodule'".
