@@ -396,7 +396,7 @@ impl<'a> Parser<'a> {
             self.bump();
             self.expect(TokenKind::LParen);
 
-            let ty = self.parse_type()?;
+            let types = self.parse_catch_types()?;
             let name = if self.peek() == TokenKind::Ident {
                 Ident::new(self.ident_text())
             } else {
@@ -409,8 +409,9 @@ impl<'a> Parser<'a> {
             let body = self.parse_block()?;
 
             catches.push(CatchClause {
+                types: types.clone(),
                 param: self.arena.alloc_param(Param {
-                    ty,
+                    ty: types[0],
                     name,
                     modifiers: Modifiers::default(),
                     varargs: false,
@@ -431,6 +432,14 @@ impl<'a> Parser<'a> {
             finally_block,
         };
         Some(self.arena.alloc_stmt(stmt))
+    }
+
+    fn parse_catch_types(&mut self) -> Option<Vec<AstTypeId>> {
+        let mut types = vec![self.parse_type()?];
+        while self.consume(TokenKind::Pipe) {
+            types.push(self.parse_type()?);
+        }
+        Some(types)
     }
 
     fn parse_synchronized_stmt(&mut self) -> Option<StmtId> {

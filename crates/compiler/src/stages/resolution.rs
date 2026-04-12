@@ -628,6 +628,7 @@ fn resolve_stmt(
             } => {
                 stmts.push(*try_block);
                 for clause in catches {
+                    types.extend(clause.types.iter().copied());
                     params.push(clause.param);
                     stmts.push(clause.body);
                 }

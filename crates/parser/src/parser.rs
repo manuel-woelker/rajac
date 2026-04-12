@@ -1508,6 +1508,40 @@ mod tests {
     }
 
     #[test]
+    fn test_multi_catch() {
+        let source = r#"
+            class Test {
+                void test() {
+                    try {
+                        work();
+                    } catch (IllegalArgumentException | RuntimeException err) {
+                        System.out.println("bad");
+                    }
+                }
+            }
+        "#;
+        let result = parse_src(source);
+        let class = result.arena.class_decl(result.ast.classes[0]);
+        let method = class
+            .members
+            .iter()
+            .find_map(|member_id| match result.arena.class_member(*member_id) {
+                ClassMember::Method(method) => Some(method),
+                _ => None,
+            })
+            .expect("method");
+        let body_id = method.body.expect("method body");
+        let Stmt::Block(statements) = result.arena.stmt(body_id) else {
+            panic!("expected method body block");
+        };
+        let Stmt::Try { catches, .. } = result.arena.stmt(statements[0]) else {
+            panic!("expected try statement");
+        };
+        assert_eq!(catches.len(), 1);
+        assert_eq!(catches[0].types.len(), 2);
+    }
+
+    #[test]
     fn test_method_calls() {
         let source = r#"
             class Test {

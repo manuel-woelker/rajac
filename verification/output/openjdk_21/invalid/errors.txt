@@ -84,6 +84,11 @@
             outer:
             ^
 1 error
+/data/projects/rajac/verification/sources_invalid/typecheck/DuplicateMultiCatchAlternative.java:5: error: Alternatives in a multi-catch statement cannot be related by subclassing
+        } catch (RuntimeException | RuntimeException err) {
+                                    ^
+  Alternative RuntimeException is a subclass of alternative RuntimeException
+1 error
 /data/projects/rajac/verification/sources_invalid/typecheck/DuplicateSwitchDefault.java:6: error: duplicate default label
             default:
             ^

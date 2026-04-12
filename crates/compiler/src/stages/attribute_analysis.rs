@@ -417,8 +417,9 @@ impl<'a> SemanticAnalyzer<'a> {
                 let mut catch_can_complete = false;
                 for catch_clause in catches {
                     self.push_scope();
+                    self.validate_catch_clause_types(&catch_clause);
                     let param = self.arena.param(catch_clause.param).clone();
-                    let param_ty = self.arena.ty(param.ty).ty();
+                    let param_ty = self.catch_binding_type(&catch_clause);
                     self.declare_local(param.name.name.clone(), param_ty, param.name.name.as_str());
                     if self.analyze_stmt(catch_clause.body) == StatementOutcome::CanCompleteNormally
                     {
@@ -1598,6 +1599,40 @@ impl<'a> SemanticAnalyzer<'a> {
                 if !self.can_continue() {
                     self.emit_error("continue outside loop", Some("continue"));
                 }
+            }
+        }
+    }
+
+    fn catch_binding_type(&self, catch_clause: &rajac_ast::CatchClause) -> TypeId {
+        if catch_clause.types.len() <= 1 {
+            return self.arena.ty(self.arena.param(catch_clause.param).ty).ty();
+        }
+
+        self.symbol_table
+            .lookup_type_id("java.lang", "Throwable")
+            .unwrap_or(TypeId::INVALID)
+    }
+
+    fn validate_catch_clause_types(&mut self, catch_clause: &rajac_ast::CatchClause) {
+        let throwable_ty = self.symbol_table.lookup_type_id("java.lang", "Throwable");
+        let mut seen_types = HashSet::new();
+
+        for type_id in &catch_clause.types {
+            let resolved_ty = self.arena.ty(*type_id).ty();
+            if resolved_ty == TypeId::INVALID {
+                continue;
+            }
+            if !self.is_reference_type(resolved_ty) {
+                self.emit_error("catch type must be a reference type", Some("catch"));
+                continue;
+            }
+            if let Some(throwable_ty) = throwable_ty
+                && !self.is_reference_assignable(throwable_ty, resolved_ty)
+            {
+                self.emit_error("catch type must be Throwable-compatible", Some("catch"));
+            }
+            if !seen_types.insert(resolved_ty) {
+                self.emit_error("duplicate catch alternative", Some("catch"));
             }
         }
     }

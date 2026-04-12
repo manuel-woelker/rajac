@@ -244,6 +244,7 @@ pub enum ForInit {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CatchClause {
+    pub types: Vec<AstTypeId>,
     pub param: ParamId,
     pub body: StmtId,
 }

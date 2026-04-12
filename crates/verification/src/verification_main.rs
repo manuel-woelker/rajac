@@ -38,6 +38,10 @@ fn get_error_message_overrides() -> HashMap<&'static str, &'static str> {
     );
     overrides.insert("ContinueOutsideLoop", "continue outside loop");
     overrides.insert("DuplicateActiveLabel", "duplicate label 'outer'");
+    overrides.insert(
+        "DuplicateMultiCatchAlternative",
+        "duplicate catch alternative",
+    );
 
     overrides
 }
