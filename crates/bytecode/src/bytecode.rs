@@ -755,11 +755,11 @@ impl<'arena> CodeGenerator<'arena> {
         catches: &[rajac_ast::CatchClause],
         finally_block: Option<StmtId>,
     ) -> RajacResult<()> {
-        if !catches.is_empty() && finally_block.is_some() {
-            return self.emit_unsupported_feature("try catch finally statements", "catch");
-        }
-
         if !catches.is_empty() {
+            if let Some(finally_block) = finally_block {
+                return self.emit_try_catch_finally_statement(try_block, catches, finally_block);
+            }
+
             return self.emit_try_catch_statement(try_block, catches);
         }
 
@@ -822,6 +822,102 @@ impl<'arena> CodeGenerator<'arena> {
             handler_label,
             catch_type: 0,
         });
+
+        Ok(())
+    }
+
+    fn emit_try_catch_finally_statement(
+        &mut self,
+        try_block: StmtId,
+        catches: &[rajac_ast::CatchClause],
+        finally_block: StmtId,
+    ) -> RajacResult<()> {
+        let catch_entries = catches
+            .iter()
+            .map(|catch_clause| {
+                let catch_type = self.catch_type_for_clause(catch_clause)?;
+                Ok((self.new_label(), catch_type, catch_clause.clone()))
+            })
+            .collect::<RajacResult<Vec<_>>>()?;
+
+        let try_start = self.new_label();
+        let try_end = self.new_label();
+        let synthetic_handler_label = self.new_label();
+        let end_label = self.new_label();
+        let catch_slot = self.allocate_local(LocalVarKind::Reference);
+        let exception_slot = self.allocate_local(LocalVarKind::Reference);
+
+        self.finally_contexts.push(FinallyContext {
+            finally_block,
+            exit_thunks: Vec::new(),
+        });
+
+        self.bind_label(try_start);
+        self.emit_statement(try_block)?;
+        self.bind_label(try_end);
+
+        let try_can_complete_normally = !self.statement_terminates(try_block);
+        let finally_can_complete_normally = !self.statement_terminates(finally_block);
+        let mut end_reachable = false;
+        if try_can_complete_normally {
+            self.emit_current_finally_block_without_context()?;
+            if finally_can_complete_normally {
+                self.emit_branch(BranchKind::Goto, end_label);
+                self.current_stack = 0;
+                end_reachable = true;
+            }
+        }
+
+        let mut synthetic_ranges = vec![(try_start, try_end)];
+        for (handler_label, catch_type, catch_clause) in catch_entries {
+            self.exception_handlers.push(PendingExceptionHandler {
+                start_label: try_start,
+                end_label: try_end,
+                handler_label,
+                catch_type,
+            });
+            let catch_result = self.emit_catch_handler_with_finally(
+                handler_label,
+                &catch_clause,
+                catch_slot,
+                finally_block,
+                end_label,
+                finally_can_complete_normally,
+            )?;
+            synthetic_ranges.push((catch_result.protected_start, catch_result.protected_end));
+            end_reachable |= catch_result.completes_normally && finally_can_complete_normally;
+        }
+
+        let finally_context = self
+            .finally_contexts
+            .pop()
+            .expect("finally context stack must contain the active try/catch/finally");
+
+        self.emit_finally_exit_thunks(finally_context.finally_block, finally_context.exit_thunks)?;
+
+        for (start_label, end_label_for_range) in synthetic_ranges {
+            self.exception_handlers.push(PendingExceptionHandler {
+                start_label,
+                end_label: end_label_for_range,
+                handler_label: synthetic_handler_label,
+                catch_type: 0,
+            });
+        }
+
+        self.bind_label(synthetic_handler_label);
+        self.current_stack = 1;
+        self.max_stack = self.max_stack.max(1);
+        self.emit_store(exception_slot, LocalVarKind::Reference);
+        self.emit_statement(finally_context.finally_block)?;
+        if finally_can_complete_normally {
+            self.emit_abrupt_action(ExitAction::Rethrow {
+                slot: exception_slot,
+            })?;
+        }
+
+        if end_reachable {
+            self.bind_label(end_label);
+        }
 
         Ok(())
     }
@@ -910,6 +1006,79 @@ impl<'arena> CodeGenerator<'arena> {
         }
 
         Ok(catch_can_complete_normally)
+    }
+
+    fn emit_catch_handler_with_finally(
+        &mut self,
+        handler_label: LabelId,
+        catch_clause: &rajac_ast::CatchClause,
+        catch_slot: u16,
+        finally_block: StmtId,
+        end_label: LabelId,
+        finally_can_complete_normally: bool,
+    ) -> RajacResult<CatchHandlerResult> {
+        let catch_param = self.arena.param(catch_clause.param);
+        let catch_name = catch_param.name.as_str().to_string();
+        let previous_local = self.local_vars.insert(
+            catch_name.clone(),
+            LocalVar {
+                slot: catch_slot,
+                kind: LocalVarKind::Reference,
+            },
+        );
+
+        self.bind_label(handler_label);
+        self.current_stack = 1;
+        self.max_stack = self.max_stack.max(1);
+        self.emit_store(catch_slot, LocalVarKind::Reference);
+        let protected_start = self.new_label();
+        self.bind_label(protected_start);
+        self.emit_statement(catch_clause.body)?;
+        let protected_end = self.new_label();
+        self.bind_label(protected_end);
+
+        if let Some(local) = previous_local {
+            self.local_vars.insert(catch_name, local);
+        } else {
+            self.local_vars.remove(&catch_name);
+        }
+
+        let catch_can_complete_normally = !self.statement_terminates(catch_clause.body);
+        if catch_can_complete_normally {
+            self.emit_current_finally_block_without_context_for(finally_block)?;
+            if finally_can_complete_normally {
+                self.emit_branch(BranchKind::Goto, end_label);
+                self.current_stack = 0;
+            }
+        }
+
+        Ok(CatchHandlerResult {
+            protected_start,
+            protected_end,
+            completes_normally: catch_can_complete_normally,
+        })
+    }
+
+    fn emit_current_finally_block_without_context(&mut self) -> RajacResult<()> {
+        let finally_block = self
+            .finally_contexts
+            .last()
+            .expect("finally context stack must contain the active finally block")
+            .finally_block;
+        self.emit_current_finally_block_without_context_for(finally_block)
+    }
+
+    fn emit_current_finally_block_without_context_for(
+        &mut self,
+        finally_block: StmtId,
+    ) -> RajacResult<()> {
+        let context = self
+            .finally_contexts
+            .pop()
+            .expect("finally context stack must contain the active finally block");
+        let result = self.emit_statement(finally_block);
+        self.finally_contexts.push(context);
+        result
     }
 
     fn catch_type_for_clause(&mut self, catch_clause: &rajac_ast::CatchClause) -> RajacResult<u16> {
@@ -3158,6 +3327,13 @@ struct PendingExceptionHandler {
     catch_type: u16,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct CatchHandlerResult {
+    protected_start: LabelId,
+    protected_end: LabelId,
+    completes_normally: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ExitAction {
     ReturnVoid,
@@ -4468,6 +4644,286 @@ mod tests {
                 .expect("second catch type class"),
             "java/lang/RuntimeException"
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn try_catch_finally_statements_run_finally_after_catch_completion() -> RajacResult<()> {
+        let mut arena = AstArena::new();
+        let mut symbol_table = SymbolTable::new();
+        let mut constant_pool = ConstantPool::new();
+
+        let runtime_exception_type = add_class_type(
+            &mut symbol_table,
+            "java.lang",
+            "RuntimeException",
+            SymbolKind::Class,
+        );
+        let runtime_exception_ast = arena.alloc_type(AstType::Simple {
+            name: SharedString::new("RuntimeException"),
+            ty: runtime_exception_type,
+            type_args: vec![],
+        });
+        let catch_param = arena.alloc_param(Param {
+            ty: runtime_exception_ast,
+            name: Ident::new("err".into()),
+            modifiers: Modifiers::default(),
+            varargs: false,
+        });
+
+        let try_throw_expr = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Null,
+            value: "null".into(),
+        }));
+        let try_throw_stmt = arena.alloc_stmt(Stmt::Throw(try_throw_expr));
+        let try_block = arena.alloc_stmt(Stmt::Block(vec![try_throw_stmt]));
+        let catch_expr = arena.alloc_expr(AstExpr::Ident(Ident::new("err".into())));
+        let catch_stmt = arena.alloc_stmt(Stmt::Expr(catch_expr));
+        let catch_body = arena.alloc_stmt(Stmt::Block(vec![catch_stmt]));
+        let finally_expr = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Int,
+            value: "7".into(),
+        }));
+        let finally_stmt = arena.alloc_stmt(Stmt::Expr(finally_expr));
+        let finally_block = arena.alloc_stmt(Stmt::Block(vec![finally_stmt]));
+        let try_stmt = arena.alloc_stmt(Stmt::Try {
+            try_block,
+            catches: vec![CatchClause {
+                param: catch_param,
+                body: catch_body,
+            }],
+            finally_block: Some(finally_block),
+        });
+        let body = arena.alloc_stmt(Stmt::Block(vec![try_stmt]));
+
+        let mut generator = CodeGenerator::new(
+            &arena,
+            symbol_table.type_arena(),
+            &symbol_table,
+            &mut constant_pool,
+        );
+        let generated = generator.generate_method_body(false, &[], body)?;
+        let unsupported_features = generator.take_unsupported_features();
+
+        assert!(unsupported_features.is_empty());
+        assert_eq!(
+            generated.instructions,
+            vec![
+                Instruction::Aconst_null,
+                Instruction::Athrow,
+                Instruction::Astore_1,
+                Instruction::Aload_1,
+                Instruction::Pop,
+                Instruction::Bipush(7),
+                Instruction::Pop,
+                Instruction::Goto(13),
+                Instruction::Astore_2,
+                Instruction::Bipush(7),
+                Instruction::Pop,
+                Instruction::Aload_2,
+                Instruction::Athrow,
+                Instruction::Nop,
+            ]
+        );
+        assert_eq!(generated.exception_table.len(), 3);
+        assert_eq!(generated.exception_table[0].range_pc, 0..2);
+        assert_eq!(generated.exception_table[0].handler_pc, 2);
+        assert_eq!(generated.exception_table[1].range_pc, 0..2);
+        assert_eq!(generated.exception_table[1].handler_pc, 8);
+        assert_eq!(generated.exception_table[1].catch_type, 0);
+        assert_eq!(generated.exception_table[2].range_pc, 3..5);
+        assert_eq!(generated.exception_table[2].handler_pc, 8);
+        assert_eq!(generated.exception_table[2].catch_type, 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn return_inside_catch_finally_routes_through_finalizer() -> RajacResult<()> {
+        let mut arena = AstArena::new();
+        let mut symbol_table = SymbolTable::new();
+        let mut constant_pool = ConstantPool::new();
+
+        let runtime_exception_type = add_class_type(
+            &mut symbol_table,
+            "java.lang",
+            "RuntimeException",
+            SymbolKind::Class,
+        );
+        let runtime_exception_ast = arena.alloc_type(AstType::Simple {
+            name: SharedString::new("RuntimeException"),
+            ty: runtime_exception_type,
+            type_args: vec![],
+        });
+        let catch_param = arena.alloc_param(Param {
+            ty: runtime_exception_ast,
+            name: Ident::new("err".into()),
+            modifiers: Modifiers::default(),
+            varargs: false,
+        });
+
+        let try_throw_expr = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Null,
+            value: "null".into(),
+        }));
+        let try_throw_stmt = arena.alloc_stmt(Stmt::Throw(try_throw_expr));
+        let try_block = arena.alloc_stmt(Stmt::Block(vec![try_throw_stmt]));
+        let return_expr = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Int,
+            value: "1".into(),
+        }));
+        let return_stmt = arena.alloc_stmt(Stmt::Return(Some(return_expr)));
+        let catch_body = arena.alloc_stmt(Stmt::Block(vec![return_stmt]));
+        let finally_expr = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Int,
+            value: "9".into(),
+        }));
+        let finally_stmt = arena.alloc_stmt(Stmt::Expr(finally_expr));
+        let finally_block = arena.alloc_stmt(Stmt::Block(vec![finally_stmt]));
+        let try_stmt = arena.alloc_stmt(Stmt::Try {
+            try_block,
+            catches: vec![CatchClause {
+                param: catch_param,
+                body: catch_body,
+            }],
+            finally_block: Some(finally_block),
+        });
+        let body = arena.alloc_stmt(Stmt::Block(vec![try_stmt]));
+
+        let mut generator = CodeGenerator::new(
+            &arena,
+            symbol_table.type_arena(),
+            &symbol_table,
+            &mut constant_pool,
+        );
+        let generated = generator.generate_method_body(false, &[], body)?;
+
+        assert_eq!(
+            generated.instructions,
+            vec![
+                Instruction::Aconst_null,
+                Instruction::Athrow,
+                Instruction::Astore_1,
+                Instruction::Iconst_1,
+                Instruction::Istore_3,
+                Instruction::Bipush(9),
+                Instruction::Pop,
+                Instruction::Iload_3,
+                Instruction::Ireturn,
+                Instruction::Astore_2,
+                Instruction::Bipush(9),
+                Instruction::Pop,
+                Instruction::Aload_2,
+                Instruction::Athrow,
+            ]
+        );
+        assert_eq!(generated.exception_table.len(), 3);
+        assert_eq!(generated.exception_table[0].range_pc, 0..2);
+        assert_eq!(generated.exception_table[1].range_pc, 0..2);
+        assert_eq!(generated.exception_table[2].range_pc, 3..5);
+
+        Ok(())
+    }
+
+    #[test]
+    fn try_catch_finally_statements_emit_multiple_typed_handlers_and_shared_finalizer()
+    -> RajacResult<()> {
+        let mut arena = AstArena::new();
+        let mut symbol_table = SymbolTable::new();
+        let mut constant_pool = ConstantPool::new();
+
+        let illegal_argument_exception_type = add_class_type(
+            &mut symbol_table,
+            "java.lang",
+            "IllegalArgumentException",
+            SymbolKind::Class,
+        );
+        let runtime_exception_type = add_class_type(
+            &mut symbol_table,
+            "java.lang",
+            "RuntimeException",
+            SymbolKind::Class,
+        );
+        let illegal_argument_ast = arena.alloc_type(AstType::Simple {
+            name: SharedString::new("IllegalArgumentException"),
+            ty: illegal_argument_exception_type,
+            type_args: vec![],
+        });
+        let runtime_exception_ast = arena.alloc_type(AstType::Simple {
+            name: SharedString::new("RuntimeException"),
+            ty: runtime_exception_type,
+            type_args: vec![],
+        });
+        let first_param = arena.alloc_param(Param {
+            ty: illegal_argument_ast,
+            name: Ident::new("first".into()),
+            modifiers: Modifiers::default(),
+            varargs: false,
+        });
+        let second_param = arena.alloc_param(Param {
+            ty: runtime_exception_ast,
+            name: Ident::new("second".into()),
+            modifiers: Modifiers::default(),
+            varargs: false,
+        });
+
+        let try_throw_expr = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Null,
+            value: "null".into(),
+        }));
+        let try_throw_stmt = arena.alloc_stmt(Stmt::Throw(try_throw_expr));
+        let try_block = arena.alloc_stmt(Stmt::Block(vec![try_throw_stmt]));
+        let first_expr = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Int,
+            value: "1".into(),
+        }));
+        let first_stmt = arena.alloc_stmt(Stmt::Expr(first_expr));
+        let first_body = arena.alloc_stmt(Stmt::Block(vec![first_stmt]));
+        let second_expr = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Int,
+            value: "2".into(),
+        }));
+        let second_stmt = arena.alloc_stmt(Stmt::Expr(second_expr));
+        let second_body = arena.alloc_stmt(Stmt::Block(vec![second_stmt]));
+        let finally_expr = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Int,
+            value: "3".into(),
+        }));
+        let finally_stmt = arena.alloc_stmt(Stmt::Expr(finally_expr));
+        let finally_block = arena.alloc_stmt(Stmt::Block(vec![finally_stmt]));
+        let try_stmt = arena.alloc_stmt(Stmt::Try {
+            try_block,
+            catches: vec![
+                CatchClause {
+                    param: first_param,
+                    body: first_body,
+                },
+                CatchClause {
+                    param: second_param,
+                    body: second_body,
+                },
+            ],
+            finally_block: Some(finally_block),
+        });
+        let body = arena.alloc_stmt(Stmt::Block(vec![try_stmt]));
+
+        let mut generator = CodeGenerator::new(
+            &arena,
+            symbol_table.type_arena(),
+            &symbol_table,
+            &mut constant_pool,
+        );
+        let generated = generator.generate_method_body(false, &[], body)?;
+        let unsupported_features = generator.take_unsupported_features();
+
+        assert!(unsupported_features.is_empty());
+        assert_eq!(generated.exception_table.len(), 5);
+        assert_ne!(generated.exception_table[0].catch_type, 0);
+        assert_ne!(generated.exception_table[1].catch_type, 0);
+        assert_eq!(generated.exception_table[2].catch_type, 0);
+        assert_eq!(generated.exception_table[3].catch_type, 0);
+        assert_eq!(generated.exception_table[4].catch_type, 0);
 
         Ok(())
     }

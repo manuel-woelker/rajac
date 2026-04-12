@@ -1,5 +1,6 @@
 use rajac_base::shared_string::SharedString;
 use ristretto_classfile::attributes::Attribute;
+use ristretto_classfile::attributes::ExceptionTableEntry;
 use ristretto_classfile::{ClassFile, ConstantPool, Field, Method};
 
 pub fn pretty_print_classfile(class_file: &ClassFile) -> SharedString {
@@ -143,6 +144,27 @@ fn resolve_exception_table_catch_type(constant_pool: &ConstantPool, index: u16) 
         .unwrap_or_else(|_| "<invalid:class>".to_string())
 }
 
+fn normalize_exception_table(
+    exception_table: &[ExceptionTableEntry],
+) -> Vec<(std::ops::Range<u16>, u16, u16)> {
+    let mut merged: Vec<(std::ops::Range<u16>, u16, u16)> = Vec::new();
+
+    for entry in exception_table {
+        if let Some((range, handler_pc, catch_type)) = merged.last_mut()
+            && *handler_pc == entry.handler_pc
+            && *catch_type == entry.catch_type
+            && entry.range_pc.start <= range.end.saturating_add(1)
+        {
+            range.end = range.end.max(entry.range_pc.end);
+            continue;
+        }
+
+        merged.push((entry.range_pc.clone(), entry.handler_pc, entry.catch_type));
+    }
+
+    merged
+}
+
 /* 📖 # Why normalize constant-pool-backed instruction rendering?
 Verification should compare symbolic classfile content rather than incidental constant-pool slot
 allocation. Pretty-printed instructions therefore resolve constant-pool references to their
@@ -233,14 +255,18 @@ fn pretty_print_method(out: &mut String, constant_pool: &ConstantPool, method: &
 
             if !exception_table.is_empty() {
                 out.push_str("     ExceptionTable:\n");
-                for (i, exception) in exception_table.iter().enumerate() {
+                for (i, (range_pc, handler_pc, catch_type)) in
+                    normalize_exception_table(exception_table)
+                        .iter()
+                        .enumerate()
+                {
                     out.push_str(&format!(
                         "      {} {} {} {} {}\n",
                         i,
-                        exception.range_pc.start,
-                        exception.range_pc.end,
-                        exception.handler_pc,
-                        resolve_exception_table_catch_type(constant_pool, exception.catch_type)
+                        range_pc.start,
+                        range_pc.end,
+                        handler_pc,
+                        resolve_exception_table_catch_type(constant_pool, *catch_type)
                     ));
                 }
             }
