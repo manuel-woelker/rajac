@@ -755,8 +755,12 @@ impl<'arena> CodeGenerator<'arena> {
         catches: &[rajac_ast::CatchClause],
         finally_block: Option<StmtId>,
     ) -> RajacResult<()> {
+        if !catches.is_empty() && finally_block.is_some() {
+            return self.emit_unsupported_feature("try catch finally statements", "catch");
+        }
+
         if !catches.is_empty() {
-            return self.emit_unsupported_feature("try catch statements", "catch");
+            return self.emit_try_catch_statement(try_block, catches);
         }
 
         let Some(finally_block) = finally_block else {
@@ -820,6 +824,107 @@ impl<'arena> CodeGenerator<'arena> {
         });
 
         Ok(())
+    }
+
+    fn emit_try_catch_statement(
+        &mut self,
+        try_block: StmtId,
+        catches: &[rajac_ast::CatchClause],
+    ) -> RajacResult<()> {
+        let catch_entries = catches
+            .iter()
+            .map(|catch_clause| {
+                let catch_type = self.catch_type_for_clause(catch_clause)?;
+                Ok((self.new_label(), catch_type, catch_clause.clone()))
+            })
+            .collect::<RajacResult<Vec<_>>>()?;
+
+        let try_start = self.new_label();
+        let try_end = self.new_label();
+        let end_label = self.new_label();
+        let catch_slot = self.allocate_local(LocalVarKind::Reference);
+
+        self.bind_label(try_start);
+        self.emit_statement(try_block)?;
+        self.bind_label(try_end);
+
+        let try_can_complete_normally = !self.statement_terminates(try_block);
+        if try_can_complete_normally {
+            self.emit_branch(BranchKind::Goto, end_label);
+            self.current_stack = 0;
+        }
+
+        let mut handlers_can_complete_normally = false;
+        for (handler_label, catch_type, catch_clause) in catch_entries {
+            self.exception_handlers.push(PendingExceptionHandler {
+                start_label: try_start,
+                end_label: try_end,
+                handler_label,
+                catch_type,
+            });
+            let catch_completes_normally =
+                self.emit_catch_handler(handler_label, &catch_clause, catch_slot, end_label)?;
+            handlers_can_complete_normally |= catch_completes_normally;
+        }
+
+        if try_can_complete_normally || handlers_can_complete_normally {
+            self.bind_label(end_label);
+        }
+
+        Ok(())
+    }
+
+    fn emit_catch_handler(
+        &mut self,
+        handler_label: LabelId,
+        catch_clause: &rajac_ast::CatchClause,
+        catch_slot: u16,
+        end_label: LabelId,
+    ) -> RajacResult<bool> {
+        let catch_param = self.arena.param(catch_clause.param);
+        let catch_name = catch_param.name.as_str().to_string();
+        let previous_local = self.local_vars.insert(
+            catch_name.clone(),
+            LocalVar {
+                slot: catch_slot,
+                kind: LocalVarKind::Reference,
+            },
+        );
+
+        self.bind_label(handler_label);
+        self.current_stack = 1;
+        self.max_stack = self.max_stack.max(1);
+        self.emit_store(catch_slot, LocalVarKind::Reference);
+        self.emit_statement(catch_clause.body)?;
+
+        if let Some(local) = previous_local {
+            self.local_vars.insert(catch_name, local);
+        } else {
+            self.local_vars.remove(&catch_name);
+        }
+
+        let catch_can_complete_normally = !self.statement_terminates(catch_clause.body);
+        if catch_can_complete_normally {
+            self.emit_branch(BranchKind::Goto, end_label);
+            self.current_stack = 0;
+        }
+
+        Ok(catch_can_complete_normally)
+    }
+
+    fn catch_type_for_clause(&mut self, catch_clause: &rajac_ast::CatchClause) -> RajacResult<u16> {
+        let catch_param = self.arena.param(catch_clause.param);
+        let catch_type_id = self.arena.ty(catch_param.ty).ty();
+        if catch_type_id == TypeId::INVALID {
+            let message = "unsupported bytecode generation feature: try catch statements";
+            self.unsupported_features.push(UnsupportedFeature {
+                message: SharedString::new(message),
+                marker: SharedString::new("catch"),
+            });
+            return Err(rajac_base::err!("{}", message));
+        }
+        let catch_internal_name = type_id_to_internal_name(catch_type_id, self.type_arena);
+        Ok(self.constant_pool.add_class(&catch_internal_name)?)
     }
 
     fn emit_switch_statement(&mut self, expr: ExprId, cases: &[SwitchCase]) -> RajacResult<()> {
@@ -3740,7 +3845,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rajac_ast::Modifiers;
+    use rajac_ast::{CatchClause, Modifiers, Param};
     use rajac_types::{ClassType, MethodModifiers, MethodSignature, Type};
     use ristretto_classfile::ConstantPool;
 
@@ -3766,6 +3871,23 @@ mod tests {
             class_type.add_method(method_name, method_id);
         }
         method_id
+    }
+
+    fn add_class_type(
+        symbol_table: &mut SymbolTable,
+        package_name: &str,
+        class_name: &str,
+        kind: SymbolKind,
+    ) -> TypeId {
+        symbol_table.add_class(
+            package_name,
+            class_name,
+            Type::class(
+                ClassType::new(SharedString::new(class_name))
+                    .with_package(SharedString::new(package_name)),
+            ),
+            kind,
+        )
     }
 
     #[test]
@@ -4147,6 +4269,205 @@ mod tests {
         let handler = &generated.exception_table[0];
         assert_eq!(handler.range_pc, 0..3);
         assert_eq!(handler.handler_pc, 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn try_catch_statements_emit_typed_handler_and_catch_local_loads() -> RajacResult<()> {
+        let mut arena = AstArena::new();
+        let mut symbol_table = SymbolTable::new();
+        let mut constant_pool = ConstantPool::new();
+
+        let runtime_exception_type = add_class_type(
+            &mut symbol_table,
+            "java.lang",
+            "RuntimeException",
+            SymbolKind::Class,
+        );
+        let runtime_exception_ast = arena.alloc_type(AstType::Simple {
+            name: SharedString::new("RuntimeException"),
+            ty: runtime_exception_type,
+            type_args: vec![],
+        });
+        let catch_param = arena.alloc_param(Param {
+            ty: runtime_exception_ast,
+            name: Ident::new("err".into()),
+            modifiers: Modifiers::default(),
+            varargs: false,
+        });
+
+        let try_expr = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Int,
+            value: "1".into(),
+        }));
+        let try_stmt_body = arena.alloc_stmt(Stmt::Expr(try_expr));
+        let try_block = arena.alloc_stmt(Stmt::Block(vec![try_stmt_body]));
+        let catch_expr = arena.alloc_expr(AstExpr::Ident(Ident::new("err".into())));
+        let catch_stmt = arena.alloc_stmt(Stmt::Expr(catch_expr));
+        let catch_body = arena.alloc_stmt(Stmt::Block(vec![catch_stmt]));
+        let try_stmt = arena.alloc_stmt(Stmt::Try {
+            try_block,
+            catches: vec![CatchClause {
+                param: catch_param,
+                body: catch_body,
+            }],
+            finally_block: None,
+        });
+        let body = arena.alloc_stmt(Stmt::Block(vec![try_stmt]));
+
+        let mut generator = CodeGenerator::new(
+            &arena,
+            symbol_table.type_arena(),
+            &symbol_table,
+            &mut constant_pool,
+        );
+        let generated = generator.generate_method_body(false, &[], body)?;
+        let unsupported_features = generator.take_unsupported_features();
+
+        assert!(unsupported_features.is_empty());
+        assert_eq!(
+            generated.instructions,
+            vec![
+                Instruction::Iconst_1,
+                Instruction::Pop,
+                Instruction::Goto(6),
+                Instruction::Astore_1,
+                Instruction::Aload_1,
+                Instruction::Pop,
+                Instruction::Return,
+            ]
+        );
+        assert_eq!(generated.exception_table.len(), 1);
+        let handler = &generated.exception_table[0];
+        assert_eq!(handler.range_pc, 0..2);
+        assert_eq!(handler.handler_pc, 3);
+        assert_ne!(handler.catch_type, 0);
+        assert_eq!(
+            constant_pool
+                .try_get_class(handler.catch_type)
+                .expect("catch type class"),
+            "java/lang/RuntimeException"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn try_catch_statements_emit_multiple_handlers_in_source_order() -> RajacResult<()> {
+        let mut arena = AstArena::new();
+        let mut symbol_table = SymbolTable::new();
+        let mut constant_pool = ConstantPool::new();
+
+        let illegal_argument_exception_type = add_class_type(
+            &mut symbol_table,
+            "java.lang",
+            "IllegalArgumentException",
+            SymbolKind::Class,
+        );
+        let runtime_exception_type = add_class_type(
+            &mut symbol_table,
+            "java.lang",
+            "RuntimeException",
+            SymbolKind::Class,
+        );
+        let illegal_argument_ast = arena.alloc_type(AstType::Simple {
+            name: SharedString::new("IllegalArgumentException"),
+            ty: illegal_argument_exception_type,
+            type_args: vec![],
+        });
+        let runtime_exception_ast = arena.alloc_type(AstType::Simple {
+            name: SharedString::new("RuntimeException"),
+            ty: runtime_exception_type,
+            type_args: vec![],
+        });
+        let first_param = arena.alloc_param(Param {
+            ty: illegal_argument_ast,
+            name: Ident::new("first".into()),
+            modifiers: Modifiers::default(),
+            varargs: false,
+        });
+        let second_param = arena.alloc_param(Param {
+            ty: runtime_exception_ast,
+            name: Ident::new("second".into()),
+            modifiers: Modifiers::default(),
+            varargs: false,
+        });
+
+        let try_throw_expr = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Null,
+            value: "null".into(),
+        }));
+        let try_throw_stmt = arena.alloc_stmt(Stmt::Throw(try_throw_expr));
+        let try_block = arena.alloc_stmt(Stmt::Block(vec![try_throw_stmt]));
+        let first_return_expr = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Int,
+            value: "1".into(),
+        }));
+        let first_return_stmt = arena.alloc_stmt(Stmt::Return(Some(first_return_expr)));
+        let first_body = arena.alloc_stmt(Stmt::Block(vec![first_return_stmt]));
+        let second_return_expr = arena.alloc_expr(AstExpr::Literal(Literal {
+            kind: LiteralKind::Int,
+            value: "2".into(),
+        }));
+        let second_return_stmt = arena.alloc_stmt(Stmt::Return(Some(second_return_expr)));
+        let second_body = arena.alloc_stmt(Stmt::Block(vec![second_return_stmt]));
+        let try_stmt = arena.alloc_stmt(Stmt::Try {
+            try_block,
+            catches: vec![
+                CatchClause {
+                    param: first_param,
+                    body: first_body,
+                },
+                CatchClause {
+                    param: second_param,
+                    body: second_body,
+                },
+            ],
+            finally_block: None,
+        });
+        let body = arena.alloc_stmt(Stmt::Block(vec![try_stmt]));
+
+        let mut generator = CodeGenerator::new(
+            &arena,
+            symbol_table.type_arena(),
+            &symbol_table,
+            &mut constant_pool,
+        );
+        let generated = generator.generate_method_body(false, &[], body)?;
+        let unsupported_features = generator.take_unsupported_features();
+
+        assert!(unsupported_features.is_empty());
+        assert_eq!(
+            generated.instructions,
+            vec![
+                Instruction::Aconst_null,
+                Instruction::Athrow,
+                Instruction::Astore_1,
+                Instruction::Iconst_1,
+                Instruction::Ireturn,
+                Instruction::Astore_1,
+                Instruction::Iconst_2,
+                Instruction::Ireturn,
+            ]
+        );
+        assert_eq!(generated.exception_table.len(), 2);
+        assert_eq!(generated.exception_table[0].range_pc, 0..2);
+        assert_eq!(generated.exception_table[0].handler_pc, 2);
+        assert_eq!(generated.exception_table[1].range_pc, 0..2);
+        assert_eq!(generated.exception_table[1].handler_pc, 5);
+        assert_eq!(
+            constant_pool
+                .try_get_class(generated.exception_table[0].catch_type)
+                .expect("first catch type class"),
+            "java/lang/IllegalArgumentException"
+        );
+        assert_eq!(
+            constant_pool
+                .try_get_class(generated.exception_table[1].catch_type)
+                .expect("second catch type class"),
+            "java/lang/RuntimeException"
+        );
 
         Ok(())
     }

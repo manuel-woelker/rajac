@@ -183,16 +183,26 @@ This milestone should be considered complete when:
 - `cargo run -p rajac-verification --bin verification` passes
 - `./scripts/check-code.sh` passes
 
+## What shipped in this milestone?
+
+rajac now lowers plain `try`/`catch` statements without `finally` into typed JVM exception handlers.
+The implementation reuses a single catch local slot across sibling handlers, binds the catch parameter through the normal local-variable path, and emits handler table entries in source order.
+
+The verification fixtures were added and the pretty printer was tightened so exception-table output resolves symbolic catch types instead of exposing raw constant-pool indexes.
+That keeps verification focused on meaningful classfile structure instead of incidental pool slot allocation.
+
+Mixed `catch` plus `finally` forms remain explicitly unsupported in this milestone, consistent with the original scope boundary.
+
 ## What checklist tracks the work?
 
-- [ ] Audit the current `try` lowering path for reusable handler infrastructure.
-- [ ] Add a helper for computing typed catch entries from resolved catch parameter types.
-- [ ] Add a helper for emitting catch handler blocks and storing caught exceptions into locals.
-- [ ] Implement plain `try`/`catch` lowering for a single catch clause.
-- [ ] Extend the lowering to support multiple sequential catch clauses.
-- [ ] Keep mixed `catch` plus `finally` forms explicitly unsupported in this milestone.
-- [ ] Add colocated bytecode-generation tests for `try`/`catch` lowering.
-- [ ] Add valid verification fixtures for supported `try`/`catch` examples.
-- [ ] Regenerate OpenJDK reference outputs with `./verification/compile.sh`.
-- [ ] Run `cargo run -p rajac-verification --bin verification`.
-- [ ] Run `./scripts/check-code.sh`.
+- [x] Audit the current `try` lowering path for reusable handler infrastructure.
+- [x] Add a helper for computing typed catch entries from resolved catch parameter types.
+- [x] Add a helper for emitting catch handler blocks and storing caught exceptions into locals.
+- [x] Implement plain `try`/`catch` lowering for a single catch clause.
+- [x] Extend the lowering to support multiple sequential catch clauses.
+- [x] Keep mixed `catch` plus `finally` forms explicitly unsupported in this milestone.
+- [x] Add colocated bytecode-generation tests for `try`/`catch` lowering.
+- [x] Add valid verification fixtures for supported `try`/`catch` examples.
+- [x] Regenerate OpenJDK reference outputs with `./verification/compile.sh`.
+- [x] Run `cargo run -p rajac-verification --bin verification`.
+- [x] Run `./scripts/check-code.sh`.

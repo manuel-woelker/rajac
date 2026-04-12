@@ -132,6 +132,17 @@ fn resolve_optional_utf8(constant_pool: &ConstantPool, index: u16, empty_value: 
         .unwrap_or_else(|_| "<invalid:utf8>".to_string())
 }
 
+fn resolve_exception_table_catch_type(constant_pool: &ConstantPool, index: u16) -> String {
+    if index == 0 {
+        return "<any>".to_string();
+    }
+
+    constant_pool
+        .try_get_class(index)
+        .map(internal_to_java_name)
+        .unwrap_or_else(|_| "<invalid:class>".to_string())
+}
+
 /* 📖 # Why normalize constant-pool-backed instruction rendering?
 Verification should compare symbolic classfile content rather than incidental constant-pool slot
 allocation. Pretty-printed instructions therefore resolve constant-pool references to their
@@ -229,7 +240,7 @@ fn pretty_print_method(out: &mut String, constant_pool: &ConstantPool, method: &
                         exception.range_pc.start,
                         exception.range_pc.end,
                         exception.handler_pc,
-                        exception.catch_type
+                        resolve_exception_table_catch_type(constant_pool, exception.catch_type)
                     ));
                 }
             }
